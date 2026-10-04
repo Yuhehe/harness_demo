@@ -40,9 +40,29 @@
 
 ## 第 0 天：准备（前一晚，1–2 小时）
 
-- [ ] 准备 x86_64 机器：已装 Docker（含 `docker compose` v2 插件）和 `uv`，**空闲磁盘 ≥ 150GB**，内存 ≥ 16GB（SWE-bench 镜像是 x86 的，不要在 ARM Mac 上直接跑）。用 `docker version`、`docker compose version`、`uv --version` 确认
-- [ ] 申请 API Key，确定主模型 `{{MODEL_MAIN}}` 和摘要模型 `{{MODEL_CHEAP}}`，写入 `.env`。选模型时优先考虑：价格便宜、有前缀缓存、工具调用稳定
-- [ ] 建仓库，写 `pyproject.toml`（`requires-python = ">=3.12,<3.13"`）、`.python-version`（`3.12`）、`.env.example`、`.gitignore`；用 `uv add` / `uv add --dev` 加依赖，`uv sync` 生成 `.venv` 和 `uv.lock`（**提交 `uv.lock`**）；加入 CLAUDE.md、plan.md 和 README.md
+- [x] 准备 x86_64 机器（2026-10-04）：已装 Docker（含 `docker compose` v2 插件）和 `uv`，**空闲磁盘 ≥ 150GB**，内存 ≥ 16GB（SWE-bench 镜像是 x86 的，不要在 ARM Mac 上直接跑）。用 `docker version`、`docker compose version`、`uv --version` 确认
+  - 环境：Windows + WSL2（Ubuntu 22.04，x86_64），不使用 Docker Desktop，细节见 `docs/learning/docker_related.md`
+  - [x] Docker Engine 29.1.3（Ubuntu 自带源 `docker.io`）、`docker compose` 2.40.3（v2 插件）、`docker buildx` 0.30.1，均在 2026-10-04 实测可用；已开启 systemd 并设为开机自启；用户已加入 `docker` 组，免 sudo
+  - [x] `uv` 0.9.13，装在 `~/.local/bin/uv`（注意：Claude Code 的 shell 里 `which uv` 找不到，需确认该目录在 PATH 中）
+  - [x] 空闲磁盘：当前 149GB 可用（总 251GB），略低于 150GB 的要求；**按用户决定暂不考虑**，拉镜像时再留意
+  - [x] 内存：`.wslconfig` 限制 WSL 为 12GB / 10 核 / 8GB swap，低于 16GB 的要求；**按用户决定暂不考虑**，但并行 worker 数和容器内存上限设置时仍要保守
+  - [x] 沙箱限制实测通过（2026-10-04，用 `alpine` 镜像，命令见 `docs/learning/docker_related.md` §4）：
+    - cgroup 文件：`memory.max=67108864`、`cpu.max=50000 100000`、`pids.max=20`
+    - `--network none`：容器里只有 `lo`，`wget example.com` 报 `bad address`
+    - `--pids-limit 20`：起第 21 个以上进程报 `can't fork: Resource temporarily unavailable`
+    - `--memory 32m --memory-swap 32m`：写入 100MB 被 OOM 杀掉，退出码 137
+- [x] 申请 API Key，确定主模型 `{{MODEL_MAIN}}` 和摘要模型 `{{MODEL_CHEAP}}`，写入 `.env`。选模型时优先考虑：价格便宜、有前缀缓存、工具调用稳定（2026-10-04）
+  - `.env` 已创建且被 `.gitignore` 忽略，未被 git 跟踪；服务商为 DeepSeek（`OPENAI_API_BASE=https://api.deepseek.com`），`MODEL_MAIN=deepseek-v4-pro`，`MODEL_CHEAP=deepseek-flash`
+  - `MAX_TOTAL_COST_USD` 仍是 `.env.example` 里的占位值 20，待 dev_5 实测单题成本后重填
+  - **尚未验证**（还没有发起过调用）：① 模型名没有 `openai/` 前缀，LiteLLM 可能无法识别服务商，要么加前缀（`openai/deepseek-v4-pro`），要么改用 LiteLLM 的 `deepseek/` 前缀，二选一；② 这两个模型名是否在服务商那里真实存在；③ LiteLLM 是否有它们的价格数据，没有的话 `completion_cost` 会失败，`llm/cost.py` 需要自带价格表。这三项放到第 1 天写 `llm/client.py` 时用一次最小调用验证
+- [~] 建仓库，写 `pyproject.toml`（`requires-python = ">=3.12,<3.13"`）、`.python-version`（`3.12`）、`.env.example`、`.gitignore`；用 `uv add` / `uv add --dev` 加依赖，`uv sync` 生成 `.venv` 和 `uv.lock`（**提交 `uv.lock`**）；加入 CLAUDE.md、plan.md 和 README.md
+  - [x] `.python-version`（3.12）、`pyproject.toml`（`requires-python` 已锁 `>=3.12,<3.13`）、`.venv`（Python 3.12.12）、`uv.lock`（已提交）、plan.md、README.md 已就绪
+  - [ ] `pyproject.toml` 仍是初始模板：`name = "harness-demo"`（项目名是 harness-lab）、`description` 未填、`dependencies = []`，依赖（litellm、docker、pydantic 等）尚未用 `uv add` 添加
+  - [x] `.env.example` 已创建（2026-10-04）：OpenAI 兼容格式，含 `OPENAI_API_KEY`、`OPENAI_API_BASE`、`MODEL_MAIN`、`MODEL_CHEAP`、`MAX_TOTAL_COST_USD`（其中 `MAX_TOTAL_COST_USD=20` 只是占位值，待 dev_5 实测后重填）
+  - [x] `CLAUDE.md` 已从 `.gitignore` 移除并 `git add`（2026-10-04），**已暂存，尚未提交**
+  - [x] `.gitignore` 已加入 `.env`（2026-10-04，`git check-ignore` 确认生效）
+  - [ ] `.gitignore` 仍缺 `results/runs/`（CLAUDE.md §4 要求该目录 gitignore，`results/summary/` 才提交）
+  - [ ] 目前仍只有 1 个提交（`6d12a11 0. project init`）；`.env.example`、`.gitignore`、`CLAUDE.md`、`docs/learning/docker_related.md`、`plan.md` 都在暂存区，**还没提交**
 - [ ] `eval/swebench/select_subset.py`：从 SWE-bench Verified 里固定随机种子选题，**集中在 3–5 个仓库**以减少镜像数量。输出 `verified_50.txt` 和 `dev_5.txt`，两者不重叠
 - [ ] `eval/swebench/pull_images.py`：**当晚就在后台开始拉取 55 个镜像**
 - [ ] 用 uv 安装 mini-SWE-agent（`uv tool install` 或放进 dev 依赖组，择一并记到 `docs/notes.md`，不用 pip），用 `--help` 确认它批量跑 SWE-bench 的命令，写进 `eval/baselines/mini_swe_agent.md`
@@ -176,3 +196,34 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 ## 日志
 
 <!-- 每天追加一段：日期 / 完成了什么 / 当天花费 $ / 遇到的问题 / 明天先做什么 -->
+
+### 2026-10-04（第 0 天，进行中）
+
+**完成了什么**
+- 确定 Docker 方案：WSL2 内原生 Docker Engine，不用 Docker Desktop；开启 systemd，`docker.io` + `docker-compose-v2` + `docker-buildx` 用 Ubuntu 自带源（本机 apt 已配清华镜像，不访问 `download.docker.com`）
+- 环境实测：Docker 29.1.3、Compose 2.40.3、buildx 0.30.1、uv 0.9.13；cgroup v2（systemd 驱动）、overlayfs、runc；免 sudo 可用；`hello-world` 拉取并运行成功（说明 Docker Hub 可达，大镜像的拉取速度还没测）
+- 写了 `.wslconfig`：12GB 内存 / 10 核 / 8GB swap
+- 写了学习笔记 `docs/learning/docker_related.md`（项目所需 Docker 特性 → 原理 → WSL2 配置与排错）
+
+**当天花费**：暂记 $0（harness 还没写出来，没有调用记录）
+
+**补充（同日，后续）**
+- 申请了 DeepSeek 的 API Key，创建 `.env`（已被 `.gitignore` 忽略），`MODEL_MAIN=deepseek-v4-pro`、`MODEL_CHEAP=deepseek-flash`；"申请 API Key"一项已勾选，模型名前缀、真实存在性和价格数据三项尚未验证，见该项下的说明
+- `.gitignore` 加入 `.env`；`CLAUDE.md` 已 `git add`；上述改动都在暂存区，尚未提交
+- 磁盘和内存两项按用户决定暂不考虑，"准备机器"已勾选完成
+- 已拉取 `alpine` 镜像（13MB），沙箱限制（断网、内存、CPU、pids）实测通过，结果见上方勾选项
+- 创建 `.env.example`（OpenAI 兼容格式）；`CLAUDE.md` 已移出 `.gitignore`
+- 在 scratchpad 的副本里用 `uv add --no-sync` 试解析了依赖，在 Python 3.12 下全部可解析、互不冲突（项目本身的 `pyproject.toml` 和 `uv.lock` 没动）
+
+**遇到的问题**
+- `docker buildx` 报 `unknown command`：`docker.io` 不带 buildx，它是单独的包，装 `docker-buildx` 解决
+- 加入 `docker` 组后当前 shell 报 `permission denied`：用户组要重新登录才生效
+- 磁盘（149GB 可用）和内存（12GB）都略低于第 0 天的要求，见上方勾选项
+- 仓库底座还有两处与 plan 不一致：`pyproject.toml` 项目名和依赖未填（依赖还没 `uv add`）、`.gitignore` 缺 `results/runs/`
+- `.env` 里的模型名没有 `openai/` 前缀，可能无法被 LiteLLM 识别，且价格数据可能缺失，见"申请 API Key"一项
+
+**明天先做（按顺序）**
+1. `.gitignore` 补 `results/runs/`，把暂存区的改动提交（提交信息按 CLAUDE.md §8 的格式）
+2. 修 `pyproject.toml`（项目名、描述），用 `uv add` / `uv add --dev` 加依赖，`uv sync`，提交 `uv.lock`
+3. 核实 SWE-bench 官方镜像命名规则（查 `swebench` 源码，记入 `docs/notes.md`），再写 `select_subset.py` 和 `pull_images.py`，并在拉取前复查磁盘
+4. 用一次最小的 LiteLLM 调用验证 `.env` 的模型名、前缀和价格数据（会产生极小花费，记入日志）

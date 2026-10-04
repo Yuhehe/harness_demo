@@ -9,5 +9,5 @@ wheels/
 # Virtual environments
 .venv
 
-# Harness files
-CLAUDE.md
+# api
+.env
