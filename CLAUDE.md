@@ -105,7 +105,7 @@ async def run_task(task: Task, cfg: AgentConfig, sandbox: Sandbox, llm: LLMClien
     return RunResult(patch=await sandbox.git_diff(), fail_reason=state.fail_reason, metrics=state.metrics)
 ```
 
-- 调用失败时的重试放在 `llm/client.py` 里：指数退避，只对 429 和 5xx 重试。重试次数要记录。
+- 调用失败时的重试放在 `llm/client.py` 里：指数退避并加随机抖动，**总共最多 3 次尝试**（首次加最多 2 次重试）。按（异常类型、状态码、响应形状）判断，可重试的有四类：**429**（响应带 `Retry-After` 时按它等待）、**5xx**、**客户端超时**（`Timeout`）、**不可用的 200**（响应体不是合法 JSON，或缺少 `choices`）；4xx（含 400、401、404）不重试。每次重试都要记录次数和原因（`retry_reason`），重试用完仍失败就以 `env_error` 终止任务；重试的等待时间计入墙钟时间和延迟。
 - 模型返回的工具调用格式不对时，把错误信息作为工具结果回给模型，**计入 `format_errors`**。连续 3 次格式错误就终止任务。
 - `FailReason` 的取值：`context_overflow | step_limit | cost_limit | time_limit | format_error | env_error | no_submit`。
 
@@ -162,7 +162,7 @@ async def run_task(task: Task, cfg: AgentConfig, sandbox: Sandbox, llm: LLMClien
 每次运行写到 `results/runs/<run_id>/trajectories/<instance_id>.jsonl`，一行一个 span：
 
 - `run_start`：包含 config 的哈希、git commit、模型名、随机种子
-- `llm_call`：输入、输出和缓存命中的 token 数，成本，延迟，重试次数
+- `llm_call`：输入、输出和缓存命中的 token 数，成本，延迟，重试次数和重试原因
 - `tool_call`：工具名，参数的哈希，exit code，耗时，是否截断
 - `guard_decision`、`compaction`（压缩前后 token 数）
 - `run_end`：FailReason 或 submitted，总成本，总步数
