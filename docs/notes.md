@@ -54,7 +54,7 @@
 | 计价 | `MSWEA_COST_TRACKING=ignore_errors` 可忽略缺价格的报错，但会让 `cost_limit` 失效，仅作最后手段（`models/litellm_model.py:36`）。 |
 | `-c key=value` 的解析 | `config/__init__.py:39-43`：值先按 JSON 解析，失败才当字符串。所以 `-c 'environment.run_args=["--rm","--network","none"]'` 得到列表（已离线验证），`-c agent.step_limit=100` 得到整数。 |
 | `run_args` 的用法 | `environments/docker.py:75-96`：拼成 `docker run -d --name <名> -w <cwd> <run_args…> <image> sleep <container_timeout>`，整个命令受 `pull_timeout`（120 秒）限制；`run_args` 会整体替换默认的 `["--rm"]`，所以 `--rm` 要自己保留。 |
-| 每题成本字段在轨迹里的位置 | `{{TBD}}`（冒烟测试后核实） |
+| 每题成本字段在轨迹里的位置 | 已核实（冒烟测试，2026-10-05）：`info.model_stats.instance_cost`、`info.model_stats.api_calls`，每条 assistant 消息的 `extra.cost`，原始响应在 `extra.response`（含 `usage`）。**注意成本随当前时间变化（错峰价），见 §5** |
 
 ## 5. LiteLLM（1.104.0）与 DeepSeek
 
@@ -133,14 +133,14 @@
 | 3 bash 工具 | `deepseek/deepseek-flash` | 298 / 53（15） | `finish_reason=tool_calls`，`bash` 的 `arguments` 是合法 JSON `{"command": "echo hello"}`，有 `id` | $0.000153 |
 | 3 bash 工具 | `deepseek/deepseek-v4-pro` | 361 / 73（29） | 同上 | $0.000766 |
 
-四次调用合计 **$0.001159**（LiteLLM 价格表的估算，还没有和 DeepSeek 控制台对账，见步骤 6）。结论：
+四次调用合计 **$0.001159**（LiteLLM 价格表的估算，没有和 DeepSeek 控制台对账；调用发生在约 09:52 UTC 的高峰时段，按标准价，见 §5 末尾的错峰价说明）。结论：
 
 - **通过**：密钥有效，两个模型名真实存在，走的是 `/chat/completions`（不是 `/beta`），响应能被 LiteLLM 解析，两个模型都支持函数调用。
 - 响应里的模型名是 `deepseek-flash`、`deepseek-v4-pro`（没有版本后缀）。
 - **`usage` 里同时有** `prompt_cache_hit_tokens`、`prompt_cache_miss_tokens`，并被映射到 `prompt_tokens_details.cached_tokens`；这 4 次都是 0（没有重复的前缀）。
 - **思考 token 算在 `completion_tokens` 里**（例如 21 个 completion token 里有 15 个是 reasoning），按输出价计费；`max_tokens` 设得太小时，思考可能把预算用光，导致 `content` 为空、`finish_reason=length`（这次 64 和 256 都没触发，但 harness 的 `max_tokens` 要给思考留余量）。
 - 同样的 `ping`，flash 报 31 个 prompt token，v4-pro 报 84 个，原因没有查；两个模型的 token 数不能直接比较。
-- 步骤 4 见下；还没做：5（缓存命中）、6（对账）、7–9。
+- 步骤 4、7–9 的结果见下；**5（缓存命中）、6（对账）暂不做**（你的决定：有成熟文档可参考）。注意 §5 末尾的"成本会随当前时间变化"这一发现，在不对账的情况下尤其要靠固定费率的自有价格表。
 
 **步骤 4 的结果（2026-10-05，真实调用，两个模型各自独立测；脚本在 scratchpad）**
 
@@ -156,7 +156,7 @@
 | 两种模式的 prompt 一样吗？ | **不一样。** 同样的请求，`prompt_tokens` 在默认模式是 flash 308 / v4-pro 371，在 `disabled` 是 284 / 293。说明服务端对两种模式套的模板不同；`disabled` 第一次调用 `cached_tokens=0`，之后同模式下的第二轮才有命中。推断（未单独验证）：**缓存很可能不能跨模式共享，一次运行内不要切换思考模式**。 |
 | 缓存的观察（步骤 5 的前置数据） | 所有 `cached_tokens` 都是 128 的倍数（0、128、256、384），提示命中以 128 token 为块。 |
 
-步骤 4 的 30 次调用（两轮对话实验 14 次、工具链 16 次）共花费 **$0.005940**（LiteLLM 价格表估算），步骤 1–4 累计 $0.007099。
+步骤 4 的 30 次调用（两轮对话实验 14 次、工具链 16 次）共花费 **$0.005940**（LiteLLM 价格表估算，同样是高峰时段的标准价），步骤 1–4 累计 $0.007099。
 
 **对 harness 的结论**
 1. **每次调用都显式传 `thinking`**（来自配置），不依赖服务端默认值，否则服务端以后改默认值会让实验不可复现。
@@ -165,6 +165,70 @@
 4. `max_tokens` 要给思考留余量，`finish_reason=length` 且 `content` 为空要当成可识别的失败，不能当成空回答。
 5. **默认用开还是关，要靠实验决定**：关闭更便宜、更可控、没有 `reasoning_content` 的处理；开启可能提高解决率，代价是 reasoning token 计入输出价。建议等第 1 天的循环能跑后，在 `dev_5` 上各跑一次再定（见 plan.md），不要现在凭感觉选。
 6. B0 要与 M0 对齐：mini-swe-agent 可以用 `-c 'model.model_kwargs.thinking={"type":"disabled"}'`（`-c key=value` 按 JSON 解析，`model_kwargs` 会透传给 LiteLLM），这个写法在 mini-swe-agent 里实际是否生效还没测。
+
+**步骤 7–9 的结果（2026-10-05）**
+
+*步骤 7（真实调用，不花钱）*
+
+| 输入 | LiteLLM 抛出的异常 | 说明 |
+|---|---|---|
+| 错误的密钥 | **`BadRequestError`，但 `status_code=401`** | 响应体 `type=authentication_error`，消息 `Authentication Fails, Your api key: ****0000 is invalid`（密钥被服务端打码）。**类名不是 `AuthenticationError`**（本机假服务器返回 401 时才是），所以 `llm/client.py` 要**按 `status_code` 分类，不能按类名**。不属于重试范围 |
+| 不存在的模型名 | `BadRequestError`，`status_code=400` | 消息直接列出当前支持的名字：`The supported API model names are deepseek-flash, deepseek-v4-pro` |
+
+*步骤 8（本机假服务器，不花钱）：LiteLLM 如何映射错误*（`litellm.acompletion`，`api_base` 指向本机）
+
+| 假服务器的行为 | 异常类（`status_code`） | 服务器收到的请求数 |
+|---|---|---|
+| 429（带 `Retry-After: 7`） | `RateLimitError`（429） | 1 |
+| 500 | `InternalServerError`（500） | 1 |
+| 502 | `BadGatewayError`（502） | 1 |
+| 503 | `ServiceUnavailableError`（503） | 1 |
+| 401 | `AuthenticationError`（401） | 1 |
+| 400，消息含 `maximum context length` | `ContextWindowExceededError`（400） | 1 |
+| 400，其他消息 | `BadRequestError`（400） | 1 |
+| 200 但响应体不是 JSON | `APIError`（**200**） | 1 |
+| 200 但 JSON 被截断 | `APIError`（**200**） | 1 |
+| 200 但 JSON 里没有 `choices` | `APIError`（**500**） | 1 |
+| 服务器直接断开连接 | `InternalServerError`（**500**，不是 `APIConnectionError`） | 1 |
+| 响应比 `timeout=1` 慢 | `Timeout`（**408**，是 `APIConnectionError` 的子类） | 1 |
+
+- **没有隐藏重试**：每种情形服务器都只收到 1 个请求；不传任何重试参数、传 `num_retries=0`、再加 `max_retries=0` 结果相同。500 之后第二次本来会成功的"先 500 再 200"，在 `num_retries=0` 下也直接失败。所以重试要完全由我们自己的 `llm/client.py` 实现。
+- **`Retry-After` 能拿到，但位置不是 `e.response.headers`**（那里是空的），而是 **`e.litellm_response_headers`**（一个包含 `retry-after` 的字典，`e.headers` 也有）。
+- **重试规则（CLAUDE.md §5.1："只对 429 和 5xx 重试"）按 `status_code` 判断**：`status_code == 429 or status_code >= 500`，覆盖 429、500、502、503、断连（映射成 500）和缺 `choices` 的 200（映射成 500）。
+- **规则没覆盖、需要你决定的两类**：`Timeout`（408，客户端超时）和 `APIError` 且 `status_code=200`（响应体畸形）。按字面执行它们都**不重试**；超时在实际中通常是暂时性的，是否也重试要你定。
+- 局限：429、5xx 只在本机假服务器上测过，没有在真实 DeepSeek 上触发；DeepSeek 真实的上下文超限文案没测（`ContextWindowExceededError` 靠消息匹配，这里用了 OpenAI 风格的文案）；本项目的 `context_overflow` 以我们自己的 token 计数为准，不依赖它。
+
+*步骤 9（mini-swe-agent 冒烟，真实调用）*
+
+命令：`mini-extra swebench --subset SWE-bench/SWE-bench_Verified --split test --filter '^django__django-11066$' -w 1 -m deepseek/deepseek-flash -c swebench.yaml -c agent.step_limit=30 -c agent.cost_limit=0.3 -c 'environment.run_args=["--rm","--network","none"]' -o results/runs/B0_smoke`（环境变量来自 `.env`，数据集 revision 核对通过；比文档里原先写的多了 `step_limit=30` 来限制时间）。
+
+| 项 | 结果 |
+|---|---|
+| 退出 | 退出码 0，状态 `Submitted`，用时 99 秒，没有报错 |
+| 调用量 | 25 次 API 调用，`step_limit=30` 和 `cost_limit=0.3` 都没触发 |
+| `--network none` | agent 在断网容器里正常完成任务，生成了 767 个字符的补丁 |
+| 轨迹里的成本字段 | `info.model_stats.instance_cost` 和 `.api_calls`；每条 assistant 消息有 `extra.cost`；`extra.response` 是完整的原始响应（含 `usage`）；还有 `info.exit_status`、`info.submission`、`info.config` |
+| 思考模式 | 25 条 assistant 消息里 23 条带 `reasoning_content`（默认开启），mini-swe-agent 把它存在消息里 |
+| 本次运行的 token（只是一次冒烟，不是实验结果） | Σprompt 272,239，Σ缓存命中 260,864（命中率 0.958），Σcompletion 9,991（其中思考 6,275）；prompt 从第 1 次的 1,752 涨到最后的 18,725 |
+| 容器清理 | mini-swe-agent 用后台的 `docker stop` 清理，运行刚结束时 `docker ps -a` 还能看到容器，几秒后消失，没有残留 |
+| 判分 | 在 `results/runs/B0_smoke/` 下运行 `swebench eval verified -p preds.json --run-id B0_smoke -j 1 -i django__django-11066 --report-dir .`，用时 34 秒，`Instances resolved: 1`；报告文件名是 `deepseek__deepseek-flash.B0_smoke.json`；**会在当前目录下建 `logs/`**，所以要在被 gitignore 的目录里运行。这是 dev 题的冒烟，不是实验结果，不进报告 |
+
+**意外发现：LiteLLM 的成本会随当前时间变化（错峰价）**
+
+冒烟的 `instance_cost` 是 $0.008483；按 `usage` 和标准价手算是 $0.016967，**每一次调用都恰好是 2 倍**。原因：
+
+- LiteLLM 价格表里这两个模型都有 `off_peak_pricing`，错峰价是标准价的 **50%**（输入、输出、缓存命中都是）。
+- 错峰窗口（UTC）：周一到周五 `00:00–01:00`、`04:00–06:00`、`10:00–24:00`；周六、周日全天。（北京时间的高峰期是工作日 09:00–12:00 和 14:00–18:00。）
+- **`completion_cost` 用的是计算时的当前 UTC 时间**（`datetime.now(timezone.utc)`），**不是响应里的 `created`**：我把同一个响应的 `created` 改成高峰、错峰、周末，结果都一样。所以今天稍晚或明天重算，同一条记录会得到不同的金额。
+- 实际时间线：步骤 1–4 在约 09:52 UTC（高峰，标准价），冒烟在 10:04 UTC（错峰，半价）。两批数字**不能直接比较**。
+- **DeepSeek 实际是否这样计费没有核实**（步骤 6 暂不做）；这里只能说 LiteLLM 内置价格表是这么写的。
+
+**对成本口径的影响（要在 `llm/cost.py` 里处理）**
+1. `cost_per_task` 如果直接用 `completion_cost`，M0、B0 和各消融在不同时段跑，成本会有最多 2 倍的偏差，**会污染对比**。
+2. 建议 `llm/cost.py` 用自己的价格表，按每次调用记录的 token（prompt、缓存命中、completion）和一个**固定的费率**计算，不依赖时钟；费率（标准价还是错峰价）写进配置并记录在 `run_start` 里。预算上限用标准价（偏保守）。
+3. 每个 `llm_call` 要记录原始 token 数（CLAUDE.md §5.7 本来就要求），这样任何时候都能重算。
+4. B0 的成本不要直接用 mini-swe-agent 记录的 `instance_cost`，而是从轨迹里的 `extra.response.usage` 用同一张价格表重算。
+5. mini-swe-agent 的 `cost_limit` 也是按它自己算的（随时钟变化）成本触发的，对比 M0 时要记得这一点。
 
 ## 6. Docker 与 uv 环境
 
