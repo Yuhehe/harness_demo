@@ -1,0 +1,44 @@
+{
+  "deepseek/deepseek-flash": {
+    "off_peak_pricing": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 1.2e-06,
+      "cache_read_input_token_cost": 6e-09,
+      "windows": [
+        {
+          "hours_utc": "00:00-00:00",
+          "weekdays": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ]
+        }
+      ]
+    }
+  },
+  "deepseek/deepseek-v4-pro": {
+    "off_peak_pricing": {
+      "input_cost_per_token": 1.32e-06,
+      "output_cost_per_token": 3.96e-06,
+      "cache_read_input_token_cost": 4.4e-08,
+      "windows": [
+        {
+          "hours_utc": "00:00-00:00",
+          "weekdays": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ]
+        }
+      ]
+    }
+  }
+}
