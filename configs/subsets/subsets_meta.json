@@ -1,0 +1,41 @@
+{
+  "algorithm": "v1: per repo (sorted) rng.sample over id-sorted rows; dev_5 = round-robin over repos among chosen rows with the dev difficulty, remainder = verified_50",
+  "dataset_id": "SWE-bench/SWE-bench_Verified",
+  "dev_5": {
+    "count": 5,
+    "difficulty": {
+      "<15 min fix": 5
+    },
+    "repos": {
+      "django/django": 2,
+      "scikit-learn/scikit-learn": 1,
+      "sphinx-doc/sphinx": 1,
+      "sympy/sympy": 1
+    }
+  },
+  "dev_difficulty": "<15 min fix",
+  "python": "3.12",
+  "quotas": {
+    "django/django": 20,
+    "scikit-learn/scikit-learn": 10,
+    "sphinx-doc/sphinx": 10,
+    "sympy/sympy": 15
+  },
+  "revision": "78f471bf655a3137b2e8a75af1501690ec009ec3",
+  "seed": 42,
+  "split": "test",
+  "verified_50": {
+    "count": 50,
+    "difficulty": {
+      "1-4 hours": 2,
+      "15 min - 1 hour": 28,
+      "<15 min fix": 20
+    },
+    "repos": {
+      "django/django": 18,
+      "scikit-learn/scikit-learn": 9,
+      "sphinx-doc/sphinx": 9,
+      "sympy/sympy": 14
+    }
+  }
+}
