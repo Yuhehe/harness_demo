@@ -223,12 +223,34 @@
 - 实际时间线：步骤 1–4 在约 09:52 UTC（高峰，标准价），冒烟在 10:04 UTC（错峰，半价）。两批数字**不能直接比较**。
 - **DeepSeek 实际是否这样计费没有核实**（步骤 6 暂不做）；这里只能说 LiteLLM 内置价格表是这么写的。
 
-**对成本口径的影响（要在 `llm/cost.py` 里处理）**
-1. `cost_per_task` 如果直接用 `completion_cost`，M0、B0 和各消融在不同时段跑，成本会有最多 2 倍的偏差，**会污染对比**。
-2. 建议 `llm/cost.py` 用自己的价格表，按每次调用记录的 token（prompt、缓存命中、completion）和一个**固定的费率**计算，不依赖时钟；费率（标准价还是错峰价）写进配置并记录在 `run_start` 里。预算上限用标准价（偏保守）。
-3. 每个 `llm_call` 要记录原始 token 数（CLAUDE.md §5.7 本来就要求），这样任何时候都能重算。
-4. B0 的成本不要直接用 mini-swe-agent 记录的 `instance_cost`，而是从轨迹里的 `extra.response.usage` 用同一张价格表重算。
-5. mini-swe-agent 的 `cost_limit` 也是按它自己算的（随时钟变化）成本触发的，对比 M0 时要记得这一点。
+**已决定（2026-10-05，以最后一次为准）：同时保留 token 指标和美元成本；美元成本用固定的高峰价（标准价），去掉峰谷影响**
+
+*两套指标都报告*
+1. **token 指标**：`tokens_in`（拆成未命中缓存和命中缓存）、`tokens_out`（含思考 token，思考部分单列）、`cache_hit_rate = Σ缓存命中 / Σprompt`、`steps`、`latency`，以及压缩调用自己的 token。
+2. **美元成本**（`cost_per_task`）：由每次调用记录的 token 数和**固定的标准价**算出，**不依赖时钟**：
+
+   `cost = (prompt − 缓存命中) × 输入价 + 缓存命中 × 缓存命中价 + completion × 输出价`（`completion` 已包含思考 token，按输出价计）
+
+   标准价（每 token）取 LiteLLM 1.104.0 本地价格表里的标准字段：`deepseek-flash` 输入 3e-07、输出 1.2e-06、缓存命中 6e-09；`deepseek-v4-pro` 输入 1.32e-06、输出 3.96e-06、缓存命中 4.4e-08。这是"高峰期价格"（LiteLLM 里的错峰价是它的 50%）。**不代表 DeepSeek 实际账单**（没有对账），只是一个固定、可比较的口径。
+3. 预算保护（CLAUDE.md §2.5 的 `max_cost_per_task_usd`、`MAX_TOTAL_COST_USD`、80% 规则）**仍按美元，用同一个标准价**，偏保守（实际错峰时更便宜）。**CLAUDE.md 不需要修改。**
+4. 跨模型比较：成本按各模型自己的标准价，token 数则要小心（同一句 `ping`，flash 报 31 个 prompt token，v4-pro 报 84 个，原因没查，不同模型的计数口径可能不同），**比率类指标**（缓存命中率、相对 M0 的变化）更可靠。
+
+*已验证（2026-10-05，离线，用冒烟轨迹里 25 次调用的 `usage`）*
+
+| 计算方式 | 合计 |
+|---|---|
+| LiteLLM `completion_cost`，按当前时钟（当时是错峰） | 0.008483 |
+| 上面的公式 + 标准价 | **0.016967** |
+| LiteLLM `completion_cost`，把错峰判断强制关掉（高峰） | **0.016967** |
+
+公式与 LiteLLM 的标准价结果完全一致，可以直接作为 `llm/cost.py` 的实现依据。
+
+*落地方式*
+- **我们自己的 harness**（第 1 天的 `llm/cost.py`）：用上面的公式和一张价格表，**不调用 `completion_cost`**，所以不受时钟影响；每个 `llm_call` 的 span 同时记录原始 token 数和算出的成本；`run_start` 记录价格表的版本（内容的哈希）。要加一个单元测试，对照 LiteLLM 的标准字段，防止价格表和 LiteLLM 漂移（`tests/unit/test_price_registry.py` 里已经有同样的检查，针对 B0 用的覆盖文件）。
+- **B0（mini-swe-agent）**：它内部用 `litellm.completion_cost`，成本随时钟变化，而它的 `cost_limit` 也按这个成本触发。解决办法：`export LITELLM_MODEL_REGISTRY_PATH=$PWD/eval/baselines/litellm_registry.json`。这个文件把两个模型的**错峰价设成与标准价相同**，mini-swe-agent 初始化时用 `litellm.utils.register_model` 加载（`litellm_model.py:61-62`）。已离线验证：不设这个变量时，mini-swe-agent 自己的 `_calculate_cost` 对 25 次调用合计 0.008483，设了之后是 0.016967。（只传 `off_peak_pricing: null` 没用，合并时被忽略，必须把错峰价写成与标准价相同。）
+- 单元测试 `tests/unit/test_price_registry.py`（4 个）：覆盖文件的标准价与 LiteLLM 一致；不用覆盖文件时，成本确实随错峰判断变化（错峰是高峰的一半）；用了覆盖文件后，无论是否错峰，两个模型的成本都等于标准价。它依赖 LiteLLM 内部的 `_is_off_peak`，升级 LiteLLM 时要留意。
+- **`LITELLM_LOCAL_MODEL_COST_MAP=True`**：测试里用 `tests/conftest.py` 固定；harness 运行时也应该固定，价格表就来自 `uv.lock` 锁定的 LiteLLM 版本，不在每次导入时从 GitHub 抓取（国内可能不通，也不可复现）。
+- 仍然不知道的：DeepSeek 实际是否按错峰价计费（步骤 6 没做）。在这个口径下不影响对比。
 
 ## 6. Docker 与 uv 环境
 
