@@ -12,6 +12,8 @@ B0 是外部基线：同一个模型、同一个题目子集（`configs/subsets/
 ```bash
 uv add --dev mini-swe-agent          # 已完成，版本锁在 uv.lock
 export MSWEA_GLOBAL_CONFIG_DIR="$PWD/.mswea"   # 必须在任何 mini-* 命令之前设置
+export LITELLM_MODEL_REGISTRY_PATH="$PWD/eval/baselines/litellm_registry.json"   # 让成本不随时钟变化，见下"成本口径"
+export LITELLM_LOCAL_MODEL_COST_MAP=True       # 价格表用已安装的 LiteLLM 版本自带的，不从 GitHub 抓取
 set -a; source .env; set +a                    # 导出 OPENAI_API_KEY / OPENAI_API_BASE / MODEL_MAIN 等
 ```
 
@@ -105,7 +107,7 @@ uv run mini-extra swebench --subset SWE-bench/SWE-bench_Verified --split test \
 - 判分：在 `results/runs/B0_smoke/` 下运行 `uv run swebench eval verified -p preds.json --run-id B0_smoke -j 1 -i django__django-11066 --report-dir .`，用时 34 秒，`Instances resolved: 1`。§6 的判分命令因此得到验证。`swebench eval` 会在**当前目录**下建 `logs/`，所以要在被 gitignore 的目录里运行。
 - mini-swe-agent 用后台的 `docker stop` 清理容器，运行刚结束时 `docker ps -a` 还能短暂看到它，几秒后消失，没有残留。
 - 默认的思考模式是开的，`reasoning_content` 存在每条 assistant 消息里（25 条里有 23 条）。要与 M0 对齐就要用同一个 `thinking` 设置；mini-swe-agent 里写法 `-c 'model.model_kwargs.thinking={"type":"disabled"}'` 是否生效**还没测**。
-- **成本口径**：`info.model_stats.instance_cost` 是 $0.008483，但它是 LiteLLM 按**当前时间的错峰价**（标准价的 50%）算的，按标准价重算是 $0.016967。**B0 的成本不要直接用这个字段**，而要用 `extra.response.usage` 里的 token 数和与 M0 相同的固定价格表重算（详见 `docs/notes.md` §5 末尾）。
+- **成本口径**：这次冒烟没有设 `LITELLM_MODEL_REGISTRY_PATH`，`info.model_stats.instance_cost` 是 $0.008483，是 LiteLLM 按**当时时钟的错峰价**（标准价的 50%）算的，按标准价是 $0.016967。**以后跑 B0 必须设置上面的 `LITELLM_MODEL_REGISTRY_PATH`**（`eval/baselines/litellm_registry.json` 把错峰价设成与标准价相同）：这样 `instance_cost` 和 `agent.cost_limit` 都是固定的标准价，与 M0 同口径、不随时间变化。已离线验证：设了之后 mini-swe-agent 自己的 `_calculate_cost` 对这次的 25 次调用合计 0.016967。token 指标仍从 `extra.response.usage` 取。详见 `docs/notes.md` §5 末尾。
 
 ## 附录：`--help` 原文（2.4.6，`COLUMNS=100`）
 

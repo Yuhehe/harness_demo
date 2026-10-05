@@ -61,7 +61,9 @@
   - [x] 验证计划步骤 4 已完成（2026-10-05）：`reasoning_content` 回传**没有被强制**（去掉后单轮、3 轮工具链都正常），且回传内容不计 prompt token；`thinking: disabled` 可用；默认思考模式下 `max_tokens` 太小会得到空内容和 `finish_reason=length`；两种模式的 prompt 模板不同，一次运行内不要切换。30 次调用 $0.005940（LiteLLM 价格表估算），详见 `docs/notes.md` §5
   - [x] 验证计划步骤 7–9 已完成（2026-10-05，详见 `docs/notes.md` §5 末尾）：① 错误密钥抛 `BadRequestError` 但 `status_code=401`（不是 `AuthenticationError`），所以重试要**按 `status_code` 分类**，不能按类名；不存在的模型名返回支持的名字 `deepseek-flash`、`deepseek-v4-pro`；② 本机假服务器：429/500/502/503/断连/缺 `choices` 都映射到 429 或 5xx 的状态码，`Timeout` 是 408，畸形的 200 是 `APIError(200)`，**LiteLLM 没有隐藏重试**，`Retry-After` 在 `e.litellm_response_headers` 里；③ mini-swe-agent 冒烟成功（见下面 mini-swe-agent 一项）
   - [ ] 步骤 5（缓存命中和最短前缀）、步骤 6（对账）**暂不做**（你的决定：有成熟文档可参考）。**风险**：LiteLLM 的 `completion_cost` 按**计算时的当前时间**使用错峰价（标准价的 50%），不对账的情况下尤其要靠固定费率的自有价格表，详见下面的待决策项
-  - [ ] **待决策**：① 重试规则没覆盖的 `Timeout`（408）和畸形的 200（`APIError`，状态码 200）是否也重试，按字面是都不重试；② `llm/cost.py` 用哪个固定费率（建议标准价，偏保守，写进配置并记录在 `run_start` 里），B0 的成本也要从轨迹的 `usage` 用同一张表重算
+  - [x] **成本口径已决定**（2026-10-05，你的决定，以最后一次为准）：**同时保留 token 指标和美元成本**（`tokens_in` 拆成未命中和命中缓存、`tokens_out` 含思考 token、`cache_hit_rate`、`steps`、`latency`，以及 `cost_per_task`）；**美元成本用固定的高峰价（标准价）按记录的 token 数计算，不依赖时钟**；预算保护仍按美元用同一个标准价，**CLAUDE.md 不需要改**。公式与 LiteLLM 的标准价结果完全一致（冒烟轨迹 0.016967）。B0 通过 `LITELLM_MODEL_REGISTRY_PATH=eval/baselines/litellm_registry.json` 把错峰价设成与标准价相同，已离线验证。详见 `docs/notes.md` §5 末尾
+  - [x] 价格覆盖文件 `eval/baselines/litellm_registry.json` 和 4 个单元测试 `tests/unit/test_price_registry.py`、`tests/conftest.py`（固定 `LITELLM_LOCAL_MODEL_COST_MAP=True`）已完成（2026-10-05，未提交）：覆盖文件的标准价与 LiteLLM 一致；不用覆盖文件时成本随错峰判断变化；用了之后无论是否错峰都是标准价。**第 1 天写 `llm/cost.py` 时**：用同一个公式和一张标准价表，不调用 `completion_cost`，每个 `llm_call` 记录原始 token 和成本，`run_start` 记录价格表的哈希
+  - [ ] **待决策**：重试规则没覆盖的 `Timeout`（408）和畸形的 200（`APIError`，状态码 200）是否也重试，按字面是都不重试
   - [ ] **待决策**：`thinking` 默认开还是关。每次调用都显式传，不依赖服务端默认；等第 1 天循环能跑后在 `dev_5` 上各跑一次对比再定，所有配置统一
 - [~] 建仓库，写 `pyproject.toml`（`requires-python = ">=3.12,<3.13"`）、`.python-version`（`3.12`）、`.env.example`、`.gitignore`；用 `uv add` / `uv add --dev` 加依赖，`uv sync` 生成 `.venv` 和 `uv.lock`（**提交 `uv.lock`**）；加入 CLAUDE.md、plan.md 和 README.md
   - [x] `.python-version`（3.12）、`pyproject.toml`（`requires-python` 已锁 `>=3.12,<3.13`）、`.venv`（Python 3.12.12）、`uv.lock`（已提交）、plan.md、README.md 已就绪
@@ -98,6 +100,7 @@
 ## 第 1 天：Agent 核心能端到端跑通
 
 - [ ] `llm/client.py`：基于 LiteLLM 的异步客户端，包含重试（只对 429 和 5xx）、成本计算、token 与缓存命中统计
+  - 已核实的约束（见 `docs/notes.md` §5）：重试按 `status_code` 判断（429 或 >= 500），不按异常类名；LiteLLM 没有隐藏重试；`Retry-After` 在 `e.litellm_response_headers`；每次调用显式传 `thinking`；`finish_reason=length` 且内容为空要当成失败；成本用固定的标准价公式计算，不依赖时钟，不调用 `completion_cost`；固定 `LITELLM_LOCAL_MODEL_COST_MAP=True`
 - [ ] `llm/replay.py`：录制和回放两种模式
 - [ ] `sandbox/docker_sandbox.py`：`exec`、`read_file`、`write_file`、`git_diff`；断网；资源限制；用 `finally` 保证清理容器
 - [ ] `tools/`：bash、view、str_replace（只允许唯一匹配）、search（ripgrep，镜像里没有就回退到 grep）、todo、submit，以及 registry
@@ -299,6 +302,11 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - **意外发现**：LiteLLM 的 `completion_cost` 会按**当前 UTC 时间**使用错峰价（标准价的 50%，工作日 UTC 10:00–24:00 等时段和整个周末）；冒烟的成本因此恰好是按标准价手算的一半，且同一条记录在不同时间重算会得到不同金额。这会让不同时段跑的配置之间的 `cost_per_task` 偏差最多 2 倍，要在 `llm/cost.py` 里用固定费率的自有价格表解决
 - 步骤 5、6 按你的决定暂不做
 
+**决定：成本口径（同日，提交之后；先决定只比 token，随后改为两者都保留，以后者为准）**
+- 你决定**同时保留 token 指标和美元成本，美元成本用固定的高峰价，去掉峰谷影响**。这样 CLAUDE.md 的预算规则、`cost_per_task`、`FailReason.cost_limit` 都保持有效，不需要改
+- 实现：自有 harness 用公式 + 标准价表（第 1 天的 `llm/cost.py`，不调用 `completion_cost`）；B0 用 `LITELLM_MODEL_REGISTRY_PATH` 指向 `eval/baselines/litellm_registry.json`，让 mini-swe-agent 自己的成本也是标准价。公式、覆盖文件都已离线验证，并有单元测试（29 个测试全过）
+- 提醒：不同模型的 token 计数口径可能不同（同一句 ping，flash 31、v4-pro 84），跨模型对比 token 数时优先用比率类指标
+
 **与 plan 的差距**
 
 | 第 0 天验收项 | 状态 |
@@ -315,7 +323,7 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 
 **明天先做（按顺序）**
 1. 你确认子集配额（django 20 / sympy 15 / sphinx 10 / sklearn 10）；确认后提交并冻结子集
-2. 同步 `.env.example`；验证计划的步骤 5、6 暂不做；先决定两件事：`llm/cost.py` 的固定费率，以及 `Timeout`/畸形 200 是否重试
+2. 同步 `.env.example`；验证计划的步骤 5、6 暂不做；决定 `Timeout`/畸形 200 是否重试
 3. 修 `pyproject.toml` 的项目名和描述，提交所有改动（提交信息按 CLAUDE.md §8 的格式）
 4. 开始第 1 天：`llm/client.py`、`llm/replay.py`、`sandbox/docker_sandbox.py`；写代码的间隙后台拉取剩余 50 个镜像
 5. 等 `configs/default.yaml` 确定后，回填 `mini_swe_agent.md` 里的 `{{STEP_LIMIT}}`、`{{COST_LIMIT}}` 和容器资源上限
