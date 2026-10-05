@@ -56,25 +56,28 @@
   - `MAX_TOTAL_COST_USD` 仍是 `.env.example` 里的占位值 20，待 dev_5 实测单题成本后重填
   - 已离线核实（2026-10-05，详见 `docs/notes.md` §5）：`deepseek/` 前缀能路由、能计价（含缓存命中价）；裸名报 `LLM Provider NOT provided`；`openai/` 前缀能路由但 `completion_cost` 抛 `ModelNotMappedError`，所以应当用 `deepseek/`
   - [x] `.env` 的变量名已改成 `DEEPSEEK_API_KEY`、`DEEPSEEK_API_BASE=https://api.deepseek.com`（原先的 `OPENAI_*` 在 `deepseek/` 前缀下读不到，`get_llm_provider` 得到 `api_key_resolved=False`，地址落到默认的 `/beta`）。2026-10-05 核实：格式正确，LiteLLM 解析出提供商、密钥、地址，本机假服务器上请求形状和用量/成本解析都对（详见 `docs/notes.md` §5）
-  - [ ] `.env.example` 还是 `OPENAI_*` 的旧模板，与 `.env` 的键不一致，需要同步；`.env` 权限是 644，建议 `chmod 600`
+  - [x] `.env.example` **不同步**（你的决定，2026-10-05）：保持适用范围最广的 `OPENAI_*` 格式。它是通用模板，`.env` 是你自己的 DeepSeek 配置（`DEEPSEEK_*`、`deepseek/` 前缀），两者的键允许不同
+  - 走通用的 `openai/<模型名>` 路线时，已核实的差异（2026-10-05，本机假服务器，离线）：① `thinking=` 关键字参数会抛 `UnsupportedParamsError`；如果设了 `drop_params=True` 则会**静默丢掉**，思考模式就失控。要改用 `extra_body={"thinking": {...}}`，请求体里能正确带上。mini-swe-agent 的 `swebench.yaml` 默认 `drop_params: True`，所以 B0 的 `model_kwargs.thinking` 在这条路线上会被静默丢掉；② `completion_cost` 抛 `ModelNotMappedError`：我们自有的价格表不受影响，但 mini-swe-agent 的成本统计会失败（要么给覆盖文件加 `openai/` 的键，要么 `ignore_errors`，后者会让 `cost_limit` 失效）；③ `reasoning_content`、缓存命中 token、思考 token 的解析与 `deepseek/` 路线相同
+  - [ ] `.env` 权限是 644，建议 `chmod 600`（未处理）
   - [x] 验证计划步骤 1–3 已完成（2026-10-05，真实调用）：密钥有效，`deepseek/deepseek-flash` 和 `deepseek/deepseek-v4-pro` 都存在，响应能解析，两个模型都支持函数调用；**不传 `thinking` 时服务端默认开启思考模式**（响应带 `reasoning_content`）；`usage` 里有 `prompt_cache_hit_tokens`。4 次调用合计 $0.001159（LiteLLM 价格表估算），详见 `docs/notes.md` §5
   - [x] 验证计划步骤 4 已完成（2026-10-05）：`reasoning_content` 回传**没有被强制**（去掉后单轮、3 轮工具链都正常），且回传内容不计 prompt token；`thinking: disabled` 可用；默认思考模式下 `max_tokens` 太小会得到空内容和 `finish_reason=length`；两种模式的 prompt 模板不同，一次运行内不要切换。30 次调用 $0.005940（LiteLLM 价格表估算），详见 `docs/notes.md` §5
   - [x] 验证计划步骤 7–9 已完成（2026-10-05，详见 `docs/notes.md` §5 末尾）：① 错误密钥抛 `BadRequestError` 但 `status_code=401`（不是 `AuthenticationError`），所以重试要**按 `status_code` 分类**，不能按类名；不存在的模型名返回支持的名字 `deepseek-flash`、`deepseek-v4-pro`；② 本机假服务器：429/500/502/503/断连/缺 `choices` 都映射到 429 或 5xx 的状态码，`Timeout` 是 408，畸形的 200 是 `APIError(200)`，**LiteLLM 没有隐藏重试**，`Retry-After` 在 `e.litellm_response_headers` 里；③ mini-swe-agent 冒烟成功（见下面 mini-swe-agent 一项）
   - [ ] 步骤 5（缓存命中和最短前缀）、步骤 6（对账）**暂不做**（你的决定：有成熟文档可参考）。**风险**：LiteLLM 的 `completion_cost` 按**计算时的当前时间**使用错峰价（标准价的 50%），不对账的情况下尤其要靠固定费率的自有价格表，详见下面的待决策项
   - [x] **成本口径已决定**（2026-10-05，你的决定，以最后一次为准）：**同时保留 token 指标和美元成本**（`tokens_in` 拆成未命中和命中缓存、`tokens_out` 含思考 token、`cache_hit_rate`、`steps`、`latency`，以及 `cost_per_task`）；**美元成本用固定的高峰价（标准价）按记录的 token 数计算，不依赖时钟**；预算保护仍按美元用同一个标准价，**CLAUDE.md 不需要改**。公式与 LiteLLM 的标准价结果完全一致（冒烟轨迹 0.016967）。B0 通过 `LITELLM_MODEL_REGISTRY_PATH=eval/baselines/litellm_registry.json` 把错峰价设成与标准价相同，已离线验证。详见 `docs/notes.md` §5 末尾
   - [x] 价格覆盖文件 `eval/baselines/litellm_registry.json` 和 4 个单元测试 `tests/unit/test_price_registry.py`、`tests/conftest.py`（固定 `LITELLM_LOCAL_MODEL_COST_MAP=True`）已完成（2026-10-05，未提交）：覆盖文件的标准价与 LiteLLM 一致；不用覆盖文件时成本随错峰判断变化；用了之后无论是否错峰都是标准价。**第 1 天写 `llm/cost.py` 时**：用同一个公式和一张标准价表，不调用 `completion_cost`，每个 `llm_call` 记录原始 token 和成本，`run_start` 记录价格表的哈希
-  - [ ] **待决策**：重试规则没覆盖的 `Timeout`（408）和畸形的 200（`APIError`，状态码 200）是否也重试，按字面是都不重试
+  - [x] **重试策略已决定**（2026-10-05，你的决定：方案 B）：除 429 和 5xx 外，也重试**客户端超时**（`Timeout`）和**不可用的 200**（响应体不是合法 JSON 或缺 `choices`）；总共最多 3 次尝试，指数退避加抖动，429 遵守 `Retry-After`；按（异常类型、状态码、响应形状）判断；4xx 不重试；每次记录次数和 `retry_reason`；用尽后以 `env_error` 终止；重试等待计入墙钟时间和延迟。**CLAUDE.md §5.1 和 §5.7 已按此修改**；问题清单和策略详见 `docs/notes.md` §5
+  - [ ] 重试相关还没定的细节：`llm.timeout_s` 的取值（没有真实数据可依据）、是否用流式输出、失败的尝试没有 `usage` 导致 token 统计可能漏算（要在 span 里标注）；`finish_reason=length` 且内容为空不是传输故障，不在重试范围内，按失败处理
   - [ ] **待决策**：`thinking` 默认开还是关。每次调用都显式传，不依赖服务端默认；等第 1 天循环能跑后在 `dev_5` 上各跑一次对比再定，所有配置统一
 - [~] 建仓库，写 `pyproject.toml`（`requires-python = ">=3.12,<3.13"`）、`.python-version`（`3.12`）、`.env.example`、`.gitignore`；用 `uv add` / `uv add --dev` 加依赖，`uv sync` 生成 `.venv` 和 `uv.lock`（**提交 `uv.lock`**）；加入 CLAUDE.md、plan.md 和 README.md
   - [x] `.python-version`（3.12）、`pyproject.toml`（`requires-python` 已锁 `>=3.12,<3.13`）、`.venv`（Python 3.12.12）、`uv.lock`（已提交）、plan.md、README.md 已就绪
   - [x] 依赖已用 `uv add` / `uv add --dev` 加入并提交（`e1aff8e`，121 个包）：运行时 litellm、docker、pydantic、pyyaml、fastapi、uvicorn、aiosqlite、python-dotenv、swebench；dev 组 ruff、pytest、pytest-asyncio、httpx、mini-swe-agent
   - [x] `pyproject.toml` 加了 `[tool.pytest.ini_options]`（`testpaths=["tests"]`、`pythonpath=["eval/swebench"]`，让测试能按模块名 import `eval/swebench/` 里的脚本）（2026-10-04，未提交）
-  - [ ] `pyproject.toml` 的 `name = "harness-demo"`（项目名是 harness-lab）和 `description` 还没改，也还没有 `[build-system]` / `[project.scripts]`（第 1 天写 `cli.py` 时一起配）
+  - [ ] （**暂不处理**，你的决定，2026-10-05）`pyproject.toml` 的 `name = "harness-demo"`（项目名是 harness-lab）和 `description` 还没改，也还没有 `[build-system]` / `[project.scripts]`（第 1 天写 `cli.py` 时一起配）
   - [x] `.env.example` 已创建（2026-10-04）：OpenAI 兼容格式，含 `OPENAI_API_KEY`、`OPENAI_API_BASE`、`MODEL_MAIN`、`MODEL_CHEAP`、`MAX_TOTAL_COST_USD`（其中 `MAX_TOTAL_COST_USD=20` 只是占位值，待 dev_5 实测后重填）
   - [x] `CLAUDE.md` 已从 `.gitignore` 移除并提交（`e1aff8e`）
   - [x] `.gitignore` 已加入 `.env`（2026-10-04，`git check-ignore` 确认生效）
   - [x] `.gitignore` 已加入 `results/runs/`、`.mswea/`（mini-swe-agent 的全局配置目录），并补了文件末尾换行（2026-10-04，未提交）
-  - [ ] 本次新增的改动**还没提交**：`.gitignore`、`pyproject.toml`、`docs/notes.md`、`docs/learning/docker_related.md`（§2.7）、`configs/subsets/`、`eval/`、`tests/`
+  - [x] 截至 2026-10-05，上述改动都已提交（最近一次 `aafd242`），工作区干净
 - [x] `eval/swebench/select_subset.py`：从 SWE-bench Verified 里固定随机种子选题，**集中在 3–5 个仓库**以减少镜像数量。输出 `verified_50.txt` 和 `dev_5.txt`，两者不重叠（2026-10-04；**配额已于 2026-10-05 确认，保持当前值**；真正的冻结标签 `v0.1-frozen` 在第 2 天主实验前打）
   - 种子 42；数据集固定在 revision `78f471bf655a3137b2e8a75af1501690ec009ec3`；输出同时写 `configs/subsets/subsets_meta.json`（种子、revision、配额、实际计数、难度分布，无时间戳）
   - 配额 django 20 / sympy 15 / sphinx 10 / scikit-learn 10（共 55，只按各仓库题数定，不涉及其他理由）；`verified_50` 实际是 django 18 / sympy 14 / sklearn 9 / sphinx 9，`dev_5` 是 5 道 `<15 min fix`（django 2、sklearn 1、sphinx 1、sympy 1），两者不重叠
@@ -99,8 +102,8 @@
 
 ## 第 1 天：Agent 核心能端到端跑通
 
-- [ ] `llm/client.py`：基于 LiteLLM 的异步客户端，包含重试（只对 429 和 5xx）、成本计算、token 与缓存命中统计
-  - 已核实的约束（见 `docs/notes.md` §5）：重试按 `status_code` 判断（429 或 >= 500），不按异常类名；LiteLLM 没有隐藏重试；`Retry-After` 在 `e.litellm_response_headers`；每次调用显式传 `thinking`；`finish_reason=length` 且内容为空要当成失败；成本用固定的标准价公式计算，不依赖时钟，不调用 `completion_cost`；固定 `LITELLM_LOCAL_MODEL_COST_MAP=True`
+- [ ] `llm/client.py`：基于 LiteLLM 的异步客户端，包含重试（429、5xx、`Timeout`、不可用的 200；最多 3 次尝试，指数退避加抖动，429 遵守 `Retry-After`，记录 `retry_reason`，用尽后 `env_error`，见 CLAUDE.md §5.1）、成本计算、token 与缓存命中统计
+  - 已核实的约束（见 `docs/notes.md` §5）：重试按（异常类型、状态码、响应形状）判断，不能只看状态码或类名（错误密钥是 `BadRequestError` 但状态码 401，畸形 200 的状态码是 200，缺 `choices` 的 200 被映射成 500）；LiteLLM 没有隐藏重试；`Retry-After` 在 `e.litellm_response_headers`；每次调用显式传 `thinking`；`finish_reason=length` 且内容为空要当成失败；成本用固定的标准价公式计算，不依赖时钟，不调用 `completion_cost`；固定 `LITELLM_LOCAL_MODEL_COST_MAP=True`
 - [ ] `llm/replay.py`：录制和回放两种模式
 - [ ] `sandbox/docker_sandbox.py`：`exec`、`read_file`、`write_file`、`git_diff`；断网；资源限制；用 `finally` 保证清理容器
 - [ ] `tools/`：bash、view、str_replace（只允许唯一匹配）、search（ripgrep，镜像里没有就回退到 grep）、todo、submit，以及 registry
@@ -108,7 +111,7 @@
 - [ ] `tracing/tracer.py`：写 JSONL 格式的 span
 - [ ] `cli.py`：实现 `harness run`
 - [ ] `tests/fixtures/toy_repo/`：一个带 bug 的小仓库，包含 1 个会失败的测试
-- [ ] 单元测试：str_replace 的边界情况、截断逻辑、限制检查、registry
+- [ ] 单元测试：str_replace 的边界情况、截断逻辑、限制检查、registry、重试分类（用本机假服务器覆盖 429、5xx、超时、断连、非 JSON/截断/缺 `choices` 的 200，以及 4xx 不重试）
 - [ ] 端到端测试：在 toy_repo 上录制一次真实运行，再用回放通过测试
 - [ ] 手动在 `dev_5` 的 2 道题上跑通，能生成补丁
 
@@ -323,8 +326,8 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 
 **明天先做（按顺序）**
 1. （已完成，2026-10-05）子集配额已确认，保持当前值
-2. 同步 `.env.example`；验证计划的步骤 5、6 暂不做；决定 `Timeout`/畸形 200 是否重试
-3. 修 `pyproject.toml` 的项目名和描述，提交所有改动（提交信息按 CLAUDE.md §8 的格式）
+2. （`.env.example` 不同步，你的决定）验证计划的步骤 5、6 暂不做；重试策略已定为方案 B（见 2026-10-05 的重试策略补充）
+3. （`pyproject.toml` 的项目名和描述暂不管，你的决定；改动已全部提交）
 4. 开始第 1 天：`llm/client.py`、`llm/replay.py`、`sandbox/docker_sandbox.py`；镜像拉取等主 harness 实现后再动手
 5. 等 `configs/default.yaml` 确定后，回填 `mini_swe_agent.md` 里的 `{{STEP_LIMIT}}`、`{{COST_LIMIT}}` 和容器资源上限
 
@@ -333,6 +336,25 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 **决定（你的）**
 - 子集配额**保持当前值**（django 20 / sympy 15 / sphinx 10 / scikit-learn 10），已记入第 0 天的选题一项。这只是锁定决定，不是打标签；`v0.1-frozen` 仍在第 2 天主实验前打
 - 剩余 50 个镜像**不现在拉，等主 harness 实现后再拉**。约束不变：第 2 天晚上开跑主实验前必须拉完（按单个 84–210 秒的实测粗估，用 2 个 worker 大约一小时多，网络状况会变），所以最晚第 2 天白天开始；建议在第 1 天验收（harness 能在 `dev_5` 上端到端跑通）之后就开始
+
+**当天花费**：无新增
+
+### 2026-10-05（补充：提交与 .env、pyproject 的决定）
+
+- 已提交：`aafd242`（配额确认、拉取推迟）；工作区干净
+- 决定（你的）：`pyproject.toml` 的项目名和描述**暂不处理**；`.env` 和 `.env.example` **不同步**，`.env.example` 保持适用范围最广的 `OPENAI_*` 格式
+- 影响：走通用 `openai/` 路线时 `thinking` 参数要用 `extra_body` 传，`drop_params=True` 会静默丢掉它；`completion_cost` 对 `openai/` 前缀失败，只影响 mini-swe-agent 的成本统计；已写在"申请 API Key"一项下面
+- `Timeout`（408）和畸形 200 是否重试：问题清单已列出；你随后决定采用方案 B（也重试这两类），见同日后面的补充
+
+**当天花费**：无新增
+
+### 2026-10-05（补充：重试策略决定）
+
+- 你决定采用**方案 B**：除 429 和 5xx 外，也重试客户端超时和不可用的 200。CLAUDE.md §5.1（重试规则）和 §5.7（`llm_call` span 多一个重试原因）已修改；`docs/notes.md` §5 记录了问题清单、策略和还没定的细节
+- 策略：总共最多 3 次尝试；指数退避加抖动；429 遵守 `Retry-After`；按（异常类型、状态码、响应形状）判断；4xx 不重试；记录重试次数和 `retry_reason`；用尽后 `env_error`；重试等待计入墙钟时间和延迟
+- 其中"重试等待计入墙钟时间和延迟"是我取的默认做法（那是真实流逝的时间），不是你明确说过的，不同意的话再改
+- 还没定：`llm.timeout_s` 的取值、是否用流式输出
+- 第 1 天写 `llm/client.py` 时要补重试分类的单元测试（已加到第 1 天的单元测试一项）
 
 **当天花费**：无新增
 
