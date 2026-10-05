@@ -58,7 +58,7 @@
 
 ## 5. LiteLLM（1.104.0）与 DeepSeek
 
-核实日期 2026-10-05，全部是离线核实（读源码、`LITELLM_LOCAL_MODEL_COST_MAP=True` 下调用 `get_llm_provider` 和 `completion_cost`、本机假服务器），**没有调用过 DeepSeek 的 API**。
+核实日期 2026-10-05。前面的路由、计价、思考模式源码部分是离线核实（读源码、`LITELLM_LOCAL_MODEL_COST_MAP=True` 下调用 `get_llm_provider` 和 `completion_cost`、本机假服务器）；验证计划的步骤 1–3 起有真实的 DeepSeek 调用，结果见 §5 末尾。
 
 **路由**（`litellm_core_utils/get_llm_provider_logic.py:723-727`）
 
@@ -90,7 +90,7 @@
 
 - 只有调用时显式传 `thinking={"type": "enabled"}`（或 `reasoning_effort` 不是 `"none"`）且模型支持 reasoning，LiteLLM 才会补 `reasoning_content`（`_thinking_mode_active`，约 214-225 行）。
 - 开启思考模式时，DeepSeek 要求多轮对话里每条 assistant 消息都带回 `reasoning_content`，否则报错。LiteLLM 会从 `provider_specific_fields` 里找回；找不到就塞一个空格占位并打警告，**可能悄悄降低多轮质量**（源码注释的说法）。
-- **未核实**：DeepSeek v4 模型默认是否开启思考模式。需要一次最小调用确认；harness 的消息历史要保存模型返回的 `reasoning_content`，压缩上下文时也要考虑它。
+- **已核实（真实调用，2026-10-05）**：不传 `thinking` 参数时，两个模型的响应都带 `reasoning_content`，且 `completion_tokens_details.reasoning_tokens > 0`，说明**服务端默认开启思考模式**。多轮是否必须回传 `reasoning_content`：步骤 4 实测**没有被强制**（见 §5 末尾的步骤 4 结果），但样本很小。
 
 **异常与调用**
 
@@ -123,6 +123,48 @@
 | 9 | `mini-extra swebench` 对 1 道 dev 题（`-m deepseek/deepseek-flash`，很小的 `cost_limit`） | B0 的命令、`--network none` 下能否工作、轨迹里的成本字段位置 | 少量 |
 
 步骤 1–3 通过后才有必要做 4–5；步骤 6 通过前，不要信任任何成本数字。每一步的结果和花费记进 `plan.md` 的日志，并回填本节。
+
+**步骤 1–3 的结果（2026-10-05，真实调用，`num_retries=0`，`timeout=90`，脚本在 scratchpad，不在仓库里）**
+
+| 调用 | 模型 | prompt / completion tokens（其中 reasoning） | 结果 | 成本（LiteLLM 内置价格表） |
+|---|---|---|---|---|
+| 1 ping | `deepseek/deepseek-flash` | 31 / 21（15） | `finish_reason=stop`，content `pong 🏓` | $0.000034 |
+| 2 ping | `deepseek/deepseek-v4-pro` | 84 / 24（21） | `stop`，content `pong` | $0.000206 |
+| 3 bash 工具 | `deepseek/deepseek-flash` | 298 / 53（15） | `finish_reason=tool_calls`，`bash` 的 `arguments` 是合法 JSON `{"command": "echo hello"}`，有 `id` | $0.000153 |
+| 3 bash 工具 | `deepseek/deepseek-v4-pro` | 361 / 73（29） | 同上 | $0.000766 |
+
+四次调用合计 **$0.001159**（LiteLLM 价格表的估算，还没有和 DeepSeek 控制台对账，见步骤 6）。结论：
+
+- **通过**：密钥有效，两个模型名真实存在，走的是 `/chat/completions`（不是 `/beta`），响应能被 LiteLLM 解析，两个模型都支持函数调用。
+- 响应里的模型名是 `deepseek-flash`、`deepseek-v4-pro`（没有版本后缀）。
+- **`usage` 里同时有** `prompt_cache_hit_tokens`、`prompt_cache_miss_tokens`，并被映射到 `prompt_tokens_details.cached_tokens`；这 4 次都是 0（没有重复的前缀）。
+- **思考 token 算在 `completion_tokens` 里**（例如 21 个 completion token 里有 15 个是 reasoning），按输出价计费；`max_tokens` 设得太小时，思考可能把预算用光，导致 `content` 为空、`finish_reason=length`（这次 64 和 256 都没触发，但 harness 的 `max_tokens` 要给思考留余量）。
+- 同样的 `ping`，flash 报 31 个 prompt token，v4-pro 报 84 个，原因没有查；两个模型的 token 数不能直接比较。
+- 步骤 4 见下；还没做：5（缓存命中）、6（对账）、7–9。
+
+**步骤 4 的结果（2026-10-05，真实调用，两个模型各自独立测；脚本在 scratchpad）**
+
+实验：带 `bash` 工具的多轮对话；`thinking` 参数分别是不传（服务端默认）、显式 `enabled`、显式 `disabled`；第二轮及之后的 assistant 消息分别"带回 `reasoning_content`"和"去掉 `reasoning_content`"；另有 3 轮连续工具调用的链；再加一个 `max_tokens` 太小的对照。线上请求体用 LiteLLM 的 `log_pre_api_call` 钩子抓取并核对（发出去的 `reasoning_content` 长度、有没有 `thinking` 字段）。
+
+| 问题 | 结果 |
+|---|---|
+| **回传是否被强制？** | **否。** 默认思考模式下，第二轮去掉 `reasoning_content`（发出的长度为 0）不报错；显式 `enabled` 时 LiteLLM 注入的单空格占位也不报错；3 轮连续工具调用的链（flash 和 v4-pro，各一条带回传、一条去掉）全部正常完成，答案都是 alpha/beta/gamma。共 4 条链加 7 组两轮对话，没有出现 400。**局限**：链很短（最多 3 次工具调用），不能证明任何情况下都不会报错；LiteLLM 源码注释说 API 会拒绝缺失的 `reasoning_content`，我们没有复现。 |
+| 回传的内容算不算 prompt token？ | **不算。** 同一个第二轮请求，带回传（发出 73 / 92 个字符）和去掉，`prompt_tokens` 完全相同（flash 377 / 377，v4-pro 452 / 452）。 |
+| 默认情况下是否一定会思考？ | **不一定。** 默认模式下 reasoning token 在 0–58 之间波动，后几轮经常是 0；显式 `thinking: enabled` 的 flash 第一轮也出现过 reasoning 为 0（只有 1 个样本）。 |
+| `disabled` 能用吗？ | 能。两个模型都正常返回工具调用和最终答案，响应里没有 `reasoning_content`，`reasoning_tokens` 为空；`max_tokens=16` 也能正常得到 `pong`。 |
+| `max_tokens` 太小会怎样？ | 默认思考模式下 `max_tokens=16`：`finish_reason='length'`、`content` 为空，16 个 token 全被思考用掉（已复现）；`disabled` 时正常。 |
+| 两种模式的 prompt 一样吗？ | **不一样。** 同样的请求，`prompt_tokens` 在默认模式是 flash 308 / v4-pro 371，在 `disabled` 是 284 / 293。说明服务端对两种模式套的模板不同；`disabled` 第一次调用 `cached_tokens=0`，之后同模式下的第二轮才有命中。推断（未单独验证）：**缓存很可能不能跨模式共享，一次运行内不要切换思考模式**。 |
+| 缓存的观察（步骤 5 的前置数据） | 所有 `cached_tokens` 都是 128 的倍数（0、128、256、384），提示命中以 128 token 为块。 |
+
+步骤 4 的 30 次调用（两轮对话实验 14 次、工具链 16 次）共花费 **$0.005940**（LiteLLM 价格表估算），步骤 1–4 累计 $0.007099。
+
+**对 harness 的结论**
+1. **每次调用都显式传 `thinking`**（来自配置），不依赖服务端默认值，否则服务端以后改默认值会让实验不可复现。
+2. **一次运行内保持同一个 `thinking` 设置**（缓存规则，CLAUDE.md §5.2）；所有对比配置用同一个设置。
+3. **保留并回传 `reasoning_content` 是低成本的**（不计 prompt token），能避开 LiteLLM 文档里提到的报错；但上下文压缩（truncate、summarize）时丢掉旧的 `reasoning_content` 是可行的（去掉也被接受），可以减少体积。
+4. `max_tokens` 要给思考留余量，`finish_reason=length` 且 `content` 为空要当成可识别的失败，不能当成空回答。
+5. **默认用开还是关，要靠实验决定**：关闭更便宜、更可控、没有 `reasoning_content` 的处理；开启可能提高解决率，代价是 reasoning token 计入输出价。建议等第 1 天的循环能跑后，在 `dev_5` 上各跑一次再定（见 plan.md），不要现在凭感觉选。
+6. B0 要与 M0 对齐：mini-swe-agent 可以用 `-c 'model.model_kwargs.thinking={"type":"disabled"}'`（`-c key=value` 按 JSON 解析，`model_kwargs` 会透传给 LiteLLM），这个写法在 mini-swe-agent 里实际是否生效还没测。
 
 ## 6. Docker 与 uv 环境
 
