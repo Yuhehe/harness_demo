@@ -73,7 +73,7 @@ PYTHONPATH=eval/swebench uv run python -c "import json; from select_subset impor
 | 文件 | 内容 |
 |---|---|
 | `preds.json` | `{instance_id: {model_name_or_path, instance_id, model_patch}}` |
-| `<instance_id>/<instance_id>.traj.json` | 每题的完整轨迹（成本字段的位置：`{{TBD，冒烟后核实}}`） |
+| `<instance_id>/<instance_id>.traj.json` | 每题的完整轨迹（成本：`info.model_stats.instance_cost` 和每条 assistant 消息的 `extra.cost`；原始响应和 `usage` 在 `extra.response`） |
 | `exit_statuses_<ts>.yaml` | 每题的退出状态 |
 | `minisweagent.log` | 运行日志 |
 
@@ -87,16 +87,25 @@ uv run swebench eval verified -p results/runs/B0/preds.json --run-id B0 -j {{N}}
 - `verified` 别名解析成 `SWE-bench/SWE-bench_Verified` 的**最新** revision，不支持固定 revision。判分前同样要跑 §3 里的 revision 核对，否则数据集已变，要先处理。
 - 缺镜像时 swebench 会自动拉取（`run_evaluation.py:91-99`），不影响结果，只是慢。
 
-## 7. 冒烟测试（尚未执行，需要你确认后再跑，会产生少量 LLM 花费）
+## 7. 冒烟测试（已执行，2026-10-05）
+
+实际运行的命令（`.env` 里的变量先导出：`set -a; source .env; set +a`；跑之前先做 §3 的 revision 核对）：
 
 ```bash
 uv run mini-extra swebench --subset SWE-bench/SWE-bench_Verified --split test \
-  --filter '^django__django-11066$' -w 1 -m "$MODEL_MAIN" -c swebench.yaml \
-  -c agent.cost_limit=0.3 -c 'environment.run_args=["--rm","--network","none"]' \
+  --filter '^django__django-11066$' -w 1 -m deepseek/deepseek-flash -c swebench.yaml \
+  -c agent.step_limit=30 -c agent.cost_limit=0.3 -c 'environment.run_args=["--rm","--network","none"]' \
   -o results/runs/B0_smoke
 ```
 
-目的：确认命令、`--network none` 下 agent 能正常工作、输出结构和成本记录。`django__django-11066` 的镜像已在本机（dev_5 之一）。结果和花费记入 `plan.md` 日志。
+结果（`django__django-11066`，dev 题，**不是实验结果，不进报告**）：
+
+- 退出码 0，状态 `Submitted`，用时 99 秒，25 次 API 调用，没有触发 `step_limit=30` 和 `cost_limit=0.3`。
+- **`--network none` 下 agent 正常工作**，补丁 767 个字符。
+- 判分：在 `results/runs/B0_smoke/` 下运行 `uv run swebench eval verified -p preds.json --run-id B0_smoke -j 1 -i django__django-11066 --report-dir .`，用时 34 秒，`Instances resolved: 1`。§6 的判分命令因此得到验证。`swebench eval` 会在**当前目录**下建 `logs/`，所以要在被 gitignore 的目录里运行。
+- mini-swe-agent 用后台的 `docker stop` 清理容器，运行刚结束时 `docker ps -a` 还能短暂看到它，几秒后消失，没有残留。
+- 默认的思考模式是开的，`reasoning_content` 存在每条 assistant 消息里（25 条里有 23 条）。要与 M0 对齐就要用同一个 `thinking` 设置；mini-swe-agent 里写法 `-c 'model.model_kwargs.thinking={"type":"disabled"}'` 是否生效**还没测**。
+- **成本口径**：`info.model_stats.instance_cost` 是 $0.008483，但它是 LiteLLM 按**当前时间的错峰价**（标准价的 50%）算的，按标准价重算是 $0.016967。**B0 的成本不要直接用这个字段**，而要用 `extra.response.usage` 里的 token 数和与 M0 相同的固定价格表重算（详见 `docs/notes.md` §5 末尾）。
 
 ## 附录：`--help` 原文（2.4.6，`COLUMNS=100`）
 
