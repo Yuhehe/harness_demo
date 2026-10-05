@@ -11,3 +11,9 @@ wheels/
 
 # api
 .env
+
+# harness-lab runtime outputs (results/summary/ is committed)
+results/runs/
+
+# mini-swe-agent global config dir (set MSWEA_GLOBAL_CONFIG_DIR to this)
+.mswea/
