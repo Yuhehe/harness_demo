@@ -57,7 +57,10 @@
   - 已离线核实（2026-10-05，详见 `docs/notes.md` §5）：`deepseek/` 前缀能路由、能计价（含缓存命中价）；裸名报 `LLM Provider NOT provided`；`openai/` 前缀能路由但 `completion_cost` 抛 `ModelNotMappedError`，所以应当用 `deepseek/`
   - [x] `.env` 的变量名已改成 `DEEPSEEK_API_KEY`、`DEEPSEEK_API_BASE=https://api.deepseek.com`（原先的 `OPENAI_*` 在 `deepseek/` 前缀下读不到，`get_llm_provider` 得到 `api_key_resolved=False`，地址落到默认的 `/beta`）。2026-10-05 核实：格式正确，LiteLLM 解析出提供商、密钥、地址，本机假服务器上请求形状和用量/成本解析都对（详见 `docs/notes.md` §5）
   - [ ] `.env.example` 还是 `OPENAI_*` 的旧模板，与 `.env` 的键不一致，需要同步；`.env` 权限是 644，建议 `chmod 600`
-  - [ ] **仍未验证**（还没有发起过真实调用）：模型名在服务商那边是否真实存在、思考模式的默认状态、`reasoning_content` 是否需要回传、LiteLLM 内置价格表是否等于官方价格。验证计划（9 步，第 1 步起会花钱）见 `docs/notes.md` §5，最迟在写 `llm/client.py` 之前做完步骤 1–3
+  - [x] 验证计划步骤 1–3 已完成（2026-10-05，真实调用）：密钥有效，`deepseek/deepseek-flash` 和 `deepseek/deepseek-v4-pro` 都存在，响应能解析，两个模型都支持函数调用；**不传 `thinking` 时服务端默认开启思考模式**（响应带 `reasoning_content`）；`usage` 里有 `prompt_cache_hit_tokens`。4 次调用合计 $0.001159（LiteLLM 价格表估算），详见 `docs/notes.md` §5
+  - [x] 验证计划步骤 4 已完成（2026-10-05）：`reasoning_content` 回传**没有被强制**（去掉后单轮、3 轮工具链都正常），且回传内容不计 prompt token；`thinking: disabled` 可用；默认思考模式下 `max_tokens` 太小会得到空内容和 `finish_reason=length`；两种模式的 prompt 模板不同，一次运行内不要切换。30 次调用 $0.005940（LiteLLM 价格表估算），详见 `docs/notes.md` §5
+  - [ ] **仍未验证**：缓存命中和最短前缀（步骤 5；已观察到命中以 128 token 为块）；**LiteLLM 内置价格表是否等于官方价格（步骤 6，对账前不要信任任何成本数字）**；错误密钥的异常类型（步骤 7）
+  - [ ] **待决策**：`thinking` 默认开还是关。每次调用都显式传，不依赖服务端默认；等第 1 天循环能跑后在 `dev_5` 上各跑一次对比再定，所有配置统一
 - [~] 建仓库，写 `pyproject.toml`（`requires-python = ">=3.12,<3.13"`）、`.python-version`（`3.12`）、`.env.example`、`.gitignore`；用 `uv add` / `uv add --dev` 加依赖，`uv sync` 生成 `.venv` 和 `uv.lock`（**提交 `uv.lock`**）；加入 CLAUDE.md、plan.md 和 README.md
   - [x] `.python-version`（3.12）、`pyproject.toml`（`requires-python` 已锁 `>=3.12,<3.13`）、`.venv`（Python 3.12.12）、`uv.lock`（已提交）、plan.md、README.md 已就绪
   - [x] 依赖已用 `uv add` / `uv add --dev` 加入并提交（`e1aff8e`，121 个包）：运行时 litellm、docker、pydantic、pyyaml、fastapi、uvicorn、aiosqlite、python-dotenv、swebench；dev 组 ruff、pytest、pytest-asyncio、httpx、mini-swe-agent
@@ -272,7 +275,19 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - 检查了 `.env`（没有输出密钥的值）：先发现变量名还是 `OPENAI_*`，LiteLLM 读不到；之后你改成了 `DEEPSEEK_*`，重新核实通过（见"申请 API Key"一项）
 - `docs/learning/python_feature.md` 是你新增的笔记，未跟踪，不在 plan 里；它里面的 Python 代码块让 `ruff format --check .` 失败（ruff 0.16 会格式化 markdown 里的代码块），已把 `pyproject.toml` 的 ruff 排除从只排除 `CLAUDE.md` 改成排除所有 `*.md`，没有改你的笔记
 
-**当天花费**：$0
+**当天花费**：$0.007099（LiteLLM 价格表估算，34 次真实的 DeepSeek 调用：步骤 1–3 共 4 次 $0.001159，步骤 4 共 30 次 $0.005940；还没有和 DeepSeek 控制台对账）
+
+**LiteLLM + DeepSeek 验证（步骤 1–3，同日稍后）**
+- 全部通过，结果表见 `docs/notes.md` §5：密钥有效，模型名存在，不走 `/beta`，函数调用能解析（`arguments` 是合法 JSON）
+- 发现：**思考模式默认开启**，`reasoning_content` 随响应返回，思考 token 计入 `completion_tokens` 并按输出价计费；`usage` 同时带 `prompt_cache_hit_tokens` 和 `prompt_cache_miss_tokens`
+- 对 `llm/client.py` 的影响：消息历史要保留 `reasoning_content`；`max_tokens` 要给思考留余量；是否统一关闭思考要等步骤 4 决定
+- 验证脚本放在 scratchpad，没有进仓库
+
+**LiteLLM + DeepSeek 验证（步骤 4，同日稍后）**
+- `reasoning_content` 回传没有被强制：默认思考模式下去掉它、LiteLLM 注入空格占位、3 轮连续工具链，共 4 条链和 7 组两轮对话都没有报错；回传的内容不计 `prompt_tokens`
+- 默认思考模式并不总是思考（reasoning token 0–58 波动）；`thinking: disabled` 可用；默认模式下 `max_tokens=16` 得到 `finish_reason=length` 且内容为空
+- 两种模式的 `prompt_tokens` 不同（flash 308 / 284，v4-pro 371 / 293），推断缓存不能跨模式共享，一次运行内不要切换；`cached_tokens` 都是 128 的倍数
+- 对 `llm/client.py` 的影响：每次调用显式传 `thinking`（配置项）；保留 `reasoning_content` 但压缩时可以丢；`length` 且内容为空要识别成失败；`thinking` 默认开还是关等 dev_5 上的对比再定
 
 **与 plan 的差距**
 
@@ -290,7 +305,7 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 
 **明天先做（按顺序）**
 1. 你确认子集配额（django 20 / sympy 15 / sphinx 10 / sklearn 10）；确认后提交并冻结子集
-2. 同步 `.env.example`，按 `docs/notes.md` §5 的验证计划做步骤 1–3 的真实调用（花费不到 0.001 美元量级，记入日志）
+2. 同步 `.env.example`；按 `docs/notes.md` §5 继续验证计划：步骤 5（缓存命中和最短前缀）、6（到 DeepSeek 控制台对账）、7（错误密钥）
 3. 修 `pyproject.toml` 的项目名和描述，提交所有改动（提交信息按 CLAUDE.md §8 的格式）
 4. 开始第 1 天：`llm/client.py`、`llm/replay.py`、`sandbox/docker_sandbox.py`；写代码的间隙后台拉取剩余 50 个镜像
 5. mini-swe-agent 的冒烟测试等 `configs/default.yaml` 确定、`.env` 可用后再跑
