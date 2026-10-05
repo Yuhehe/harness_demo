@@ -238,6 +238,36 @@ docker run -v /var/run/docker.sock:/var/run/docker.sock ...
 断网 + 资源限制 + 非特权 + 权限层 guard + 用完即删 + 宿主机不执行模型字符串
 ```
 
+### 2.7 Docker Engine 与 Docker SDK for Python：为什么装了 Docker 还要 `uv add docker`
+
+这是**两个不同的东西，只是名字相同**：
+
+| | apt 装的 `docker.io` | `uv add docker` |
+|---|---|---|
+| 是什么 | Docker Engine：后台的 `dockerd` 守护进程，加上 `docker` 命令行 | PyPI 上的 Python 库（docker-py，即 Docker SDK for Python） |
+| 装在哪 | 系统里 | 项目的 `.venv` 里 |
+| 作用 | 真正创建和运行容器 | 让 Python 代码向 `dockerd` 发请求 |
+| 能否互相替代 | 不能 | 不能 |
+
+`uv add docker` 只装一个 Python 客户端，**不会安装 Docker 本身**。它和 `docker` 命令行同属一层，都是 §2.5 里 docker.sock 那个 REST API 的客户端：
+
+```
+docker 命令行 ──┐
+Python SDK   ──┼─→ /var/run/docker.sock ─→ dockerd（apt 装的）→ 容器
+compose 插件 ──┘
+```
+
+两者缺一不可：没有 Engine，SDK 无处可连；没有 SDK，harness 的 Python 代码没法方便地操作容器。
+
+**为什么项目用 SDK，而不是在 Python 里 `subprocess` 调 `docker` 命令行**
+
+1. **规定如此**：CLAUDE.md §3.1 要求"沙箱通过 Docker SDK for Python 创建容器"。
+2. **安全**：用 `subprocess` 拼 `docker exec ... <模型给的命令>`，容易出现字符串拼接和转义问题，模型输出里的引号、分号可能变成宿主机上的 shell 注入。SDK 把命令作为参数列表传给 API，不经过宿主机的 shell。这也呼应规则 2：宿主机上禁止用 `subprocess` 运行模型产生的任何字符串。
+3. **工程上更可靠**：返回结构化对象（容器状态、退出码、日志流），出错抛异常，不用解析命令行文本；资源限制直接传参数（`network_mode="none"`、`mem_limit`、`pids_limit`）。
+4. **便于测试**：外部依赖可以换成假对象，符合 CLAUDE.md §8"Docker、LLM 都用假对象或回放代替"。
+
+**服务镜像里同理**：`docker/Dockerfile` 里 `uv sync` 会装 SDK，但镜像里**不需要装 Docker Engine**，服务容器通过挂载宿主机的 `docker.sock` 去连宿主机的 `dockerd`（见 §2.5）。
+
 ---
 
 ## 3. WSL2 环境安装与配置
