@@ -24,3 +24,13 @@ dev = [
     "pytest-asyncio>=1.4.0",
     "ruff>=0.16.10",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# eval/ scripts are run as files (not a package); let tests import them by module name.
+pythonpath = ["eval/swebench"]
+
+[tool.ruff]
+# ruff 0.16 also formats Python code blocks inside Markdown. Our docs (CLAUDE.md, plan.md,
+# docs/**) contain illustrative snippets, so keep ruff to real Python sources.
+extend-exclude = ["*.md"]
