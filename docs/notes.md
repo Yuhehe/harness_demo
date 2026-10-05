@@ -94,7 +94,7 @@
 
 **异常与调用**
 
-- `litellm.acompletion` 是协程函数；`RateLimitError`、`InternalServerError`、`APIConnectionError`、`Timeout`、`BadRequestError`、`AuthenticationError`、`ContextWindowExceededError` 都存在，可用于 `llm/client.py` 的"只对 429 和 5xx 重试"。
+- `litellm.acompletion` 是协程函数；`RateLimitError`、`InternalServerError`、`APIConnectionError`、`Timeout`、`BadRequestError`、`AuthenticationError`、`ContextWindowExceededError` 都存在，可用于 `llm/client.py` 的重试判断（策略见 §5 的"重试策略"）。
 - LiteLLM 自带重试（`num_retries` 通过 kwargs 传入，`main.py` 里有读取）。CLAUDE.md §5.1 要求重试放在自己的 `llm/client.py` 里并记录次数，所以调用时应显式传 `num_retries=0`，避免两层重试叠加。
 
 **当前 `.env` 的核实结果（2026-10-05，没有任何外部流量）**
@@ -119,7 +119,7 @@
 | 5 | 同一段较长的前缀连续发两次 | 第二次是否出现 `prompt_cache_hit_tokens>0`，以及缓存生效的最短前缀；对应 §5.2 的缓存规则 | 几美分以内 |
 | 6 | 到 DeepSeek 控制台核对：步骤 1–5 的实际扣费与 LiteLLM 的 `completion_cost` 之和是否一致 | **LiteLLM 内置价格表是否等于官方当前价格**，决定 `max_cost_per_task_usd` 和 `MAX_TOTAL_COST_USD` 能否信任 | 0 |
 | 7 | 故意用错误的密钥调一次 | 抛出的是 `AuthenticationError`，不会被当成可重试错误 | 0 |
-| 8 | 用本地假服务器返回 429、500、畸形 JSON | `llm/client.py` 的"只对 429 和 5xx 重试、记录重试次数"逻辑（第 1 天的单元测试，不花钱） | 0 |
+| 8 | 用本地假服务器返回 429、500、畸形 JSON | `llm/client.py` 的重试逻辑（429、5xx、超时、不可用的 200，记录次数和原因；第 1 天的单元测试，不花钱） | 0 |
 | 9 | `mini-extra swebench` 对 1 道 dev 题（`-m deepseek/deepseek-flash`，很小的 `cost_limit`） | B0 的命令、`--network none` 下能否工作、轨迹里的成本字段位置 | 少量 |
 
 步骤 1–3 通过后才有必要做 4–5；步骤 6 通过前，不要信任任何成本数字。每一步的结果和花费记进 `plan.md` 的日志，并回填本节。
@@ -194,9 +194,55 @@
 
 - **没有隐藏重试**：每种情形服务器都只收到 1 个请求；不传任何重试参数、传 `num_retries=0`、再加 `max_retries=0` 结果相同。500 之后第二次本来会成功的"先 500 再 200"，在 `num_retries=0` 下也直接失败。所以重试要完全由我们自己的 `llm/client.py` 实现。
 - **`Retry-After` 能拿到，但位置不是 `e.response.headers`**（那里是空的），而是 **`e.litellm_response_headers`**（一个包含 `retry-after` 的字典，`e.headers` 也有）。
-- **重试规则（CLAUDE.md §5.1："只对 429 和 5xx 重试"）按 `status_code` 判断**：`status_code == 429 or status_code >= 500`，覆盖 429、500、502、503、断连（映射成 500）和缺 `choices` 的 200（映射成 500）。
-- **规则没覆盖、需要你决定的两类**：`Timeout`（408，客户端超时）和 `APIError` 且 `status_code=200`（响应体畸形）。按字面执行它们都**不重试**；超时在实际中通常是暂时性的，是否也重试要你定。
+- **只按 `status_code` 判断是不够的**：`status_code == 429 or status_code >= 500` 能覆盖 429、500、502、503、断连（映射成 500）和缺 `choices` 的 200（映射成 500），但覆盖不了超时（408）和非 JSON、被截断的 200（状态码是 200）。最终的重试策略见下面的"重试策略"。
+- 原先 CLAUDE.md §5.1 的"只对 429 和 5xx 重试"没覆盖的两类：`Timeout`（408，客户端超时）和 `APIError` 且 `status_code=200`（响应体畸形）。**你已决定采用方案 B，也重试它们**，下面是问题清单和策略。
 - 局限：429、5xx 只在本机假服务器上测过，没有在真实 DeepSeek 上触发；DeepSeek 真实的上下文超限文案没测（`ContextWindowExceededError` 靠消息匹配，这里用了 OpenAI 风格的文案）；本项目的 `context_overflow` 以我们自己的 token 计数为准，不依赖它。
+
+**Timeout 与 HTTP 200 的问题清单和重试策略（2026-10-05，你的决定：方案 B）**
+
+*已核实的事实*（本机假服务器，没有在真实 DeepSeek 上触发过）：响应比 `timeout=1` 慢 → `Timeout`、`status_code=408`、服务器只收到 1 个请求；服务器断开连接 → `InternalServerError`、500；200 但不是 JSON、200 但 JSON 被截断 → `APIError`、`status_code=200`；200 但 JSON 里没有 `choices` → `APIError`、`status_code=500`。
+
+*Timeout 的问题*
+1. **按原先的字面规则不重试，一次超时就让整个任务失败。** 一个任务有几十次 LLM 调用（mini-swe-agent 冒烟是 25 次），单次的小概率会累积。纯算术示例，不是数据：每次调用 0.1% 概率超时，25 次就有约 2.5% 的任务受影响，100 次约 9.5%。这些失败是基础设施噪声，会混进 `resolve_rate`。
+2. **和断连的处理不一致**：连接被重置映射成 500 会被重试，超时同样是暂时性的网络问题却不重试。
+3. **超时时长没有依据**：只测过 1 秒的假场景，真实调用里思考和长上下文会让延迟波动。
+4. **超时后的计费和用量未知**：服务端可能仍在处理甚至计费，我们拿不到 `usage`，token 统计和预算保护都会漏算；如果重试，还可能重复计费。
+5. **重试的细节原先没定义**：次数、退避、抖动、`Retry-After`、等待时间是否计入墙钟时间和 `latency`。
+6. 是否使用流式输出还没决定，它会改变超时的语义。
+
+*HTTP 200 的问题*（状态码 200 但响应体不可用）
+1. **三种坏响应被映射成不同的异常**：非 JSON → `APIError(200)`，截断 → `APIError(200)`，缺 `choices` → `APIError(500)`。根因相同，按状态码判断只有第三种会被重试。
+2. **异常的状态码是 200，反直觉**：任何"状态码 ≥ 400 才是错误"或"200 就是成功"的写法都会误判，必须同时看异常类型。
+3. **容易和"模型格式错误"混淆**：CLAUDE.md §5.1 的 `format_errors` 指模型给出的工具调用格式不对（回给模型，连续 3 次终止）；传输层的坏 200 是模型根本没答，**不能计入 `format_errors`，也不能回给模型**。
+4. **有一类坏响应根本不抛异常**：默认思考模式下 `max_tokens` 太小会得到 200、`finish_reason='length'`、内容为空（步骤 4 复现过）；内容为空、没有工具调用、`finish_reason='stop'` 也属于这类。要靠我们自己检查。
+5. 重试本身是安全的，因为 harness 状态在调用成功前不会改变。
+6. 回放模式（`llm/replay.py`）不会录到这些错误，只能用假服务器测。
+
+*共同的缺口*：429、5xx、408 从没在真实 DeepSeek 上触发过；DeepSeek 真实的错误文案没测；失败的调用没有 `usage`，会让 token 和成本统计偏低；凭记忆（**未核实**）DeepSeek 在高负载时可能长时间保持连接而不是直接报错，如果属实，表现为长时间等待和超时，而不是坏的 200。
+
+*可选方案*
+
+| 方案 | 做法 | 代价 |
+|---|---|---|
+| A 严格 | 完全按原先的字面，超时和坏 200 都不重试，直接 `env_error` | 最简单，但基础设施噪声直接污染结果 |
+| **B（已采用）** | 重试超时和不可用的 200，与 429、5xx 共用上限，按（异常类型、状态码、响应形状）判断，记录重试原因 | 要改 CLAUDE.md §5.1 |
+| C 折中 | 只重试超时，坏 200 不重试 | 部分覆盖 |
+
+*重试策略（已写进 CLAUDE.md §5.1 和 §5.7）*
+
+| 项 | 取值 |
+|---|---|
+| 次数 | 总共最多 3 次尝试（首次加最多 2 次重试） |
+| 退避 | 指数退避，加随机抖动 |
+| 429 | 响应带 `Retry-After` 时按它等待（在 `e.litellm_response_headers["retry-after"]`） |
+| 可重试 | 429；5xx（LiteLLM 映射出的 500、502、503、断连，和缺 `choices` 的 200）；`Timeout`；不可用的 200（非 JSON、被截断） |
+| 不重试 | 4xx，含 400（包括 `ContextWindowExceededError`）、401（注意错误密钥是 `BadRequestError` 但状态码 401）、404；以及 `finish_reason=length` 且内容为空这类**不是传输故障**的失败 |
+| 判断依据 | （异常类型、状态码、响应形状），不能只看状态码，也不能只看异常类名 |
+| 记录 | 每次重试的次数和 `retry_reason`（建议取值：`rate_limit`、`server_error`、`timeout`、`bad_response`）写进 `llm_call` span；失败的尝试没有 `usage`，统计时要标注可能漏算 |
+| 用尽之后 | 以 `env_error` 终止任务 |
+| 时间 | 重试的等待时间计入墙钟时间和延迟（我取的默认做法，不是你明确说过的） |
+
+*仍然没定的*：`llm.timeout_s` 的取值（没有真实数据可依据）；是否使用流式输出；真实 DeepSeek 上的 429、5xx、超时的实际表现。第 1 天写 `llm/client.py` 时，用本机假服务器覆盖上面的每一类（包括 4xx 不重试）。
 
 *步骤 9（mini-swe-agent 冒烟，真实调用）*
 
