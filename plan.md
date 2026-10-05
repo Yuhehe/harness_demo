@@ -52,22 +52,40 @@
     - `--pids-limit 20`：起第 21 个以上进程报 `can't fork: Resource temporarily unavailable`
     - `--memory 32m --memory-swap 32m`：写入 100MB 被 OOM 杀掉，退出码 137
 - [x] 申请 API Key，确定主模型 `{{MODEL_MAIN}}` 和摘要模型 `{{MODEL_CHEAP}}`，写入 `.env`。选模型时优先考虑：价格便宜、有前缀缓存、工具调用稳定（2026-10-04）
-  - `.env` 已创建且被 `.gitignore` 忽略，未被 git 跟踪；服务商为 DeepSeek（`OPENAI_API_BASE=https://api.deepseek.com`），`MODEL_MAIN=deepseek-v4-pro`，`MODEL_CHEAP=deepseek-flash`
+  - `.env` 已创建且被 `.gitignore` 忽略，未被 git 跟踪；服务商为 DeepSeek。2026-10-05 检查：`MODEL_MAIN=deepseek/deepseek-v4-pro`、`MODEL_CHEAP=deepseek/deepseek-flash`（已带 `deepseek/` 前缀），但密钥和地址仍是 `OPENAI_API_KEY`、`OPENAI_API_BASE`
   - `MAX_TOTAL_COST_USD` 仍是 `.env.example` 里的占位值 20，待 dev_5 实测单题成本后重填
-  - **尚未验证**（还没有发起过调用）：① 模型名没有 `openai/` 前缀，LiteLLM 可能无法识别服务商，要么加前缀（`openai/deepseek-v4-pro`），要么改用 LiteLLM 的 `deepseek/` 前缀，二选一；② 这两个模型名是否在服务商那里真实存在；③ LiteLLM 是否有它们的价格数据，没有的话 `completion_cost` 会失败，`llm/cost.py` 需要自带价格表。这三项放到第 1 天写 `llm/client.py` 时用一次最小调用验证
+  - 已离线核实（2026-10-05，详见 `docs/notes.md` §5）：`deepseek/` 前缀能路由、能计价（含缓存命中价）；裸名报 `LLM Provider NOT provided`；`openai/` 前缀能路由但 `completion_cost` 抛 `ModelNotMappedError`，所以应当用 `deepseek/`
+  - [x] `.env` 的变量名已改成 `DEEPSEEK_API_KEY`、`DEEPSEEK_API_BASE=https://api.deepseek.com`（原先的 `OPENAI_*` 在 `deepseek/` 前缀下读不到，`get_llm_provider` 得到 `api_key_resolved=False`，地址落到默认的 `/beta`）。2026-10-05 核实：格式正确，LiteLLM 解析出提供商、密钥、地址，本机假服务器上请求形状和用量/成本解析都对（详见 `docs/notes.md` §5）
+  - [ ] `.env.example` 还是 `OPENAI_*` 的旧模板，与 `.env` 的键不一致，需要同步；`.env` 权限是 644，建议 `chmod 600`
+  - [ ] **仍未验证**（还没有发起过真实调用）：模型名在服务商那边是否真实存在、思考模式的默认状态、`reasoning_content` 是否需要回传、LiteLLM 内置价格表是否等于官方价格。验证计划（9 步，第 1 步起会花钱）见 `docs/notes.md` §5，最迟在写 `llm/client.py` 之前做完步骤 1–3
 - [~] 建仓库，写 `pyproject.toml`（`requires-python = ">=3.12,<3.13"`）、`.python-version`（`3.12`）、`.env.example`、`.gitignore`；用 `uv add` / `uv add --dev` 加依赖，`uv sync` 生成 `.venv` 和 `uv.lock`（**提交 `uv.lock`**）；加入 CLAUDE.md、plan.md 和 README.md
   - [x] `.python-version`（3.12）、`pyproject.toml`（`requires-python` 已锁 `>=3.12,<3.13`）、`.venv`（Python 3.12.12）、`uv.lock`（已提交）、plan.md、README.md 已就绪
-  - [ ] `pyproject.toml` 仍是初始模板：`name = "harness-demo"`（项目名是 harness-lab）、`description` 未填、`dependencies = []`，依赖（litellm、docker、pydantic 等）尚未用 `uv add` 添加
+  - [x] 依赖已用 `uv add` / `uv add --dev` 加入并提交（`e1aff8e`，121 个包）：运行时 litellm、docker、pydantic、pyyaml、fastapi、uvicorn、aiosqlite、python-dotenv、swebench；dev 组 ruff、pytest、pytest-asyncio、httpx、mini-swe-agent
+  - [x] `pyproject.toml` 加了 `[tool.pytest.ini_options]`（`testpaths=["tests"]`、`pythonpath=["eval/swebench"]`，让测试能按模块名 import `eval/swebench/` 里的脚本）（2026-10-04，未提交）
+  - [ ] `pyproject.toml` 的 `name = "harness-demo"`（项目名是 harness-lab）和 `description` 还没改，也还没有 `[build-system]` / `[project.scripts]`（第 1 天写 `cli.py` 时一起配）
   - [x] `.env.example` 已创建（2026-10-04）：OpenAI 兼容格式，含 `OPENAI_API_KEY`、`OPENAI_API_BASE`、`MODEL_MAIN`、`MODEL_CHEAP`、`MAX_TOTAL_COST_USD`（其中 `MAX_TOTAL_COST_USD=20` 只是占位值，待 dev_5 实测后重填）
-  - [x] `CLAUDE.md` 已从 `.gitignore` 移除并 `git add`（2026-10-04），**已暂存，尚未提交**
+  - [x] `CLAUDE.md` 已从 `.gitignore` 移除并提交（`e1aff8e`）
   - [x] `.gitignore` 已加入 `.env`（2026-10-04，`git check-ignore` 确认生效）
-  - [ ] `.gitignore` 仍缺 `results/runs/`（CLAUDE.md §4 要求该目录 gitignore，`results/summary/` 才提交）
-  - [ ] 目前仍只有 1 个提交（`6d12a11 0. project init`）；`.env.example`、`.gitignore`、`CLAUDE.md`、`docs/learning/docker_related.md`、`plan.md` 都在暂存区，**还没提交**
-- [ ] `eval/swebench/select_subset.py`：从 SWE-bench Verified 里固定随机种子选题，**集中在 3–5 个仓库**以减少镜像数量。输出 `verified_50.txt` 和 `dev_5.txt`，两者不重叠
-- [ ] `eval/swebench/pull_images.py`：**当晚就在后台开始拉取 55 个镜像**
-- [ ] 用 uv 安装 mini-SWE-agent（`uv tool install` 或放进 dev 依赖组，择一并记到 `docs/notes.md`，不用 pip），用 `--help` 确认它批量跑 SWE-bench 的命令，写进 `eval/baselines/mini_swe_agent.md`
+  - [x] `.gitignore` 已加入 `results/runs/`、`.mswea/`（mini-swe-agent 的全局配置目录），并补了文件末尾换行（2026-10-04，未提交）
+  - [ ] 本次新增的改动**还没提交**：`.gitignore`、`pyproject.toml`、`docs/notes.md`、`docs/learning/docker_related.md`（§2.7）、`configs/subsets/`、`eval/`、`tests/`
+- [x] `eval/swebench/select_subset.py`：从 SWE-bench Verified 里固定随机种子选题，**集中在 3–5 个仓库**以减少镜像数量。输出 `verified_50.txt` 和 `dev_5.txt`，两者不重叠（2026-10-04；**配额待你确认，子集文件未冻结**）
+  - 种子 42；数据集固定在 revision `78f471bf655a3137b2e8a75af1501690ec009ec3`；输出同时写 `configs/subsets/subsets_meta.json`（种子、revision、配额、实际计数、难度分布，无时间戳）
+  - 配额 django 20 / sympy 15 / sphinx 10 / scikit-learn 10（共 55，只按各仓库题数定，不涉及其他理由）；`verified_50` 实际是 django 18 / sympy 14 / sklearn 9 / sphinx 9，`dev_5` 是 5 道 `<15 min fix`（django 2、sklearn 1、sphinx 1、sympy 1），两者不重叠
+  - 已验证：用固定 revision 重跑，三个文件**字节相同**；再次运行默认拒绝覆盖（`--force` 才覆盖）；12 个单元测试（假数据集，不联网）
+  - [ ] 你确认配额后再提交并视为冻结（CLAUDE.md §2.4）；想改配额用 `--quota repo=N --force`
+- [~] `eval/swebench/pull_images.py`：拉取 55 个镜像（**时机已放宽**，原计划是"当晚就在后台开始拉取"；2026-10-05 与你商定：配额确认并冻结子集后，在第 1 天写代码的空闲时间后台拉，**最晚第 2 天白天开始**，第 2 天晚上开跑主实验前必须拉完）
+  - [x] 脚本完成并测试（2026-10-04）：镜像名读数据集 `image` 字段（只断言命名规则，不手拼）；并发拉取、失败重试、429 限速时停止；断点续跑（状态在 `results/runs/pull_images/status.json`）；可用空间低于 `--min-free-gb`（默认 20）时停下；`--verify` 在断网的一次性容器里校验 `/testbed`；`--dry-run`；超过 10 个镜像要 `--yes`；12 个单元测试（假 docker 客户端）
+  - [x] 5 个 dev 镜像已拉取并通过 `--verify`（`base_commit` 一致、工作区干净）。镜像里**没有 `rg`**，第 1 天的 search 工具必须回退到 grep；镜像的 `HEAD` 是 base_commit 之上一个空提交，所以校验比对的是 `HEAD^`（详见 `docs/notes.md` §2）
+  - [x] 磁盘实测见 `docs/notes.md` §7：5 个镜像共占 15.4GB，每个新增 1.8–5.4GB；镜像是"共享基础层 + 每个 (repo, version) 一个环境层 + 每个镜像一个实例层"，55 题共 22 个 (repo, version)
+  - [ ] **剩余 50 个镜像还没拉，不急着拉**：拉取不依赖任何功能；第 1 天只用 `dev_5`（已就绪），第 2 天晚上才用 `verified_50`；前置条件是先确认配额、冻结子集（否则改配额会让已拉的镜像白占磁盘）。粗略估计约 45–60GB（假设见 `docs/notes.md` §7，样本只有 5 个），当前可用约 143.6GB，放得下，**不需要扩大虚拟磁盘**；Docker Hub 匿名额度每小时 100 次，剩余 92，够用
+  - [ ] 建议的命令（后台）：`mkdir -p results/runs/pull_images && nohup uv run python eval/swebench/pull_images.py --yes --verify --workers 2 --min-free-gb 35 > results/runs/pull_images/pull.log 2>&1 &`（`--min-free-gb 35` 是因为底线只在每次开始拉取前检查，并发在途的镜像可能再多占十几 GB）；之后用 `--dry-run` 和 `results/runs/pull_images/status.json` 看进度
+- [x] 用 uv 安装 mini-SWE-agent（`uv tool install` 或放进 dev 依赖组，择一并记到 `docs/notes.md`，不用 pip），用 `--help` 确认它批量跑 SWE-bench 的命令，写进 `eval/baselines/mini_swe_agent.md`（2026-10-04）
+  - 选择放进 dev 依赖组（`uv add --dev mini-swe-agent`，2.4.6，锁进 `uv.lock`，不与其他依赖冲突），理由记在 `docs/notes.md` §8；`tests/unit/test_no_agent_frameworks.py` 保证 `src/harness/` 不 import 它
+  - `eval/baselines/mini_swe_agent.md` 含命令模板、参数说明、与 M0 的差异清单（网络默认联网、无资源上限、命令超时 60 秒等）、输出结构、判分命令和 `--help` 原文；`-c environment.run_args=[...]` 能解析成列表已离线验证
+  - [ ] 冒烟测试（1 题，会产生少量 LLM 花费）**等你确认后再跑**；文档里的 `{{STEP_LIMIT}}`、`{{COST_LIMIT}}`、容器资源上限要等 `configs/default.yaml` 创建后才能填
 
 **验收**：`uv sync` 成功且 `uv.lock` 已提交；`.env` 可用；子集文件已提交；镜像开始拉取。
+（2026-10-05 调整：镜像拉取不再是第 0 天的验收项，改为最晚第 2 天白天开始；`dev_5` 的 5 个镜像已就绪。）
 
 ---
 
@@ -208,7 +226,7 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 **当天花费**：暂记 $0（harness 还没写出来，没有调用记录）
 
 **补充（同日，后续）**
-- 申请了 DeepSeek 的 API Key，创建 `.env`（已被 `.gitignore` 忽略），`MODEL_MAIN=deepseek-v4-pro`、`MODEL_CHEAP=deepseek-flash`；"申请 API Key"一项已勾选，模型名前缀、真实存在性和价格数据三项尚未验证，见该项下的说明
+- 申请了 DeepSeek 的 API Key，创建 `.env`（已被 `.gitignore` 忽略）；"申请 API Key"一项已勾选，模型名的真实存在性等仍未验证，见该项下的说明
 - `.gitignore` 加入 `.env`；`CLAUDE.md` 已 `git add`；上述改动都在暂存区，尚未提交
 - 磁盘和内存两项按用户决定暂不考虑，"准备机器"已勾选完成
 - 已拉取 `alpine` 镜像（13MB），沙箱限制（断网、内存、CPU、pids）实测通过，结果见上方勾选项
@@ -219,11 +237,60 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - `docker buildx` 报 `unknown command`：`docker.io` 不带 buildx，它是单独的包，装 `docker-buildx` 解决
 - 加入 `docker` 组后当前 shell 报 `permission denied`：用户组要重新登录才生效
 - 磁盘（149GB 可用）和内存（12GB）都略低于第 0 天的要求，见上方勾选项
-- 仓库底座还有两处与 plan 不一致：`pyproject.toml` 项目名和依赖未填（依赖还没 `uv add`）、`.gitignore` 缺 `results/runs/`
-- `.env` 里的模型名没有 `openai/` 前缀，可能无法被 LiteLLM 识别，且价格数据可能缺失，见"申请 API Key"一项
+- 仓库底座还有两处与 plan 不一致：`pyproject.toml` 项目名和依赖未填（依赖还没 `uv add`）、`.gitignore` 缺 `results/runs/`（后续已解决，见下方"实现"一节）
+- `.env` 里的模型名没有提供商前缀，LiteLLM 无法识别（后续已改成 `deepseek/` 前缀，变量名问题见 2026-10-05 的日志）
+
+**实现（同日，晚）**
+- 依赖已加入并提交（`e1aff8e`）；`pyproject.toml` 加了 pytest 配置；`.gitignore` 加了 `results/runs/`、`.mswea/`
+- 新增 `docs/notes.md`：swebench 5.0.2、mini-swe-agent 2.4.6 等外部接口的核实记录（带源码行号），回忆来的内容单独标为"未核实"
+- 新增 `eval/swebench/select_subset.py` 并生成 `configs/subsets/{verified_50,dev_5}.txt` 和 `subsets_meta.json`（固定 revision，重跑字节相同）
+- 新增 `eval/swebench/pull_images.py`；拉取并校验了 5 个 dev 镜像，实测磁盘占用（15.4GB）
+- 新增 `eval/baselines/mini_swe_agent.md`；安装方式选 dev 依赖组
+- 新增测试：`test_select_subset.py`（12 个）、`test_pull_images.py`（12 个）、`test_no_agent_frameworks.py`（1 个），`ruff check`、`ruff format --check` 和 `pytest` 全部通过
+- `CLAUDE.md` 移出 `.gitignore` 后，ruff 0.16 会格式化 markdown 里的 Python 代码块，`ruff format --check .` 因此报 `CLAUDE.md` 要重排；已在 `pyproject.toml` 的 `[tool.ruff]` 里 `extend-exclude = ["CLAUDE.md"]`，没有改动规则文件本身
+- 花费：仍是 $0（没有调用 LLM；只访问了 HF、Docker Hub 和 PyPI）
+
+**实现中的发现**
+- 镜像里 `HEAD` 是 base_commit 之上的一个空提交，最初按 `HEAD == base_commit` 校验会误判，已改为比对 `HEAD^`
+- 镜像里没有 `rg`（有 `grep`），第 1 天的 search 工具必须回退
+- 磁盘占用远大于压缩体积（django-11066 一例约 3.6 倍），但镜像按层共享：55 题只有 22 个 (repo, version) 环境层，剩余 50 个镜像粗略估计 45–60GB，当前 143.6GB 放得下（最初我按 5 个样本的平均值外推出"约 154GB 放不下"，那个估算有误，已更正）
+- mini-swe-agent 默认联网、无资源上限，与 M0 的沙箱不一致，已在 `mini_swe_agent.md` 列出对齐方案
+- `swebench eval verified` 不支持固定数据集 revision，判分前要核对最新 sha 与 `subsets_meta.json` 一致
 
 **明天先做（按顺序）**
-1. `.gitignore` 补 `results/runs/`，把暂存区的改动提交（提交信息按 CLAUDE.md §8 的格式）
-2. 修 `pyproject.toml`（项目名、描述），用 `uv add` / `uv add --dev` 加依赖，`uv sync`，提交 `uv.lock`
-3. 核实 SWE-bench 官方镜像命名规则（查 `swebench` 源码，记入 `docs/notes.md`），再写 `select_subset.py` 和 `pull_images.py`，并在拉取前复查磁盘
-4. 用一次最小的 LiteLLM 调用验证 `.env` 的模型名、前缀和价格数据（会产生极小花费，记入日志）
+1. 你确认子集配额（django 20 / sympy 15 / sphinx 10 / sklearn 10）。确认后提交并冻结子集，再用上面的命令后台拉取剩余 50 个镜像
+2. 用一次最小的 LiteLLM 调用验证 `.env` 的模型名、前缀和价格数据（建议改用 `deepseek/` 前缀；会产生极小花费，记入日志）
+3. 你确认后跑 mini-swe-agent 的 1 题冒烟测试
+4. 修 `pyproject.toml` 的项目名和描述，提交本次所有改动（提交信息按 CLAUDE.md §8 的格式）
+5. 开始第 1 天：`llm/client.py`、`sandbox/docker_sandbox.py` 等
+
+### 2026-10-05（第 0 天收尾：与 plan 的差距检查）
+
+**完成了什么**
+- `docs/notes.md` §5 补上 LiteLLM 与 DeepSeek 的离线核实结果：`deepseek/` 前缀能路由也能计价，`openai/` 前缀计价失败，裸名无法识别；DeepSeek 默认 `api_base` 是 `/beta`；思考模式需要回传 `reasoning_content`
+- 按商定放宽了镜像拉取的时机（见第 0 天的拉取一项）
+- 检查了 `.env`（没有输出密钥的值）：先发现变量名还是 `OPENAI_*`，LiteLLM 读不到；之后你改成了 `DEEPSEEK_*`，重新核实通过（见"申请 API Key"一项）
+- `docs/learning/python_feature.md` 是你新增的笔记，未跟踪，不在 plan 里；它里面的 Python 代码块让 `ruff format --check .` 失败（ruff 0.16 会格式化 markdown 里的代码块），已把 `pyproject.toml` 的 ruff 排除从只排除 `CLAUDE.md` 改成排除所有 `*.md`，没有改你的笔记
+
+**当天花费**：$0
+
+**与 plan 的差距**
+
+| 第 0 天验收项 | 状态 |
+|---|---|
+| `uv sync` 成功且 `uv.lock` 已提交 | 达成（`uv sync --frozen` 通过，`uv.lock` 在 `e1aff8e` 里） |
+| `.env` 可用 | **部分达成**：格式和 LiteLLM 解析已核实（`DEEPSEEK_*` 已改好）；没发起过真实调用；`MAX_TOTAL_COST_USD` 还是占位值 20；`.env.example` 未同步 |
+| 子集文件已提交 | **未达成**：文件已生成但未跟踪，配额还没确认，所以不算冻结 |
+| 镜像开始拉取 | 已调整：5/55（dev 的 5 个）已就绪，其余按新时机拉 |
+
+- 第 0 天 6 个顶层项：4 个完成、2 个进行中（建仓库：`pyproject.toml` 的项目名和描述没改；拉取：50 个未拉）。另外 mini-swe-agent 的冒烟测试没跑
+- 第 1–5 天共 43 个顶层项：**0 个开始**。`src/` 目录不存在；`configs/` 只有 `subsets/`（没有 `default.yaml`、`policy.yaml`、`ablations/`）；`eval/swebench/` 只有 2 个文件（缺 `run_agent.py`、`score.py`）；`eval/report/`、`eval/security/`、`docker/`、`.github/` 都不存在
+- 自 `e1aff8e` 之后的改动都**没有提交**：`.gitignore`、`pyproject.toml`、`plan.md`、`docs/notes.md`、`docs/learning/`、`configs/`、`eval/`、`tests/`
+- 总花费 $0，距离预算上限还很远
+
+**明天先做（按顺序）**
+1. 你确认子集配额（django 20 / sympy 15 / sphinx 10 / sklearn 10）；确认后提交并冻结子集
+2. 同步 `.env.example`，按 `docs/notes.md` §5 的验证计划做步骤 1–3 的真实调用（花费不到 0.001 美元量级，记入日志）
+3. 修 `pyproject.toml` 的项目名和描述，提交所有改动（提交信息按 CLAUDE.md §8 的格式）
+4. 开始第 1 天：`llm/client.py`、`llm/replay.py`、`sandbox/docker_sandbox.py`；写代码的间隙后台拉取剩余 50 个镜像
+5. mini-swe-agent 的冒烟测试等 `configs/default.yaml` 确定、`.env` 可用后再跑
