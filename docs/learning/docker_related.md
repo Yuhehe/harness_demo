@@ -268,6 +268,81 @@ compose 插件 ──┘
 
 **服务镜像里同理**：`docker/Dockerfile` 里 `uv sync` 会装 SDK，但镜像里**不需要装 Docker Engine**，服务容器通过挂载宿主机的 `docker.sock` 去连宿主机的 `dockerd`（见 §2.5）。
 
+### 2.8 拉取的镜像存放在哪里：镜像名不是文件路径
+
+补充记录（2026-10-05）。起因：`pull_images.py` 的状态文件 `results/runs/pull_images/status.json` 里记着 `swebench/sweb.eval.x86_64.django_1776_django-11066:latest`，却在磁盘上找不到对应的目录。
+
+#### 镜像名不是路径
+
+`status.json` 里没有任何磁盘路径，`image` 字段是 Docker 镜像的**名字**（镜像引用）：
+
+| 部分 | 含义 |
+|---|---|
+| `swebench` | Docker Hub 上的组织名（命名空间） |
+| `sweb.eval.x86_64.django_1776_django-11066` | 仓库名（实例号里的 `__` 被换成 `_1776_`，Docker Hub 不允许双下划线） |
+| `latest` | 标签（可变的指针，指向某个镜像哈希） |
+
+Docker 不会按这个名字在磁盘上建目录，名字只是向 Docker 要镜像时用的引用。`status.json` 里的其他字段是 `state`、`attempts`、`seconds`、`base_commit_ok`、`clean`、`has_rg`、`free_gb`。它位于 `results/runs/` 下，被 `.gitignore` 忽略，只在本机，不会出现在 git 仓库里。
+
+#### 实际存放在哪里
+
+| 项 | 本机的值 | 依据 |
+|---|---|---|
+| Docker 数据根目录 | `/var/lib/docker` | `docker info` 的 `Docker Root Dir` |
+| 存储驱动 | `overlayfs`，类型 `io.containerd.snapshotter.v1`，即 **containerd 镜像存储** | `docker info` |
+| 使用的 containerd | 系统的 containerd：`dockerd -H fd:// --containerd=/run/containerd/containerd.sock` | 进程列表 |
+| 所在磁盘 | `/dev/sdd`，即 WSL 的 ext4 虚拟磁盘，物理文件是 `D:\WSL\Ubuntu_2204.1.7.0_x64\ext4.vhdx` | `df`、注册表里记录的发行版位置 |
+
+- 在 containerd 镜像存储下，`docker image inspect` 的输出里**没有 `GraphDriver` 字段**（用 `{{.GraphDriver}}` 取值会报 `map has no entry for key "GraphDriver"`），这是它的特征。
+- 镜像的层内容和解包后的快照，**通常**在 containerd 自己的数据目录 `/var/lib/containerd`，而 `/var/lib/docker` 放 Docker 的元数据、容器和卷。**这一点我没能确认**，因为这两个目录当前用户都读不了（见下），所以这里是一般情况的说明，不是对本机的核实。
+- 两个目录都在同一块磁盘上（`df` 显示相同的设备），之前量到的"拉 5 个镜像新增约 15.4GB"就发生在这里。
+
+#### 为什么在磁盘上找不到
+
+1. **权限**：`/var/lib/containerd` 是 `drwx------ root`，`/var/lib/docker` 是 `drwx--x--- root`，普通用户 `ls` 会报 `Permission denied`。
+2. **内容不是按镜像名存的**：就算用 sudo 进去，里面是按 sha256 哈希命名的数据块和编号的快照目录，看不出哪个对应哪道题。
+3. **Windows 侧也看不到单个文件**：它们都装在 `ext4.vhdx` 这一个文件里。
+
+所以确认镜像在不在，应该用 Docker 命令，或者看 `status.json` 里的 `state`，而不是去磁盘上找。不要手动修改这两个目录里的内容，删除镜像用 `docker rmi`。
+
+#### 大小有两种口径
+
+以 `django-11066` 为例：
+
+| 来源 | 值 | 含义 |
+|---|---|---|
+| `docker image inspect` 的 `.Size` | 1152237720（约 1.15GB） | 压缩后的内容大小 |
+| `docker images` 的 SIZE、`docker system df` | 4.18GB | 实际磁盘占用（压缩内容加解包后的快照） |
+| 拉取前后的 `df` 差值 | 约 4.18GB | 真实占用 |
+
+目前本机的 5 个 dev 镜像：`scikit-learn-13779` 5.43GB、`sympy-16886` 3.97GB、`sphinx-7889` 4.06GB、`django-15930` 4.40GB、`django-11066` 4.18GB。它们共享基础层，所以合计只多占 15.4GB，不是 22GB（详见 `docs/notes.md` §7）。
+
+#### 怎么查看镜像
+
+列出镜像：
+
+```bash
+docker images
+```
+
+看某个镜像的详情（ID、标签、层数）：
+
+```bash
+docker image inspect swebench/sweb.eval.x86_64.django_1776_django-11066:latest
+```
+
+看镜像里的文件（起一个临时的断网容器，`/testbed` 里是 Django 源码）：
+
+```bash
+docker run --rm --network none swebench/sweb.eval.x86_64.django_1776_django-11066:latest ls /testbed
+```
+
+看各部分占的磁盘：
+
+```bash
+docker system df -v
+```
+
 ---
 
 ## 3. WSL2 环境安装与配置
