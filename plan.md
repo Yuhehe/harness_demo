@@ -59,7 +59,9 @@
   - [ ] `.env.example` 还是 `OPENAI_*` 的旧模板，与 `.env` 的键不一致，需要同步；`.env` 权限是 644，建议 `chmod 600`
   - [x] 验证计划步骤 1–3 已完成（2026-10-05，真实调用）：密钥有效，`deepseek/deepseek-flash` 和 `deepseek/deepseek-v4-pro` 都存在，响应能解析，两个模型都支持函数调用；**不传 `thinking` 时服务端默认开启思考模式**（响应带 `reasoning_content`）；`usage` 里有 `prompt_cache_hit_tokens`。4 次调用合计 $0.001159（LiteLLM 价格表估算），详见 `docs/notes.md` §5
   - [x] 验证计划步骤 4 已完成（2026-10-05）：`reasoning_content` 回传**没有被强制**（去掉后单轮、3 轮工具链都正常），且回传内容不计 prompt token；`thinking: disabled` 可用；默认思考模式下 `max_tokens` 太小会得到空内容和 `finish_reason=length`；两种模式的 prompt 模板不同，一次运行内不要切换。30 次调用 $0.005940（LiteLLM 价格表估算），详见 `docs/notes.md` §5
-  - [ ] **仍未验证**：缓存命中和最短前缀（步骤 5；已观察到命中以 128 token 为块）；**LiteLLM 内置价格表是否等于官方价格（步骤 6，对账前不要信任任何成本数字）**；错误密钥的异常类型（步骤 7）
+  - [x] 验证计划步骤 7–9 已完成（2026-10-05，详见 `docs/notes.md` §5 末尾）：① 错误密钥抛 `BadRequestError` 但 `status_code=401`（不是 `AuthenticationError`），所以重试要**按 `status_code` 分类**，不能按类名；不存在的模型名返回支持的名字 `deepseek-flash`、`deepseek-v4-pro`；② 本机假服务器：429/500/502/503/断连/缺 `choices` 都映射到 429 或 5xx 的状态码，`Timeout` 是 408，畸形的 200 是 `APIError(200)`，**LiteLLM 没有隐藏重试**，`Retry-After` 在 `e.litellm_response_headers` 里；③ mini-swe-agent 冒烟成功（见下面 mini-swe-agent 一项）
+  - [ ] 步骤 5（缓存命中和最短前缀）、步骤 6（对账）**暂不做**（你的决定：有成熟文档可参考）。**风险**：LiteLLM 的 `completion_cost` 按**计算时的当前时间**使用错峰价（标准价的 50%），不对账的情况下尤其要靠固定费率的自有价格表，详见下面的待决策项
+  - [ ] **待决策**：① 重试规则没覆盖的 `Timeout`（408）和畸形的 200（`APIError`，状态码 200）是否也重试，按字面是都不重试；② `llm/cost.py` 用哪个固定费率（建议标准价，偏保守，写进配置并记录在 `run_start` 里），B0 的成本也要从轨迹的 `usage` 用同一张表重算
   - [ ] **待决策**：`thinking` 默认开还是关。每次调用都显式传，不依赖服务端默认；等第 1 天循环能跑后在 `dev_5` 上各跑一次对比再定，所有配置统一
 - [~] 建仓库，写 `pyproject.toml`（`requires-python = ">=3.12,<3.13"`）、`.python-version`（`3.12`）、`.env.example`、`.gitignore`；用 `uv add` / `uv add --dev` 加依赖，`uv sync` 生成 `.venv` 和 `uv.lock`（**提交 `uv.lock`**）；加入 CLAUDE.md、plan.md 和 README.md
   - [x] `.python-version`（3.12）、`pyproject.toml`（`requires-python` 已锁 `>=3.12,<3.13`）、`.venv`（Python 3.12.12）、`uv.lock`（已提交）、plan.md、README.md 已就绪
@@ -85,7 +87,8 @@
 - [x] 用 uv 安装 mini-SWE-agent（`uv tool install` 或放进 dev 依赖组，择一并记到 `docs/notes.md`，不用 pip），用 `--help` 确认它批量跑 SWE-bench 的命令，写进 `eval/baselines/mini_swe_agent.md`（2026-10-04）
   - 选择放进 dev 依赖组（`uv add --dev mini-swe-agent`，2.4.6，锁进 `uv.lock`，不与其他依赖冲突），理由记在 `docs/notes.md` §8；`tests/unit/test_no_agent_frameworks.py` 保证 `src/harness/` 不 import 它
   - `eval/baselines/mini_swe_agent.md` 含命令模板、参数说明、与 M0 的差异清单（网络默认联网、无资源上限、命令超时 60 秒等）、输出结构、判分命令和 `--help` 原文；`-c environment.run_args=[...]` 能解析成列表已离线验证
-  - [ ] 冒烟测试（1 题，会产生少量 LLM 花费）**等你确认后再跑**；文档里的 `{{STEP_LIMIT}}`、`{{COST_LIMIT}}`、容器资源上限要等 `configs/default.yaml` 创建后才能填
+  - [x] 冒烟测试已完成（2026-10-05，`django__django-11066`，`deepseek/deepseek-flash`，`--network none`）：退出 `Submitted`，99 秒，25 次调用，生成 767 个字符的补丁；`swebench eval` 判分命令也验证通过（34 秒，`resolved: 1`；dev 题的冒烟，不是实验结果）。LiteLLM 记录的成本 $0.008483 是错峰价（标准价是 $0.016967），详见 `mini_swe_agent.md` §7
+  - [ ] 文档里的 `{{STEP_LIMIT}}`、`{{COST_LIMIT}}`、容器资源上限要等 `configs/default.yaml` 创建后才能填；`-c 'model.model_kwargs.thinking={"type":"disabled"}'` 在 mini-swe-agent 里是否生效还没测
 
 **验收**：`uv sync` 成功且 `uv.lock` 已提交；`.env` 可用；子集文件已提交；镜像开始拉取。
 （2026-10-05 调整：镜像拉取不再是第 0 天的验收项，改为最晚第 2 天白天开始；`dev_5` 的 5 个镜像已就绪。）
@@ -275,7 +278,7 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - 检查了 `.env`（没有输出密钥的值）：先发现变量名还是 `OPENAI_*`，LiteLLM 读不到；之后你改成了 `DEEPSEEK_*`，重新核实通过（见"申请 API Key"一项）
 - `docs/learning/python_feature.md` 是你新增的笔记，未跟踪，不在 plan 里；它里面的 Python 代码块让 `ruff format --check .` 失败（ruff 0.16 会格式化 markdown 里的代码块），已把 `pyproject.toml` 的 ruff 排除从只排除 `CLAUDE.md` 改成排除所有 `*.md`，没有改你的笔记
 
-**当天花费**：$0.007099（LiteLLM 价格表估算，34 次真实的 DeepSeek 调用：步骤 1–3 共 4 次 $0.001159，步骤 4 共 30 次 $0.005940；还没有和 DeepSeek 控制台对账）
+**当天花费**：$0.015582（LiteLLM 价格表估算，59 次成功的 DeepSeek 调用：步骤 1–3 共 4 次 $0.001159，步骤 4 共 30 次 $0.005940，两者是高峰时段的标准价；mini-swe-agent 冒烟 25 次 $0.008483，是错峰价（标准价是 $0.016967）；另有 2 次被拒绝的调用（错误密钥、不存在的模型名）不计费。**混合了两种费率，不能直接相加比较**；没有和 DeepSeek 控制台对账）
 
 **LiteLLM + DeepSeek 验证（步骤 1–3，同日稍后）**
 - 全部通过，结果表见 `docs/notes.md` §5：密钥有效，模型名存在，不走 `/beta`，函数调用能解析（`arguments` 是合法 JSON）
@@ -289,6 +292,13 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - 两种模式的 `prompt_tokens` 不同（flash 308 / 284，v4-pro 371 / 293），推断缓存不能跨模式共享，一次运行内不要切换；`cached_tokens` 都是 128 的倍数
 - 对 `llm/client.py` 的影响：每次调用显式传 `thinking`（配置项）；保留 `reasoning_content` 但压缩时可以丢；`length` 且内容为空要识别成失败；`thinking` 默认开还是关等 dev_5 上的对比再定
 
+**LiteLLM + DeepSeek 验证（步骤 7–9，同日稍后）**
+- 步骤 7：错误密钥 → `BadRequestError`（`status_code=401`）；不存在的模型名 → `BadRequestError`（400），消息列出支持的名字
+- 步骤 8（本机假服务器）：LiteLLM 没有隐藏重试（每种情形服务器只收到 1 个请求）；429/500/502/503/断连/缺 `choices` 都映射到 429 或 5xx 的状态码；`Timeout` 是 408；畸形的 200 是 `APIError(200)`；`Retry-After` 在 `e.litellm_response_headers`
+- 步骤 9：mini-swe-agent 对 `django__django-11066` 冒烟成功，`--network none` 下正常工作，`swebench eval` 判分命令验证通过；轨迹里的成本和 `usage` 字段位置已核实；容器清理是异步的，没有残留
+- **意外发现**：LiteLLM 的 `completion_cost` 会按**当前 UTC 时间**使用错峰价（标准价的 50%，工作日 UTC 10:00–24:00 等时段和整个周末）；冒烟的成本因此恰好是按标准价手算的一半，且同一条记录在不同时间重算会得到不同金额。这会让不同时段跑的配置之间的 `cost_per_task` 偏差最多 2 倍，要在 `llm/cost.py` 里用固定费率的自有价格表解决
+- 步骤 5、6 按你的决定暂不做
+
 **与 plan 的差距**
 
 | 第 0 天验收项 | 状态 |
@@ -298,14 +308,14 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 | 子集文件已提交 | **未达成**：文件已生成但未跟踪，配额还没确认，所以不算冻结 |
 | 镜像开始拉取 | 已调整：5/55（dev 的 5 个）已就绪，其余按新时机拉 |
 
-- 第 0 天 6 个顶层项：4 个完成、2 个进行中（建仓库：`pyproject.toml` 的项目名和描述没改；拉取：50 个未拉）。另外 mini-swe-agent 的冒烟测试没跑
+- 第 0 天 6 个顶层项：4 个完成、2 个进行中（建仓库：`pyproject.toml` 的项目名和描述没改；拉取：50 个未拉）。mini-swe-agent 的冒烟测试已跑通
 - 第 1–5 天共 43 个顶层项：**0 个开始**。`src/` 目录不存在；`configs/` 只有 `subsets/`（没有 `default.yaml`、`policy.yaml`、`ablations/`）；`eval/swebench/` 只有 2 个文件（缺 `run_agent.py`、`score.py`）；`eval/report/`、`eval/security/`、`docker/`、`.github/` 都不存在
 - 自 `e1aff8e` 之后的改动都**没有提交**：`.gitignore`、`pyproject.toml`、`plan.md`、`docs/notes.md`、`docs/learning/`、`configs/`、`eval/`、`tests/`
 - 总花费 $0，距离预算上限还很远
 
 **明天先做（按顺序）**
 1. 你确认子集配额（django 20 / sympy 15 / sphinx 10 / sklearn 10）；确认后提交并冻结子集
-2. 同步 `.env.example`；按 `docs/notes.md` §5 继续验证计划：步骤 5（缓存命中和最短前缀）、6（到 DeepSeek 控制台对账）、7（错误密钥）
+2. 同步 `.env.example`；验证计划的步骤 5、6 暂不做；先决定两件事：`llm/cost.py` 的固定费率，以及 `Timeout`/畸形 200 是否重试
 3. 修 `pyproject.toml` 的项目名和描述，提交所有改动（提交信息按 CLAUDE.md §8 的格式）
 4. 开始第 1 天：`llm/client.py`、`llm/replay.py`、`sandbox/docker_sandbox.py`；写代码的间隙后台拉取剩余 50 个镜像
-5. mini-swe-agent 的冒烟测试等 `configs/default.yaml` 确定、`.env` 可用后再跑
+5. 等 `configs/default.yaml` 确定后，回填 `mini_swe_agent.md` 里的 `{{STEP_LIMIT}}`、`{{COST_LIMIT}}` 和容器资源上限
