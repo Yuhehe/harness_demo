@@ -75,16 +75,16 @@
   - [x] `.gitignore` 已加入 `.env`（2026-10-04，`git check-ignore` 确认生效）
   - [x] `.gitignore` 已加入 `results/runs/`、`.mswea/`（mini-swe-agent 的全局配置目录），并补了文件末尾换行（2026-10-04，未提交）
   - [ ] 本次新增的改动**还没提交**：`.gitignore`、`pyproject.toml`、`docs/notes.md`、`docs/learning/docker_related.md`（§2.7）、`configs/subsets/`、`eval/`、`tests/`
-- [x] `eval/swebench/select_subset.py`：从 SWE-bench Verified 里固定随机种子选题，**集中在 3–5 个仓库**以减少镜像数量。输出 `verified_50.txt` 和 `dev_5.txt`，两者不重叠（2026-10-04；**配额待你确认，子集文件未冻结**）
+- [x] `eval/swebench/select_subset.py`：从 SWE-bench Verified 里固定随机种子选题，**集中在 3–5 个仓库**以减少镜像数量。输出 `verified_50.txt` 和 `dev_5.txt`，两者不重叠（2026-10-04；**配额已于 2026-10-05 确认，保持当前值**；真正的冻结标签 `v0.1-frozen` 在第 2 天主实验前打）
   - 种子 42；数据集固定在 revision `78f471bf655a3137b2e8a75af1501690ec009ec3`；输出同时写 `configs/subsets/subsets_meta.json`（种子、revision、配额、实际计数、难度分布，无时间戳）
   - 配额 django 20 / sympy 15 / sphinx 10 / scikit-learn 10（共 55，只按各仓库题数定，不涉及其他理由）；`verified_50` 实际是 django 18 / sympy 14 / sklearn 9 / sphinx 9，`dev_5` 是 5 道 `<15 min fix`（django 2、sklearn 1、sphinx 1、sympy 1），两者不重叠
   - 已验证：用固定 revision 重跑，三个文件**字节相同**；再次运行默认拒绝覆盖（`--force` 才覆盖）；12 个单元测试（假数据集，不联网）
-  - [ ] 你确认配额后再提交并视为冻结（CLAUDE.md §2.4）；想改配额用 `--quota repo=N --force`
-- [~] `eval/swebench/pull_images.py`：拉取 55 个镜像（**时机已放宽**，原计划是"当晚就在后台开始拉取"；2026-10-05 与你商定：配额确认并冻结子集后，在第 1 天写代码的空闲时间后台拉，**最晚第 2 天白天开始**，第 2 天晚上开跑主实验前必须拉完）
+  - [x] 配额已确认（2026-10-05，你的决定：保持 django 20 / sympy 15 / sphinx 10 / scikit-learn 10）；子集文件已提交（`04f6a4a`）。冻结标签在第 2 天主实验前打（CLAUDE.md §2.4）；之后如要改配额，用 `--quota repo=N --force` 重新生成，已跑的配置要全部重跑
+- [~] `eval/swebench/pull_images.py`：拉取 55 个镜像（**时机已调整两次**，原计划是"当晚就在后台开始拉取"；2026-10-05 你决定：**配额已确认，但不现在拉，等主 harness 实现后再动手**；仍须在第 2 天晚上开跑主实验前拉完，所以最晚第 2 天白天开始）
   - [x] 脚本完成并测试（2026-10-04）：镜像名读数据集 `image` 字段（只断言命名规则，不手拼）；并发拉取、失败重试、429 限速时停止；断点续跑（状态在 `results/runs/pull_images/status.json`）；可用空间低于 `--min-free-gb`（默认 20）时停下；`--verify` 在断网的一次性容器里校验 `/testbed`；`--dry-run`；超过 10 个镜像要 `--yes`；12 个单元测试（假 docker 客户端）
   - [x] 5 个 dev 镜像已拉取并通过 `--verify`（`base_commit` 一致、工作区干净）。镜像里**没有 `rg`**，第 1 天的 search 工具必须回退到 grep；镜像的 `HEAD` 是 base_commit 之上一个空提交，所以校验比对的是 `HEAD^`（详见 `docs/notes.md` §2）
   - [x] 磁盘实测见 `docs/notes.md` §7：5 个镜像共占 15.4GB，每个新增 1.8–5.4GB；镜像是"共享基础层 + 每个 (repo, version) 一个环境层 + 每个镜像一个实例层"，55 题共 22 个 (repo, version)
-  - [ ] **剩余 50 个镜像还没拉，不急着拉**：拉取不依赖任何功能；第 1 天只用 `dev_5`（已就绪），第 2 天晚上才用 `verified_50`；前置条件是先确认配额、冻结子集（否则改配额会让已拉的镜像白占磁盘）。粗略估计约 45–60GB（假设见 `docs/notes.md` §7，样本只有 5 个），当前可用约 143.6GB，放得下，**不需要扩大虚拟磁盘**；Docker Hub 匿名额度每小时 100 次，剩余 92，够用
+  - [ ] **剩余 50 个镜像还没拉，等主 harness 实现后再拉**（你的决定，2026-10-05）：拉取不依赖任何功能；第 1 天只用 `dev_5`（已就绪），第 2 天晚上才用 `verified_50`；配额已确认，没有别的前置条件。粗略估计约 45–60GB（假设见 `docs/notes.md` §7，样本只有 5 个），当前可用约 143.6GB，放得下，**不需要扩大虚拟磁盘**；Docker Hub 匿名额度每小时 100 次，剩余 92，够用
   - [ ] 建议的命令（后台）：`mkdir -p results/runs/pull_images && nohup uv run python eval/swebench/pull_images.py --yes --verify --workers 2 --min-free-gb 35 > results/runs/pull_images/pull.log 2>&1 &`（`--min-free-gb 35` 是因为底线只在每次开始拉取前检查，并发在途的镜像可能再多占十几 GB）；之后用 `--dry-run` 和 `results/runs/pull_images/status.json` 看进度
 - [x] 用 uv 安装 mini-SWE-agent（`uv tool install` 或放进 dev 依赖组，择一并记到 `docs/notes.md`，不用 pip），用 `--help` 确认它批量跑 SWE-bench 的命令，写进 `eval/baselines/mini_swe_agent.md`（2026-10-04）
   - 选择放进 dev 依赖组（`uv add --dev mini-swe-agent`，2.4.6，锁进 `uv.lock`，不与其他依赖冲突），理由记在 `docs/notes.md` §8；`tests/unit/test_no_agent_frameworks.py` 保证 `src/harness/` 不 import 它
@@ -93,7 +93,7 @@
   - [ ] 文档里的 `{{STEP_LIMIT}}`、`{{COST_LIMIT}}`、容器资源上限要等 `configs/default.yaml` 创建后才能填；`-c 'model.model_kwargs.thinking={"type":"disabled"}'` 在 mini-swe-agent 里是否生效还没测
 
 **验收**：`uv sync` 成功且 `uv.lock` 已提交；`.env` 可用；子集文件已提交；镜像开始拉取。
-（2026-10-05 调整：镜像拉取不再是第 0 天的验收项，改为最晚第 2 天白天开始；`dev_5` 的 5 个镜像已就绪。）
+（2026-10-05 调整：镜像拉取不再是第 0 天的验收项，改为主 harness 实现后再拉、最晚第 2 天白天开始；`dev_5` 的 5 个镜像已就绪；配额已确认。）
 
 ---
 
@@ -322,8 +322,17 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - 总花费 $0，距离预算上限还很远
 
 **明天先做（按顺序）**
-1. 你确认子集配额（django 20 / sympy 15 / sphinx 10 / sklearn 10）；确认后提交并冻结子集
+1. （已完成，2026-10-05）子集配额已确认，保持当前值
 2. 同步 `.env.example`；验证计划的步骤 5、6 暂不做；决定 `Timeout`/畸形 200 是否重试
 3. 修 `pyproject.toml` 的项目名和描述，提交所有改动（提交信息按 CLAUDE.md §8 的格式）
-4. 开始第 1 天：`llm/client.py`、`llm/replay.py`、`sandbox/docker_sandbox.py`；写代码的间隙后台拉取剩余 50 个镜像
+4. 开始第 1 天：`llm/client.py`、`llm/replay.py`、`sandbox/docker_sandbox.py`；镜像拉取等主 harness 实现后再动手
 5. 等 `configs/default.yaml` 确定后，回填 `mini_swe_agent.md` 里的 `{{STEP_LIMIT}}`、`{{COST_LIMIT}}` 和容器资源上限
+
+### 2026-10-05（补充：配额与拉取时机）
+
+**决定（你的）**
+- 子集配额**保持当前值**（django 20 / sympy 15 / sphinx 10 / scikit-learn 10），已记入第 0 天的选题一项。这只是锁定决定，不是打标签；`v0.1-frozen` 仍在第 2 天主实验前打
+- 剩余 50 个镜像**不现在拉，等主 harness 实现后再拉**。约束不变：第 2 天晚上开跑主实验前必须拉完（按单个 84–210 秒的实测粗估，用 2 个 worker 大约一小时多，网络状况会变），所以最晚第 2 天白天开始；建议在第 1 天验收（harness 能在 `dev_5` 上端到端跑通）之后就开始
+
+**当天花费**：无新增
+
