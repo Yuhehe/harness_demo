@@ -66,7 +66,8 @@
   - [x] **成本口径已决定**（2026-10-05，你的决定，以最后一次为准）：**同时保留 token 指标和美元成本**（`tokens_in` 拆成未命中和命中缓存、`tokens_out` 含思考 token、`cache_hit_rate`、`steps`、`latency`，以及 `cost_per_task`）；**美元成本用固定的高峰价（标准价）按记录的 token 数计算，不依赖时钟**；预算保护仍按美元用同一个标准价，**CLAUDE.md 不需要改**。公式与 LiteLLM 的标准价结果完全一致（冒烟轨迹 0.016967）。B0 通过 `LITELLM_MODEL_REGISTRY_PATH=eval/baselines/litellm_registry.json` 把错峰价设成与标准价相同，已离线验证。详见 `docs/notes.md` §5 末尾
   - [x] 价格覆盖文件 `eval/baselines/litellm_registry.json` 和 4 个单元测试 `tests/unit/test_price_registry.py`、`tests/conftest.py`（固定 `LITELLM_LOCAL_MODEL_COST_MAP=True`）已完成（2026-10-05，未提交）：覆盖文件的标准价与 LiteLLM 一致；不用覆盖文件时成本随错峰判断变化；用了之后无论是否错峰都是标准价。**第 1 天写 `llm/cost.py` 时**：用同一个公式和一张标准价表，不调用 `completion_cost`，每个 `llm_call` 记录原始 token 和成本，`run_start` 记录价格表的哈希
   - [x] **重试策略已决定**（2026-10-05，你的决定：方案 B）：除 429 和 5xx 外，也重试**客户端超时**（`Timeout`）和**不可用的 200**（响应体不是合法 JSON 或缺 `choices`）；总共最多 3 次尝试，指数退避加抖动，429 遵守 `Retry-After`；按（异常类型、状态码、响应形状）判断；4xx 不重试；每次记录次数和 `retry_reason`；用尽后以 `env_error` 终止；重试等待计入墙钟时间和延迟。**CLAUDE.md §5.1 和 §5.7 已按此修改**；问题清单和策略详见 `docs/notes.md` §5
-  - [ ] 重试相关还没定的细节：`llm.timeout_s` 的取值（没有真实数据可依据）、是否用流式输出、失败的尝试没有 `usage` 导致 token 统计可能漏算（要在 span 里标注）；`finish_reason=length` 且内容为空不是传输故障，不在重试范围内，按失败处理
+  - [x] **输出上限、超时、流式、截断、失败尝试已决定**（2026-10-06，你的决定：全部按我的方案；调研数据和依据见 `docs/notes.md` §5，CLAUDE.md §5.1、§5.3、§5.7 已修改）：① 当前只用非流式，基本功能完成后再支持流式；② 思考开 `max_tokens=65536`、`timeout_s=900`，思考关 `max_tokens=16384`、`timeout_s=300`，成对设置，超时必须大于顶满上限的耗时；③ `finish_reason=length` 不重试，半截工具调用不执行，连续 3 次截断记为 `format_error`（详情 `output_truncated`），另设 `truncated_outputs` 计数器；④ `insufficient_system_resource` 和 `aborted` 加入重试类别并丢弃半截内容；⑤ 重试保持最多 3 次尝试；⑥ 主指标只统计成功调用，失败尝试另记并估算浪费；⑦ `context.budget_tokens` 只算输入；⑧ B0 在关闭思考时显式设 `max_tokens=16384` 和超时
+  - [ ] 仍待验证：真实 DeepSeek 上的 429、5xx、超时表现和失败请求的计费；`aborted` 的触发场景；速度数据每项只有 1 个样本，要用第 1 天 `dev_5` 的真实延迟校准超时；B0 的 `model_kwargs.max_tokens` 和 `timeout` 是否在 mini-swe-agent 里生效（没实测）
   - [ ] **待决策**：`thinking` 默认开还是关。每次调用都显式传，不依赖服务端默认；等第 1 天循环能跑后在 `dev_5` 上各跑一次对比再定，所有配置统一
 - [~] 建仓库，写 `pyproject.toml`（`requires-python = ">=3.12,<3.13"`）、`.python-version`（`3.12`）、`.env.example`、`.gitignore`；用 `uv add` / `uv add --dev` 加依赖，`uv sync` 生成 `.venv` 和 `uv.lock`（**提交 `uv.lock`**）；加入 CLAUDE.md、plan.md 和 README.md
   - [x] `.python-version`（3.12）、`pyproject.toml`（`requires-python` 已锁 `>=3.12,<3.13`）、`.venv`（Python 3.12.12）、`uv.lock`（已提交）、plan.md、README.md 已就绪
@@ -103,6 +104,7 @@
 ## 第 1 天：Agent 核心能端到端跑通
 
 - [ ] `llm/client.py`：基于 LiteLLM 的异步客户端，包含重试（429、5xx、`Timeout`、不可用的 200；最多 3 次尝试，指数退避加抖动，429 遵守 `Retry-After`，记录 `retry_reason`，用尽后 `env_error`，见 CLAUDE.md §5.1）、成本计算、token 与缓存命中统计
+  - 2026-10-06 决定的调用参数（见 `docs/notes.md` §5）：非流式；`thinking`、`max_tokens`、`timeout_s` 来自配置并记在 `run_start`（思考开 65536 / 900 秒，思考关 16384 / 300 秒）；`finish_reason=length` 不重试、半截工具调用不执行、计入 `truncated_outputs`，连续 3 次记为 `format_error`（详情 `output_truncated`）；`insufficient_system_resource` 和 `aborted` 重试并丢弃半截内容（`retry_reason` 取值 `interrupted`）；失败的尝试也写 span（`usage` 为空），另报 `failed_attempts`、`retry_rate`、`wasted_prompt_tokens_est`，预算保护把估计也算进去；每次尝试之前要检查任务的墙钟时间上限（最坏情况 3 次 × 900 秒 = 45 分钟）；`context.budget_tokens` 只算输入；退避初始值基数 4 秒、倍数 3、上限 60 秒、加抖动
   - 已核实的约束（见 `docs/notes.md` §5）：重试按（异常类型、状态码、响应形状）判断，不能只看状态码或类名（错误密钥是 `BadRequestError` 但状态码 401，畸形 200 的状态码是 200，缺 `choices` 的 200 被映射成 500）；LiteLLM 没有隐藏重试；`Retry-After` 在 `e.litellm_response_headers`；每次调用显式传 `thinking`；`finish_reason=length` 且内容为空要当成失败；成本用固定的标准价公式计算，不依赖时钟，不调用 `completion_cost`；固定 `LITELLM_LOCAL_MODEL_COST_MAP=True`
 - [ ] `llm/replay.py`：录制和回放两种模式
 - [ ] `sandbox/docker_sandbox.py`：`exec`、`read_file`、`write_file`、`git_diff`；断网；资源限制；用 `finally` 保证清理容器
@@ -111,7 +113,7 @@
 - [ ] `tracing/tracer.py`：写 JSONL 格式的 span
 - [ ] `cli.py`：实现 `harness run`
 - [ ] `tests/fixtures/toy_repo/`：一个带 bug 的小仓库，包含 1 个会失败的测试
-- [ ] 单元测试：str_replace 的边界情况、截断逻辑、限制检查、registry、重试分类（用本机假服务器覆盖 429、5xx、超时、断连、非 JSON/截断/缺 `choices` 的 200，以及 4xx 不重试）
+- [ ] 单元测试：str_replace 的边界情况、截断逻辑、限制检查、registry、重试分类（用本机假服务器覆盖 429、5xx、超时、断连、非 JSON/截断/缺 `choices` 的 200，`insufficient_system_resource` / `aborted` 的 200（重试并丢弃半截内容），以及 4xx 和 `finish_reason=length` 不重试且半截工具调用不执行）
 - [ ] 端到端测试：在 toy_repo 上录制一次真实运行，再用回放通过测试
 - [ ] 手动在 `dev_5` 的 2 道题上跑通，能生成补丁
 
@@ -357,4 +359,19 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - 第 1 天写 `llm/client.py` 时要补重试分类的单元测试（已加到第 1 天的单元测试一项）
 
 **当天花费**：无新增
+
+### 2026-10-06（补充：输出上限、超时、流式和失败尝试的决定）
+
+**完成了什么**
+- 调研了主流 harness（SWE-agent、mini-swe-agent、Aider、Claude Code、Codex、OpenHands，以及 OpenAI 和 Anthropic 的 SDK）的超时、重试、流式、输出上限和失败尝试的 token 处理，并做了几次很小的真实调用测截断行为和生成速度；数据、来源和可信度记在 `docs/notes.md` §5
+- 你决定全部按我的方案，已写进 CLAUDE.md（§5.1 调用参数、截断、失败尝试，§5.3 的 `context.budget_tokens` 定义，§5.7）、`docs/notes.md` §5、本文件第 1 天的 `llm/client.py` 一项、`mini_swe_agent.md` 和 `swe_bench.md` 里的 B0 对齐表
+
+**当天花费**：约 $0.0107（标准价，按记录的 token 数手算：flash 的 5 次调用输入 1075、输出 3633，v4-pro 1 次调用输入 40、输出 1500；缓存命中按 0 计，没有对账）。这些调用是为测截断和生成速度做的，不属于任何实验
+
+**发现**
+- 被 `max_tokens` 截断的工具调用，参数是不完整的 JSON，会被误当成"格式错误"；而且重试只会再被截断一次，所以它不属于可重试的范围，要单独处理
+- 非流式下超时必须大于顶满上限的耗时，否则失控的生成会被超时重试 3 次，白白浪费 3 倍；我先前建议的"180 秒对 16384"在 v4-pro 上余量只有 1.6 倍，是我的疏漏，已按新的成对方案取代
+- DeepSeek 的 `finish_reason` 还有 `insufficient_system_resource` 和 `aborted`（状态码 200，但生成被打断）；`aborted` 官方只有一句话，没有触发场景
+
+**明天先做**：无变化，按第 1 天的任务开始写 `llm/client.py` 等；`llm/client.py` 的单元测试要覆盖上面的截断和可重试 `finish_reason`
 
