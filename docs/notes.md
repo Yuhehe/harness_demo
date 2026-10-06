@@ -235,14 +235,72 @@
 | 次数 | 总共最多 3 次尝试（首次加最多 2 次重试） |
 | 退避 | 指数退避，加随机抖动 |
 | 429 | 响应带 `Retry-After` 时按它等待（在 `e.litellm_response_headers["retry-after"]`） |
-| 可重试 | 429；5xx（LiteLLM 映射出的 500、502、503、断连，和缺 `choices` 的 200）；`Timeout`；不可用的 200（非 JSON、被截断） |
+| 可重试 | 429；5xx（LiteLLM 映射出的 500、502、503、断连，和缺 `choices` 的 200）；`Timeout`；不可用的 200（非 JSON、被截断，或 `finish_reason` 为 `insufficient_system_resource` / `aborted`，后者丢弃半截内容） |
 | 不重试 | 4xx，含 400（包括 `ContextWindowExceededError`）、401（注意错误密钥是 `BadRequestError` 但状态码 401）、404；以及 `finish_reason=length` 且内容为空这类**不是传输故障**的失败 |
 | 判断依据 | （异常类型、状态码、响应形状），不能只看状态码，也不能只看异常类名 |
-| 记录 | 每次重试的次数和 `retry_reason`（建议取值：`rate_limit`、`server_error`、`timeout`、`bad_response`）写进 `llm_call` span；失败的尝试没有 `usage`，统计时要标注可能漏算 |
+| 记录 | 每次重试的次数和 `retry_reason`（建议取值：`rate_limit`、`server_error`、`timeout`、`bad_response`、`interrupted`）写进 `llm_call` span；失败的尝试没有 `usage`，统计时要标注可能漏算 |
 | 用尽之后 | 以 `env_error` 终止任务 |
 | 时间 | 重试的等待时间计入墙钟时间和延迟（我取的默认做法，不是你明确说过的） |
 
-*仍然没定的*：`llm.timeout_s` 的取值（没有真实数据可依据）；是否使用流式输出；真实 DeepSeek 上的 429、5xx、超时的实际表现。第 1 天写 `llm/client.py` 时，用本机假服务器覆盖上面的每一类（包括 4xx 不重试）。
+*后续已决定*：`llm.timeout_s`、`max_tokens`、流式、截断和失败尝试的处理，见下面"输出上限、超时、流式和失败尝试的调研与决定"。仍未验证：真实 DeepSeek 上的 429、5xx、超时的实际表现。第 1 天写 `llm/client.py` 时，用本机假服务器覆盖上面的每一类（包括 4xx 和 `finish_reason=length` 不重试）。
+
+**输出上限、超时、流式和失败尝试的调研与决定（2026-10-06，你的决定：全部按我的方案）**
+
+*实测（真实调用，每项只有 1 个样本，网络平静时；`deepseek/` 前缀，`num_retries=0`）*
+
+| 实验 | 结果 |
+|---|---|
+| 要求用 `write_file` 写 40 行注释，`max_tokens=60`，关闭思考 | `finish_reason='length'`；工具调用的 `arguments` 只有 61 个字符，**不是合法 JSON**（停在 `"content": "# line 1: some filler words here`） |
+| 同一个请求，`max_tokens=900` | 实际用 453 个 token，`arguments` 1422 个字符，合法 JSON |
+| 默认思考，`max_tokens=120` | 120 个 token **全是思考**，没有内容，也没有工具调用 |
+| 约 1500 token 的代码答案，`max_tokens=1500` | 两个模型都是 `finish_reason='length'`（被截断） |
+| 生成速度（含预填充，小提示词），关闭思考 | flash：1500 token / 5.4 秒 ≈ 278 token/秒；v4-pro：1500 token / 10.4 秒 ≈ 145 token/秒 |
+| 生成速度，flash，思考开（1500 个 token 全是思考） | 7.4 秒 ≈ 203 token/秒 |
+
+按这个速度，**输出刚好顶到上限时**的耗时（纯算术，没有算负载变慢）：
+
+| 上限 | v4-pro（145/秒） | flash（278/秒） |
+|---|---|---|
+| 8192 | 56 秒 | 29 秒 |
+| 16384 | 113 秒 | 59 秒 |
+| 32768 | 226 秒 | 118 秒 |
+| 65536 | 452 秒 | 236 秒 |
+
+*DeepSeek 官方文档*：并发上限 flash 2500、v4-pro 500，超过返回 429；排队时非流式返回空行、流式返回 `: keep-alive`；**推理 10 分钟内没开始**服务端就关闭连接（指排队，不限制生成总时长）；`max_tokens` 默认关闭思考 8K、思考 64K（`reasoning_effort=max` 时 128K），范围 1 到 393216；`finish_reason` 取值有 `stop`、`length`、`content_filter`、`tool_calls`、`insufficient_system_resource`（推理系统资源不足被打断）、`aborted`（生成被中断）。**`aborted` 官方只有这一句话，没有触发场景、计费和是否重试的说明**；中断或超时的请求怎么计费，官方也没写。
+
+*主流 harness*（来源性质不同，可信度已标）
+
+| 工具 | 单次请求超时 | 重试 | 流式 | 输出上限 | 失败尝试的 token | 来源 |
+|---|---|---|---|---|---|---|
+| OpenAI Python SDK 2.54.0 | 600 秒，连接 5 秒 | 2 次，退避 0.5–8 秒 | — | — | — | 本机源码 |
+| LiteLLM 1.104.0 | 默认 6000 秒 | `DEFAULT_MAX_RETRIES=2`（我们的实测中每次失败只发 1 个请求） | — | — | — | 本机源码 |
+| Anthropic Python SDK | 10 分钟 | 2 次，含连接错误、408、409、429、≥500，超时也重试 | 长请求建议流式；非流式预计超过约 10 分钟会抛 `ValueError` | `max_tokens` 必填 | — | 官方文档 |
+| Claude Code | `API_TIMEOUT_MS` 默认 600000；流式空闲看门狗 600000 毫秒，响应体空闲 5 分钟 | `CLAUDE_CODE_MAX_RETRIES` 默认 10 | 是（有看门狗，从设置推断） | `CLAUDE_CODE_MAX_OUTPUT_TOKENS`，未知模型默认 32000、上限 128000 | 没查到 | 官方文档 |
+| Codex CLI | `stream_idle_timeout_ms` 默认 300000 | `request_max_retries` 4，`stream_max_retries` 5 | 是（推断） | 没查到 | 没查到 | **二手**（搜索结果引用的文档副本，没取到原文） |
+| Aider | `--timeout` 默认 None | — | `--stream` 默认 True | 用模型默认；`finish_reason=length` 时，模型支持助手预填充就自动续写，否则报错 | 没查到 | 源码 |
+| SWE-agent | 没有显式设置 | 20 次，等待 10–120 秒 | 否 | `max_output_tokens` 默认 None（从 LiteLLM 价格表查）；**不专门处理 `length`** | **只在成功响应后更新统计** | 源码 |
+| OpenHands | V0 文档默认 0 | 8 次，等待 15–120 秒，倍数 2.0 | 没查到 | 没查到 | 没查到 | 官方文档，但是 **V0 旧版** |
+| mini-swe-agent 2.4.6 | 没有显式设置 | 10 次，指数退避（4–60 秒） | 否 | 不设，用服务商默认 | **成本只在重试循环结束后、对成功的响应计算** | 本机源码 |
+
+规律：面向人的交互工具（Aider、Claude Code、Codex）流式，批量评测用的 harness（SWE-agent、mini-swe-agent）不流式；超时要么是 SDK 级 10 分钟，要么不设；没有人设很小的输出上限；失败的尝试几乎都不计入统计。服务商侧：取消的流式请求输入 token 仍然全额计费、已生成的输出也计费（第三方博客和社区帖，**可信度低**）。
+
+*决定*
+
+| 项 | 决定 |
+|---|---|
+| 流式 | **当前只用非流式**，基本功能全部完成后再支持流式。M0 和 B0 都不流式，和 SWE-agent、mini-swe-agent 一致；非流式的 `usage` 在最终响应里，回放按请求哈希找响应也更简单。重新评估的触发条件：真实运行里超时超过 1%，或 p99 延迟超过 120 秒。改用流式前要先验证 LiteLLM 对 DeepSeek 的流式 `usage` |
+| 输出上限和超时（成对设置，写成配置项并记在 `run_start`） | **思考开：`max_tokens=65536`、`timeout_s=900`**；**思考关：`max_tokens=16384`、`timeout_s=300`**。思考开的值与 DeepSeek 默认值、B0 默认值一致。超时按"最慢模型 v4-pro 顶满上限的耗时 × 2"算（452 秒 × 2 ≈ 900 秒；113 秒 × 2 ≈ 226 秒，取整到 300 秒，并给预填充留余量） |
+| 设置原则 | **超时必须大于顶满上限的耗时**，让失控的生成先撞上上限，得到 `finish_reason=length`（不重试），而不是先撞上超时（会被重试 3 次，把同样的失控生成重复 3 遍） |
+| 截断（`finish_reason=length`） | 不重试；半截的工具调用**绝不执行**；给模型一条"输出被长度限制截断，请改小"的反馈；计入 `truncated_outputs`，**不计入** `format_errors`；连续 3 次就终止任务，记为 `format_error`，详情字段写 `output_truncated`（不改变 CLAUDE.md 的终止原因取值表） |
+| 可重试的 `finish_reason` | `insufficient_system_resource`、`aborted`（它们是状态码 200 的响应，算"不可用的 200"，**丢弃半截内容**后重试）；`retry_reason` 新增取值 `interrupted`。`aborted` 的触发场景官方没写，所以单独记录，第一次在真实运行里遇到时再看是什么场景 |
+| 重试次数和退避 | 总共最多 3 次尝试；退避初始值是基数 4 秒、倍数 3、上限 60 秒、加抖动（和 mini-swe-agent 的 4–60 秒同量级，可调）；主流 harness 的次数是 10–20 次、等待 4–120 秒，我们偏少，真实运行中如果经常重试用尽再调大 |
+| 失败尝试的 token | 主指标（`tokens_*`、`cost_per_task`）**只统计成功的调用**，与 SWE-agent、mini-swe-agent 一致，各配置之间可比；**额外**为每次失败尝试写一条 span（`outcome`、`retry_reason`、延迟，`usage` 为空），单独报告 `failed_attempts`、`retry_rate`、`wasted_prompt_tokens_est`（用 `litellm.token_counter` 估算输入）；预算保护把这个估计也算进去，但不混进上面的指标 |
+| `context.budget_tokens` | **只算发给模型的提示词（输入）**，不含输出上限；否则消融 A6（32K）装不下 64K 的输出上限，M0（128K）也会被扣掉一半。API 的真实限制是输入加输出不超过 100 万，永远不会触顶 |
+| B0 对齐 | 思考开时 mini-swe-agent 的默认（不设上限，用 DeepSeek 默认 64K）与我们一致；思考关时它的默认是 8K，我们是 16K，所以**显式**加 `-c model.model_kwargs.max_tokens=16384`，超时同理加 `-c model.model_kwargs.timeout=...`（`model_kwargs` 会透传给 `litellm.completion`，`litellm_model.py:66-71`；在 mini-swe-agent 里实际是否生效**尚未实测**） |
+
+*仍然未知或未验证*：真实 DeepSeek 上的 429、5xx、超时的实际表现；失败请求的计费；`aborted` 的触发场景；非流式长调用的连接空闲风险（输出接近上限时连接会空闲数分钟，有些网络会丢弃空闲连接；实际输出很短，观测最大 1755 个 token，所以只会发生在失控时）；速度数据每项只有 1 个样本，要用第 1 天在 `dev_5` 上记录的真实延迟校准这些数值；"每次尝试之前检查任务的墙钟时间上限"要写进 `llm/client.py`（最坏情况下 3 次尝试 × 900 秒 = 45 分钟）。
+
+来源：[DeepSeek Chat Completions API](https://api-docs.deepseek.com/api/create-chat-completion)、[DeepSeek 限流与连接](https://api-docs.deepseek.com/quick_start/rate_limit)、[Anthropic Python SDK](https://platform.claude.com/docs/en/api/sdks/python)、[Claude Code 环境变量](https://code.claude.com/docs/en/env-vars)、[OpenHands V0 配置](https://docs.openhands.dev/openhands/usage/v0/advanced/V0_configuration-options.md)、[SWE-agent models.py](https://raw.githubusercontent.com/SWE-agent/SWE-agent/main/sweagent/agent/models.py)、[Aider args.py](https://raw.githubusercontent.com/Aider-AI/aider/main/aider/args.py) 和 [base_coder.py](https://raw.githubusercontent.com/Aider-AI/aider/main/aider/coders/base_coder.py)、[Codex 配置文档副本（二手）](https://fossies.org/linux/codex-rust/docs/config.md)、[第三方：DeepSeek finish_reason 说明](https://chat-deep.ai/docs/deepseek-finish-reason/)。
 
 *步骤 9（mini-swe-agent 冒烟，真实调用）*
 
