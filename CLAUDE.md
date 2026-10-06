@@ -105,7 +105,10 @@ async def run_task(task: Task, cfg: AgentConfig, sandbox: Sandbox, llm: LLMClien
     return RunResult(patch=await sandbox.git_diff(), fail_reason=state.fail_reason, metrics=state.metrics)
 ```
 
-- 调用失败时的重试放在 `llm/client.py` 里：指数退避并加随机抖动，**总共最多 3 次尝试**（首次加最多 2 次重试）。按（异常类型、状态码、响应形状）判断，可重试的有四类：**429**（响应带 `Retry-After` 时按它等待）、**5xx**、**客户端超时**（`Timeout`）、**不可用的 200**（响应体不是合法 JSON，或缺少 `choices`）；4xx（含 400、401、404）不重试。每次重试都要记录次数和原因（`retry_reason`），重试用完仍失败就以 `env_error` 终止任务；重试的等待时间计入墙钟时间和延迟。
+- 调用失败时的重试放在 `llm/client.py` 里：指数退避并加随机抖动，**总共最多 3 次尝试**（首次加最多 2 次重试）。按（异常类型、状态码、响应形状）判断，可重试的有四类：**429**（响应带 `Retry-After` 时按它等待）、**5xx**、**客户端超时**（`Timeout`）、**不可用的 200**（响应体不是合法 JSON、缺少 `choices`，或 `finish_reason` 为 `insufficient_system_resource` / `aborted`，后者要丢弃半截内容）；4xx（含 400、401、404）不重试。每次重试都要记录次数和原因（`retry_reason`），重试用完仍失败就以 `env_error` 终止任务；重试的等待时间计入墙钟时间和延迟。
+- LLM 调用参数：**当前只用非流式**，基本功能全部完成后再支持流式。每次调用显式传 `thinking`（来自配置），一次运行内不切换。输出上限 `max_tokens` 和超时 `timeout_s` **成对设置**，超时必须大于输出顶满上限所需的时间，这样失控的生成会先以 `finish_reason=length` 结束（不重试），而不是先被超时（会重试 3 次）：思考开 `max_tokens=65536`、`timeout_s=900`；思考关 `max_tokens=16384`、`timeout_s=300`。两者都是配置项，记录在 `run_start`（依据见 `docs/notes.md` §5）。
+- `finish_reason=length` 的响应**不重试**，里面半截的工具调用**绝不执行**；给模型一条"输出被长度限制截断，请改小"的反馈，计入 `truncated_outputs`（不计入 `format_errors`）。连续 3 次截断就终止任务，记为 `format_error`，详情字段写 `output_truncated`。
+- 失败的尝试（含重试）也要写一条 `llm_call` span（`outcome`、`retry_reason`、延迟，`usage` 为空）。`tokens_*` 和 `cost_per_task` **只统计成功的调用**；失败的尝试另报 `failed_attempts`、`retry_rate` 和 `wasted_prompt_tokens_est`（用 `litellm.token_counter` 估算被浪费的输入 token）。预算保护把这个估计也算进去，但不混进上面的指标。
 - 模型返回的工具调用格式不对时，把错误信息作为工具结果回给模型，**计入 `format_errors`**。连续 3 次格式错误就终止任务。
 - `FailReason` 的取值：`context_overflow | step_limit | cost_limit | time_limit | format_error | env_error | no_submit`。
 
@@ -123,7 +126,7 @@ async def run_task(task: Task, cfg: AgentConfig, sandbox: Sandbox, llm: LLMClien
 |---|---|---|
 | `action_space` | `bash_only` \| `tools` | `bash_only`：只有 bash 和 submit。`tools`：bash、view、str_replace、search、todo、submit |
 | `context.strategy` | `none` \| `truncate` \| `summarize` \| `hybrid` | 详见下方 |
-| `context.budget_tokens` | 例如 `128000` / `32000` | 人为限制上下文预算，用来制造上下文压力（小预算下各策略的差异才能显现） |
+| `context.budget_tokens` | 例如 `128000` / `32000` | 人为限制上下文预算，用来制造上下文压力（小预算下各策略的差异才能显现）。**只算发给模型的提示词（输入）**，不含输出上限 `max_tokens`，两者互不扣减 |
 | `planning` | `on` \| `off` | `on`：启用 todo 工具，并在 prompt 里提示先规划再执行 |
 | `guard.enabled` | `true` \| `false` | 权限层开关 |
 | `tool_output.max_chars` | 例如 `8000` | 超过就截断，只保留开头和结尾 |
