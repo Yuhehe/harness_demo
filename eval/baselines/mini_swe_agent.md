@@ -65,6 +65,9 @@ PYTHONPATH=eval/swebench uv run python -c "import json; from select_subset impor
 | 单条命令超时 | 60 秒（`environment.timeout`） | 120 秒（CLAUDE.md §5.4） | 改成同样的值，或在报告里注明差异：`{{decision}}` |
 | 步数、成本上限 | 250 步、3.0 美元 | `{{…}}` | 对齐，见上表 |
 | 模型 | anthropic 默认 | `{{MODEL_MAIN}}` | `-m` 指定同一个 |
+| 输出上限 `max_tokens` | 不设，用 DeepSeek 默认（思考 64K、不思考 8K） | 思考开 65536；思考关 16384 | 思考开时已一致；思考关时显式加 `-c model.model_kwargs.max_tokens=16384`（`model_kwargs` 透传给 `litellm.completion`，`litellm_model.py:66-71`；**在 mini-swe-agent 里实际是否生效尚未实测**） |
+| 单次请求超时 | LiteLLM 默认 6000 秒 | 思考开 900 秒；思考关 300 秒 | 显式加 `-c model.model_kwargs.timeout=...` 对齐（同上，未实测） |
+| 流式 | 不用 | 当前不用 | 一致 |
 | 提示词、工具 | 只有 bash，自带提示词 | tools + planning 等 | **这是被比较的因素，不对齐** |
 | 判分 | — | `swebench eval` | 同一个判分器（见 §6） |
 
