@@ -103,25 +103,42 @@
 
 ## 第 1 天：Agent 核心能端到端跑通
 
-- [ ] `llm/client.py`：基于 LiteLLM 的异步客户端，包含重试（429、5xx、`Timeout`、不可用的 200；最多 3 次尝试，指数退避加抖动，429 遵守 `Retry-After`，记录 `retry_reason`，用尽后 `env_error`，见 CLAUDE.md §5.1）、成本计算、token 与缓存命中统计
+**实现顺序（2026-10-06 与你商定；下面的清单是勾选用的，不规定顺序，实际顺序如下）**
+
+1. **类型、最小配置、追踪、成本**：先建所有层都要用的纯逻辑（响应对象、配置模型、JSONL 追踪、固定标准价成本公式）。追踪最先建，因为每一层都要写 span，晚建就得回头补埋点。
+2. **沙箱**：最容易踩坑的外部系统，早暴露问题（`exec` 没有超时、`git diff` 默认不含新建文件）。集成测试用 `python:3.12-slim` 加 git 的小镜像，不调用 LLM。
+3. **LLM 客户端和回放**：把已核实的结论落成代码（重试分类、成对的上限和超时、截断、失败尝试的记录）；测试复用之前的本机假服务器场景。
+4. **工具和注册表**：每个工具独立，输出处理要确定。
+5. **主循环、状态、限制、提示词**：先定 LLM 和沙箱两个窄接口，主循环对着接口写，用脚本化的假 LLM 和假沙箱把所有终止原因测完（零花费）。
+6. **CLI**：只负责装配。
+7. **toy_repo 和端到端测试**：用 flash 在 toy_repo 上做第一次真实调用并录制，再切回放；然后在 `dev_5` 里挑 2 道题（`django__django-11066`，加一道 sympy、sphinx 或 scikit-learn 的）手动跑，验收。
+
+**与清单的差别**：① 单元测试不集中放最后，每个模块写完就测（CLAUDE.md §8）；② 追踪最先建；③ 沙箱放在 LLM 客户端前面；④ 提前了两处第 2 天的内容：**最小配置模型**（主循环需要 `thinking`、`max_tokens`、`timeout_s` 和各类上限，并要记在 `run_start`；消融 YAML 和差异打印仍在第 2 天）和 **`llm/cost.py`**；⑤ 上下文管理和权限层只放接口占位（上下文"什么都不做"、权限层"全部放行"），第 2 天直接接上。
+
+**已定的做法**：自己写简洁的 system prompt，不照搬 mini-swe-agent；对话历史只追加，动态信息（步数、剩余预算）在消息创建时就写进去并永久保存；模型只回文字、不调用工具按格式错误计数；调试阶段用 flash，最后的验收用 v4-pro；单题花费很小，不触发"超过 10 题要确认"的规则。
+
+- [x] `llm/client.py`（2026-10-06）：基于 LiteLLM 的异步客户端，包含重试（429、5xx、`Timeout`、不可用的 200；最多 3 次尝试，指数退避加抖动，429 遵守 `Retry-After`，记录 `retry_reason`，用尽后 `env_error`，见 CLAUDE.md §5.1）、成本计算、token 与缓存命中统计
   - 2026-10-06 决定的调用参数（见 `docs/notes.md` §5）：非流式；`thinking`、`max_tokens`、`timeout_s` 来自配置并记在 `run_start`（思考开 65536 / 900 秒，思考关 16384 / 300 秒）；`finish_reason=length` 不重试、半截工具调用不执行、计入 `truncated_outputs`，连续 3 次记为 `format_error`（详情 `output_truncated`）；`insufficient_system_resource` 和 `aborted` 重试并丢弃半截内容（`retry_reason` 取值 `interrupted`）；失败的尝试也写 span（`usage` 为空），另报 `failed_attempts`、`retry_rate`、`wasted_prompt_tokens_est`，预算保护把估计也算进去；每次尝试之前要检查任务的墙钟时间上限（最坏情况 3 次 × 900 秒 = 45 分钟）；`context.budget_tokens` 只算输入；退避初始值基数 4 秒、倍数 3、上限 60 秒、加抖动
   - 已核实的约束（见 `docs/notes.md` §5）：重试按（异常类型、状态码、响应形状）判断，不能只看状态码或类名（错误密钥是 `BadRequestError` 但状态码 401，畸形 200 的状态码是 200，缺 `choices` 的 200 被映射成 500）；LiteLLM 没有隐藏重试；`Retry-After` 在 `e.litellm_response_headers`；每次调用显式传 `thinking`；`finish_reason=length` 且内容为空要当成失败；成本用固定的标准价公式计算，不依赖时钟，不调用 `completion_cost`；固定 `LITELLM_LOCAL_MODEL_COST_MAP=True`
-- [ ] `llm/replay.py`：录制和回放两种模式
-- [ ] `sandbox/docker_sandbox.py`：`exec`、`read_file`、`write_file`、`git_diff`；断网；资源限制；用 `finally` 保证清理容器
-- [ ] `tools/`：bash、view、str_replace（只允许唯一匹配）、search（ripgrep，镜像里没有就回退到 grep）、todo、submit，以及 registry
-- [ ] `agent/`：主循环、状态、prompts、限制（步数、成本、时间），实现 FailReason
-- [ ] `tracing/tracer.py`：写 JSONL 格式的 span
-- [ ] `cli.py`：实现 `harness run`
-- [ ] `tests/fixtures/toy_repo/`：一个带 bug 的小仓库，包含 1 个会失败的测试
-- [ ] 单元测试：str_replace 的边界情况、截断逻辑、限制检查、registry、重试分类（用本机假服务器覆盖 429、5xx、超时、断连、非 JSON/截断/缺 `choices` 的 200，`insufficient_system_resource` / `aborted` 的 200（重试并丢弃半截内容），以及 4xx 和 `finish_reason=length` 不重试且半截工具调用不执行）
-- [ ] 端到端测试：在 toy_repo 上录制一次真实运行，再用回放通过测试
-- [ ] 手动在 `dev_5` 的 2 道题上跑通，能生成补丁
+- [x] `llm/replay.py`（2026-10-06）：录制和回放两种模式
+  - 请求的键由模型、`thinking`、`max_tokens`、工具和**除工具结果内容外**的全部消息决定；工具输出另做规范化摘要比对（去掉耗时、临时路径、地址、时间戳、`ls` 日期），不一致只报告到 `ReplayClient.mismatches`，严格模式才报错。原因：`find`、`ls` 的输出顺序取决于宿主机文件系统，换机器（如 CI）会变；端到端测试断言真实结果（沙箱里项目自己的测试通过）兜底
+  - 加载仓库时固定文件修改时间和基础提交的日期，使同一仓库两次加载逐字节相同（否则 `git log` 的哈希每次不同）
+- [x] `sandbox/docker_sandbox.py`（2026-10-06）：`exec`、`read_file`、`write_file`、`git_diff`；断网；资源限制；用 `finally` 保证清理容器
+  - 实测并处理的坑：`exec` 没有超时（用容器内的 `timeout`）；超时后残留僵尸进程占 `pids_limit`（容器加 `init=True`）；`git diff` 默认不含新建文件，且同大小、同一秒内的覆盖写入会被 git 的 stat 缓存误判为未变化（每次从 HEAD 重建临时 index）；`python:3.12-slim` 没有 git（`tests/fixtures/toy_image/Dockerfile` 加 git，**在本机网络下构建用了 9 分 22 秒**，apt 很慢）；在真实的 django 镜像上验证了补丁含新建和修改的文件并能应用到干净检出，耗时 2–3 秒
+- [x] `tools/`（2026-10-06）：bash、view、str_replace（只允许唯一匹配）、search（ripgrep，镜像里没有就回退到 grep）、todo、submit，以及 registry
+- [x] `agent/`（2026-10-06）：主循环、状态、prompts、限制（步数、成本、时间），实现 FailReason
+- [x] `tracing/tracer.py`（2026-10-06）：写 JSONL 格式的 span（每条立即落盘；另加了 `message` 类型，每条消息一个 span，崩溃也留得下完整对话，供人工分析失败轨迹）
+- [x] `cli.py`（2026-10-06）：实现 `harness run`（`--repo` 本地仓库或 `--instance` SWE-bench 实例，`--record` / `--replay`；没有创建 `configs/default.yaml`，那是第 2 天的内容，不带 `--config` 时用代码里的开发默认值）
+- [x] `tests/fixtures/toy_repo/`（2026-10-06）：一个带 bug 的小仓库，包含 1 个会失败的测试（测试只用标准库 `unittest`，因为沙箱断网）
+- [x] 单元测试（2026-10-06，全套 195 个）：str_replace 的边界情况、截断逻辑、限制检查、registry、重试分类（用本机假服务器覆盖 429、5xx、超时、断连、非 JSON/截断/缺 `choices` 的 200，`insufficient_system_resource` / `aborted` 的 200（重试并丢弃半截内容），以及 4xx 和 `finish_reason=length` 不重试且半截工具调用不执行）
+- [x] 端到端测试（2026-10-06）：在 toy_repo 上用 flash 录制了一次真实运行（5 步，约 $0.001），再用回放通过测试，并断言沙箱里项目自己的测试从失败变成通过
+- [x] 手动在 `dev_5` 的 2 道题上跑通，能生成补丁（2026-10-06：`django__django-11066` 和 `sympy__sympy-16886`，flash 和 v4-pro 各跑一遍；补丁都是非空的，用官方 `swebench eval` 判分都是 resolved，**这是 dev 题的开发检查，不是实验结果，不进报告**）
 
-**验收**
-- `uv run pytest -q` 全部通过
-- toy_repo 能修复
-- 2 道 SWE-bench 题能产生非空补丁，轨迹文件完整
-- 记录单题成本 `{{$}}` 和平均步数 `{{}}`
+**验收（2026-10-06 全部达成）**
+- [x] `uv run pytest -q` 全部通过（195 个测试）；`ruff check` 和 `ruff format --check` 通过
+- [x] toy_repo 能修复（回放测试断言项目自己的测试通过）
+- [x] 2 道 SWE-bench 题能产生非空补丁，轨迹文件完整（每个工具调用恰好对应一条 tool 消息，`run_start` 到 `run_end` 俱全，`llm_call` 字段齐全）
+- [x] 记录单题成本和平均步数：用默认配置（主模型 v4-pro，思考开，标准价）跑 `dev_5` 的 2 题，`django__django-11066` 15 步 / $0.0279，`sympy__sympy-16886` 11 步 / $0.0177，**平均 13 步、$0.0228**（只有 2 个样本，是开发检查，不是实验结果）；用 flash 跑同样两题是 11 步 / $0.0046 和 9 步 / $0.0020
 
 ---
 
@@ -172,6 +189,7 @@
   - 后台用 asyncio 队列加 worker 执行；任务状态存 SQLite
 - [ ] `docker/Dockerfile` 和 `docker-compose.yml`：Dockerfile 基于 `python:3.12-slim`，复制官方 uv 二进制，用 `uv sync --frozen --no-dev` 装依赖（不用 pip）；服务通过挂载宿主机的 `docker.sock` 创建沙箱容器；README 里要说明这样做的安全影响
 - [ ] `.github/workflows/ci.yml`：用 `astral-sh/setup-uv` 装 uv，`uv sync` 后 `uv run` 跑 ruff 检查和 pytest（含回放端到端测试），不需要任何密钥
+  - 第 1 天遗留给这一项的事：CI 要先构建 `harness-toy` 镜像（`tests/fixtures/toy_image/Dockerfile`，本机网络下 apt 用了约 9 分钟，CI 网络通常快得多，但仍要留出时间，最好缓存），沙箱的集成测试和回放的端到端测试都需要它；`ReplayClient` 目前不写 `llm_call` span，回放的轨迹只有 `run_end` 的合计，见 `docs/notes.md` §10
 - [ ] 跑完剩下的 P1 消融实验；如果预算允许，跑 M0'
 
 **验收**
@@ -374,4 +392,34 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - DeepSeek 的 `finish_reason` 还有 `insufficient_system_resource` 和 `aborted`（状态码 200，但生成被打断）；`aborted` 官方只有一句话，没有触发场景
 
 **明天先做**：无变化，按第 1 天的任务开始写 `llm/client.py` 等；`llm/client.py` 的单元测试要覆盖上面的截断和可重试 `finish_reason`
+
+### 2026-10-06（第 1 天：Agent 核心端到端跑通）
+
+**完成了什么**
+- 按"类型/配置/追踪/成本 → 沙箱 → LLM 客户端和回放 → 工具 → 主循环 → CLI → toy 端到端 → dev_5"的顺序实现，第 1 天的清单全部勾选；`src/harness/` 约 2400 行，测试 195 个（单元 191，端到端 4），ruff 和 pytest 全过，没有泄漏的容器
+- 主循环对着窄接口写，用脚本化的假 LLM 和假沙箱把所有终止原因测完；沙箱用真实 Docker（toy 镜像和 django 镜像）测；LLM 客户端用本机假服务器测（重试分类、`Retry-After`、超时、断连、坏 200、被打断的 `finish_reason`、4xx 不重试、墙钟时间限制）
+- `dev_5` 的 2 道题：用 flash 和 v4-pro 都跑通，补丁相同（`django-11066` 767 个字符，`sympy-16886` 462 个字符），官方判分都是 resolved（dev 检查，不进报告）
+
+**当天花费**：harness 的真实运行 $0.0545（标准价，按轨迹里记录的 token 算：toy 录制两次 $0.0023，flash 的两题 $0.0066，v4-pro 的两题 $0.0456）；消息配对的 API 检查 8 次调用，token 没有记录，量级约 $0.001（估算）。另有上午的 `max_tokens` 与速度实验 $0.0107，见前一天的记录。没有和控制台对账
+
+**遇到的问题和发现**（接口行为已记入 `docs/notes.md` §10）
+- **LiteLLM 会把不认识的 `finish_reason` 悄悄改成 `stop`**（`aborted`、`insufficient_system_resource`），只打一条警告，原始值在 `choice.provider_specific_fields["native_finish_reason"]`；不处理的话，我们决定要重试的两种中断会被当成正常完成
+- LiteLLM 的 `RateLimitError`、`InternalServerError`、`Timeout` 等继承自 **openai 的 `APIError`**，不是 `litellm.exceptions.APIError`；一开始 `classify` 没认出它们，把可重试的错误当成了"我们自己的 bug"直接抛出，测试抓到了
+- DeepSeek 的消息格式：每个 `tool_call` 必须恰好有一条 tool 回复（缺回复、少回复、回复不存在的 id 都是 400）；参数不是合法 JSON 的调用放在历史里**不会被拒绝**
+- 沙箱：超时后的僵尸进程、git stat 缓存、`python:3.12-slim` 没有 git 等（见上面沙箱一项）
+- 回放：第一次录制后测试失败，原因是**测试自己先跑了一遍测试，生成了 `__pycache__`，改变了 agent 看到的环境**；进一步发现 `find`、`ls` 的顺序依赖宿主机文件系统，所以键不再包含工具输出内容
+
+**与 CLAUDE.md 不一致或值得你决定的地方**（我没有改 CLAUDE.md）
+- §3.2 还写着"成本用 `litellm.completion_cost` 计算"，但 §5.1 和实际实现用的是固定标准价的自有公式（`completion_cost` 随时钟用错峰价）。此前我说过 CLAUDE.md 不需要改，**漏看了这一处**
+- §5.7 的 span 清单里没有 `message`，实现里为了崩溃后仍保留完整对话加了这一类
+- `FailReason.no_submit` 目前没有使用：只回文字的回复按格式错误计数，连续 3 次记为 `format_error`
+- `pyproject.toml` 除了你说的项目名和描述之外，我加了 `[build-system]`、`[project.scripts]`、`[tool.uv.build-backend]`（让 `uv run harness` 可用，样板由 `uv init --package` 生成）、pytest 的 `asyncio_mode`、标记、`norecursedirs` 和 `tests` 的 `pythonpath`
+- 步数、成本、墙钟上限只是**开发默认值**（50 步、$0.5、1800 秒），真正的实验值要在第 2 天创建 `configs/default.yaml` 时定
+- 连接错误（没有响应，如 DNS、拒绝连接）我归入 `timeout` 类重试：规则里没有明说，是我的判断
+
+**明天先做（第 2 天）**
+1. `context/`：`tokens.py`（真正的 token 计数，取代现在用上一次提示词大小的近似）、`manager.py`、四种策略、可恢复截断
+2. 配置系统：`default.yaml` 和消融 YAML，启动时打印与主配置的差异；定下实验用的步数、成本、墙钟上限
+3. `eval/swebench/run_agent.py`、`score.py`；权限层的基础版
+4. 开跑 50 题之前还要拉剩余 50 个镜像（你决定等 harness 实现后再拉，现在可以开始），并先打印预计花费等你确认
 

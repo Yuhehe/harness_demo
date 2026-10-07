@@ -409,3 +409,44 @@
 以下内容来自记忆，没有在本次会话里核实，引用前要先查证：
 - SWE-bench 由 Princeton 团队提出，从 12 个热门 Python 仓库收集真实 issue 与修复 PR。（12 个仓库与上面 §1 的数据一致，Princeton 一说未核实。）
 - Verified 是 500 题的子集，据说经过人工标注者复核，剔除描述不清或测试有问题的题。
+
+## 10. 第 1 天实现中核实的接口行为（2026-10-06）
+
+**DeepSeek 的消息格式**（真实调用，flash，关闭思考，8 种历史）
+
+| 历史 | 结果 |
+|---|---|
+| 1 个调用 + 1 条回复 | 正常 |
+| 调用的参数不是合法 JSON（`{"command": "ls`）+ 一条错误回复 | **接受** |
+| 调用的参数是空字符串 + 回复 | 接受 |
+| 有 `tool_calls`，后面是 user 消息，没有回复 | **400**：`An assistant message with 'tool_calls' must be followed by tool messages responding to each 'tool_call_id'` |
+| 两个调用，只回复了第一个 | **400**（同上） |
+| 两个调用，都回复了 | 正常 |
+| tool 回复指向不存在的调用 id | **400**：`Messages with role 'tool' must be a response to a preceding message with 'tool_calls'` |
+| 纯文字的助手回复，后面是 user 提示 | 正常 |
+
+结论：每个 `tool_call` 必须恰好有一条 tool 消息，所以即使调用没被执行（被权限层拒绝、提交后的多余调用、格式错误）也要回复；被 `max_tokens` 截断的回复不存进历史，只追加一条 user 反馈。
+
+**LiteLLM 1.104.0**
+- 不认识的 `finish_reason`（`aborted`、`insufficient_system_resource`）被改成 `stop`，只打一条警告（`core_helpers.py:256`）；**原始值在 `choice.provider_specific_fields["native_finish_reason"]`**。
+- `RateLimitError`、`InternalServerError`、`Timeout`、`ContextWindowExceededError` 等继承自 **openai 的 `APIError`**；LiteLLM 自己的 `APIError`（响应体畸形）是另一个类，两族都要处理。
+
+**Docker 沙箱**
+- Docker SDK 的 `exec_run` 没有超时：用容器内的 `timeout -k 5 N bash -lc ...`，它会向整个进程组发信号。
+- 容器的 1 号进程如果不是 init，被杀掉的孤儿进程会变成僵尸并占用 `pids_limit`：创建容器时加 `init=True`。
+- `git diff` 不含未跟踪的新文件；而复制出来的 index 带着 stat 缓存，同大小、同一秒内的覆盖写入会被误判为未变化。做法：每次用 `git read-tree HEAD` 重建临时 index，再 `git add -A` 和 `git diff --cached HEAD`，不动真正的 index。
+- `put_archive` 默认保留宿主机的 uid，会让 git 报"dubious ownership"：tar 条目设 uid、gid 为 0，并在容器里加 `safe.directory '*'`。
+- `python:3.12-slim` 没有 git。`tests/fixtures/toy_image/Dockerfile` 用 apt 加 git，**在本机网络下构建用了 9 分 22 秒**（拉基础镜像只要 49 秒）。
+- 在真实的 django 镜像上，`bash -lc` 里是实例自己的 conda 环境（Python 3.6），重建 index 并取 diff 约 2–3 秒。
+
+**回放的确定性**
+- 同一仓库两次加载，`git log` 的哈希和 `ls -l` 的日期每次都不同（提交时间和文件修改时间）；固定文件修改时间（2000-01-01）和提交日期后逐字节相同。
+- 工具输出里的耗时、临时路径、地址、时间戳、`ls` 日期用规范化处理。
+- `find`、`ls` 的输出顺序取决于宿主机文件系统，无法规范化，所以请求的键不含工具输出内容，只比较规范化后的摘要并报告差异。
+- 端到端测试里先跑一遍项目的测试会生成 `__pycache__`，改变 agent 看到的环境，导致回放对不上：测试前置检查要放在另一个容器里。
+- **录制必须用显式设了 `llm.model` 的配置**：键里用的是 `cfg.model or $MODEL_MAIN`，CI 没有 `.env`，靠环境变量取模型的录制会对不上。
+- 严格比对工具输出的测试（`test_on_the_recording_machine_...`）只在设了 `HARNESS_STRICT_REPLAY=1` 时运行，因为 `find`、`ls` 的顺序依赖宿主机文件系统，换机器会失败。
+- **回放的轨迹没有 `llm_call` span**（`ReplayClient` 不写）：回放的运行只有 `run_end` 里的合计，没有逐次调用的 token、缓存命中和延迟。第 4 天 CI 的冒烟测试和 `aggregate.py` 如果要和真实运行同形状，需要由回放根据录制的 usage 补写这些 span（小改动，还没做）。
+
+**另一个历史形状**（真实调用，flash）：内容为空、没有 `tool_calls` 的助手回复（例如只有思考就 `stop`）放进历史后，后面接一条 user 提示，三种情况（思考关、思考开且带 `reasoning_content`、思考开不带）**都被接受**，所以循环不需要特殊处理空的助手回复。
+
