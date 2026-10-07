@@ -38,7 +38,7 @@ from harness.tools.base import OutputLimiter, ToolResult
 from harness.tools.registry import Registry
 from harness.tracing.tracer import Tracer
 
-MAX_CONSECUTIVE = 3  # format errors, or truncated responses, in a row
+MAX_CONSECUTIVE = 3  # format errors, truncated responses, or text-only replies in a row
 
 
 @dataclass
@@ -222,11 +222,16 @@ async def _handle_response(
     state.append(assistant_message(resp))
 
     if not resp.tool_calls:
-        _count_format_errors(state, 1)
-        if state.done:
+        # Not a malformed call: the model stopped acting without calling submit. It is counted
+        # apart from format errors so the two failure modes stay distinguishable.
+        state.no_tool_consecutive += 1
+        _count_format_errors(state, 0)  # a text-only turn breaks a run of format errors
+        if state.no_tool_consecutive >= MAX_CONSECUTIVE:
+            state.finish(FailReason.no_submit, "no_tool_call")
             return
         state.append(user_message(prompts.NO_TOOL_CALL_NUDGE + "\n" + note()))
         return
+    state.no_tool_consecutive = 0
 
     bad_calls = 0
     results: list[tuple[str, ToolResult]] = []

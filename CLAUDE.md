@@ -44,7 +44,7 @@
 | 层 | 选择 | 备注 |
 |---|---|---|
 | 语言与环境 | Python 3.12，`uv` | 见 §3.1 |
-| LLM 调用 | `litellm`（异步 `acompletion`） | 模型名从 `.env` 读取；成本用 `litellm.completion_cost` 计算 |
+| LLM 调用 | `litellm`（异步 `acompletion`） | 模型名从 `.env` 读取；成本用自有的固定标准价（高峰价）公式按记录的 token 数计算（`llm/cost.py`），**不调用 `litellm.completion_cost`**，因为它按当前 UTC 时间套用错峰价，同一次调用在不同时间成本不同 |
 | 沙箱 | Docker SDK for Python（`docker`） | SWE-bench 任务直接用官方的单题镜像 |
 | 配置 | `pydantic` v2 + YAML | 所有可开关的组件都要能在配置里切换 |
 | 服务 | FastAPI + uvicorn；SQLite 用 `aiosqlite` | 进度用 SSE 流式推送 |
@@ -65,8 +65,9 @@ harness-lab/
 │   ├── policy.yaml             # 权限层规则
 │   └── subsets/{dev_5.txt, verified_50.txt}
 ├── src/harness/
+│   ├── config.py               # pydantic 配置模型 + YAML 加载
 │   ├── agent/{loop.py, state.py, prompts.py, limits.py}
-│   ├── llm/{client.py, replay.py, cost.py}
+│   ├── llm/{client.py, replay.py, cost.py, types.py}
 │   ├── tools/{base.py, registry.py, bash.py, edit.py, search.py, todo.py, submit.py}
 │   ├── sandbox/{base.py, docker_sandbox.py}
 │   ├── context/{manager.py, tokens.py, strategies/{none.py, truncate.py, summarize.py, hybrid.py}}
@@ -79,6 +80,7 @@ harness-lab/
 │   ├── baselines/{mini_swe_agent.md, codex_exec.py}
 │   ├── security/{cases/, build_cases.py, run_security.py}
 │   └── report/{aggregate.py, failure_taxonomy.py, make_tables.py, plots.py}
+├── docs/{notes.md, learning/}  # notes.md：外部接口核实记录；learning/：学习笔记
 ├── results/            # runs/ 目录 gitignore；summary/ 提交
 ├── tests/{unit/, e2e/, fixtures/toy_repo/, fixtures/replays/}
 ├── docker/{Dockerfile, docker-compose.yml}
@@ -111,6 +113,12 @@ async def run_task(task: Task, cfg: AgentConfig, sandbox: Sandbox, llm: LLMClien
 - 失败的尝试（含重试）也要写一条 `llm_call` span（`outcome`、`retry_reason`、延迟，`usage` 为空）。`tokens_*` 和 `cost_per_task` **只统计成功的调用**；失败的尝试另报 `failed_attempts`、`retry_rate` 和 `wasted_prompt_tokens_est`（用 `litellm.token_counter` 估算被浪费的输入 token）。预算保护把这个估计也算进去，但不混进上面的指标。
 - 模型返回的工具调用格式不对时，把错误信息作为工具结果回给模型，**计入 `format_errors`**。连续 3 次格式错误就终止任务。
 - `FailReason` 的取值：`context_overflow | step_limit | cost_limit | time_limit | format_error | env_error | no_submit`。
+- **补充说明（实现细节，2026-10-07 与代码对齐）**：
+  - 没有收到任何响应的连接错误（DNS、拒绝连接等）按**客户端超时**一类重试。
+  - `finish_reason=content_filter` 不重试，以 `env_error` 终止（详情写明是提供商过滤）。
+  - LiteLLM 会把不认识的 `finish_reason`（`aborted`、`insufficient_system_resource`）悄悄改成 `stop`，原始值在 `choice.provider_specific_fields["native_finish_reason"]`，客户端必须读它。
+  - 每个 `tool_call` 必须恰好有一条 tool 消息（DeepSeek 缺回复返回 400），所以被权限层拒绝、提交后多余的、格式错误的调用也要回复。被 `length` 截断的响应**不进历史**，只追加一条 user 反馈。
+  - **`no_submit`**：只回文字、没有工具调用的回复**不算格式错误**，不计入 `format_errors`；给模型一条提示继续，连续 3 次纯文字回复就以 `no_submit` 终止（详情 `no_tool_call`）。任何带工具调用的回合（含格式错误的调用）都会重置这个计数；纯文字回合会打断连续格式错误的计数。
 
 ### 5.2 为了命中 KV Cache 的上下文规则（参考项目文档 `llm-prefill-and-agent-harness.md`）
 
@@ -143,7 +151,8 @@ async def run_task(task: Task, cfg: AgentConfig, sandbox: Sandbox, llm: LLMClien
 
 ### 5.4 工具（`tools/`）
 
-- 每个工具都有 `name`、`description`、JSON Schema 格式的参数定义，以及 `async run(args, sandbox) -> ToolResult(output, exit_code, truncated, meta)`。
+- 每个工具都有 `name`、`description`、JSON Schema 格式的参数定义，以及 `async run(args, sandbox) -> ToolResult(output, exit_code, truncated, meta, format_error)`。`format_error=True` 表示**调用本身**格式不对（非法 JSON、未知工具、缺参数、类型错），计入 `format_errors`；工具跑了但失败不算。
+- `view` 和 `str_replace` 实现在同一个文件 `tools/edit.py` 里（`ViewTool`、`StrReplaceTool`）。
 - `str_replace`：`old_str` 在文件里必须**恰好出现一次**，出现 0 次或多次都报错，并返回附近的上下文帮助模型定位。
 - `bash`：有超时（默认 120 秒）；返回 exit code 和合并后的 stdout/stderr。
 - `submit`：只打标记，把 `state.submitted` 设为 True；补丁在循环外用 `git diff` 生成。
@@ -152,7 +161,7 @@ async def run_task(task: Task, cfg: AgentConfig, sandbox: Sandbox, llm: LLMClien
 
 - SWE-bench 任务直接使用该题的官方镜像：代码在 `/testbed`，并且已经切到题目对应的基准提交。**镜像命名规则先查 `swebench` 源码或 mini-swe-agent 源码再用，不要猜。**
 - 容器限制：`network_mode="none"`（默认断网）、内存和 CPU 上限、`pids_limit`、非特权模式、任务结束后必须删除容器（用 `try/finally`）。
-- 对外接口：`exec(cmd, timeout) -> (exit_code, output)`、`read_file`、`write_file`、`git_diff()`。
+- 对外接口：`exec(cmd, timeout) -> (exit_code, output)`、`read_file`、`write_file`、`git_diff()`。约定：退出码 124 表示超时（用容器内的 `timeout`，Docker SDK 的 `exec_run` 本身没有超时）；容器用 `init=True` 回收僵尸进程；`git_diff` 每次用 `git read-tree HEAD` 重建临时 index，所以包含新建文件、且不受 stat 缓存影响；`--repo` 本地仓库经 `load_repo` 复制进容器（固定文件修改时间和提交日期，保证回放可复现）。
 
 ### 5.6 权限层（`security/`）
 
@@ -164,16 +173,21 @@ async def run_task(task: Task, cfg: AgentConfig, sandbox: Sandbox, llm: LLMClien
 
 每次运行写到 `results/runs/<run_id>/trajectories/<instance_id>.jsonl`，一行一个 span：
 
-- `run_start`：包含 config 的哈希、git commit、模型名、随机种子
+- `run_start`：包含 config 的哈希、git commit（及工作区是否有未提交改动 `git_dirty`）、模型名、随机种子、价格表的哈希 `prices_hash`、`max_tokens` / `timeout_s` / `thinking`
 - `llm_call`：输入、输出和缓存命中的 token 数，成本，延迟，重试次数和重试原因
 - `tool_call`：工具名，参数的哈希，exit code，耗时，是否截断
 - `guard_decision`、`compaction`（压缩前后 token 数）
+- `message`：每条追加进历史的消息各写一个 span，进程崩溃后仍能还原完整对话，供人工分析失败轨迹
+- `truncation`：一次 `finish_reason=length` 的响应被丢弃（步数、内容长度、被丢弃的工具调用名、连续次数）
 - `run_end`：FailReason 或 submitted，总成本，总步数
 
 ### 5.8 回放模型（`llm/replay.py`）
 
 - 录制模式：把每次 LLM 请求的哈希和对应响应写入 `tests/fixtures/replays/*.jsonl`。
 - 回放模式：按请求哈希找回响应，找不到就直接报错。CI 和端到端测试都只用回放模式，不产生 API 费用。
+- **请求哈希不含工具结果的内容**：它由模型、`thinking`、`max_tokens`、工具定义和除工具结果内容外的全部消息决定。原因：沙箱输出里有耗时、临时路径、`ls` 日期，`find`/`ls` 的顺序还取决于宿主机文件系统，换机器（如 CI）就会变。工具输出另做规范化摘要比对，不一致只记入 `ReplayClient.mismatches`，设 `HARNESS_STRICT_REPLAY=1` 才报错；端到端测试靠断言沙箱里项目自己的测试从失败变成通过来兜底。
+- 录制必须用显式设了 `llm.model` 的配置（键里用的是 `cfg.model or $MODEL_MAIN`，CI 没有 `.env`）。
+- 回放的轨迹目前不写 `llm_call` span，只有 `run_end` 的合计；`aggregate.py` 或 CI 冒烟如要与真实运行同形状，需由回放按录制的 usage 补写（待做）。
 
 ## 6. 指标定义（报告里统一用这些名字）
 

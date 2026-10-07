@@ -54,6 +54,7 @@ class AgentState:
     format_errors_consecutive: int = 0
     truncated_outputs: int = 0
     truncated_consecutive: int = 0
+    no_tool_consecutive: int = 0  # replies with no tool call, in a row
 
     fail_reason: FailReason | None = None
     fail_detail: str | None = None

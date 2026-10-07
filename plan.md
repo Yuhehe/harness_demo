@@ -64,7 +64,7 @@
   - [x] 验证计划步骤 7–9 已完成（2026-10-05，详见 `docs/notes.md` §5 末尾）：① 错误密钥抛 `BadRequestError` 但 `status_code=401`（不是 `AuthenticationError`），所以重试要**按 `status_code` 分类**，不能按类名；不存在的模型名返回支持的名字 `deepseek-flash`、`deepseek-v4-pro`；② 本机假服务器：429/500/502/503/断连/缺 `choices` 都映射到 429 或 5xx 的状态码，`Timeout` 是 408，畸形的 200 是 `APIError(200)`，**LiteLLM 没有隐藏重试**，`Retry-After` 在 `e.litellm_response_headers` 里；③ mini-swe-agent 冒烟成功（见下面 mini-swe-agent 一项）
   - [ ] 步骤 5（缓存命中和最短前缀）、步骤 6（对账）**暂不做**（你的决定：有成熟文档可参考）。**风险**：LiteLLM 的 `completion_cost` 按**计算时的当前时间**使用错峰价（标准价的 50%），不对账的情况下尤其要靠固定费率的自有价格表，详见下面的待决策项
   - [x] **成本口径已决定**（2026-10-05，你的决定，以最后一次为准）：**同时保留 token 指标和美元成本**（`tokens_in` 拆成未命中和命中缓存、`tokens_out` 含思考 token、`cache_hit_rate`、`steps`、`latency`，以及 `cost_per_task`）；**美元成本用固定的高峰价（标准价）按记录的 token 数计算，不依赖时钟**；预算保护仍按美元用同一个标准价，**CLAUDE.md 不需要改**。公式与 LiteLLM 的标准价结果完全一致（冒烟轨迹 0.016967）。B0 通过 `LITELLM_MODEL_REGISTRY_PATH=eval/baselines/litellm_registry.json` 把错峰价设成与标准价相同，已离线验证。详见 `docs/notes.md` §5 末尾
-  - [x] 价格覆盖文件 `eval/baselines/litellm_registry.json` 和 4 个单元测试 `tests/unit/test_price_registry.py`、`tests/conftest.py`（固定 `LITELLM_LOCAL_MODEL_COST_MAP=True`）已完成（2026-10-05，未提交）：覆盖文件的标准价与 LiteLLM 一致；不用覆盖文件时成本随错峰判断变化；用了之后无论是否错峰都是标准价。**第 1 天写 `llm/cost.py` 时**：用同一个公式和一张标准价表，不调用 `completion_cost`，每个 `llm_call` 记录原始 token 和成本，`run_start` 记录价格表的哈希
+  - [x] 价格覆盖文件 `eval/baselines/litellm_registry.json` 和 4 个单元测试 `tests/unit/test_price_registry.py`、`tests/conftest.py`（固定 `LITELLM_LOCAL_MODEL_COST_MAP=True`）已完成（2026-10-05，已提交）：覆盖文件的标准价与 LiteLLM 一致；不用覆盖文件时成本随错峰判断变化；用了之后无论是否错峰都是标准价。**第 1 天写 `llm/cost.py` 时**：用同一个公式和一张标准价表，不调用 `completion_cost`，每个 `llm_call` 记录原始 token 和成本，`run_start` 记录价格表的哈希
   - [x] **重试策略已决定**（2026-10-05，你的决定：方案 B）：除 429 和 5xx 外，也重试**客户端超时**（`Timeout`）和**不可用的 200**（响应体不是合法 JSON 或缺 `choices`）；总共最多 3 次尝试，指数退避加抖动，429 遵守 `Retry-After`；按（异常类型、状态码、响应形状）判断；4xx 不重试；每次记录次数和 `retry_reason`；用尽后以 `env_error` 终止；重试等待计入墙钟时间和延迟。**CLAUDE.md §5.1 和 §5.7 已按此修改**；问题清单和策略详见 `docs/notes.md` §5
   - [x] **输出上限、超时、流式、截断、失败尝试已决定**（2026-10-06，你的决定：全部按我的方案；调研数据和依据见 `docs/notes.md` §5，CLAUDE.md §5.1、§5.3、§5.7 已修改）：① 当前只用非流式，基本功能完成后再支持流式；② 思考开 `max_tokens=65536`、`timeout_s=900`，思考关 `max_tokens=16384`、`timeout_s=300`，成对设置，超时必须大于顶满上限的耗时；③ `finish_reason=length` 不重试，半截工具调用不执行，连续 3 次截断记为 `format_error`（详情 `output_truncated`），另设 `truncated_outputs` 计数器；④ `insufficient_system_resource` 和 `aborted` 加入重试类别并丢弃半截内容；⑤ 重试保持最多 3 次尝试；⑥ 主指标只统计成功调用，失败尝试另记并估算浪费；⑦ `context.budget_tokens` 只算输入；⑧ B0 在关闭思考时显式设 `max_tokens=16384` 和超时
   - [ ] 仍待验证：真实 DeepSeek 上的 429、5xx、超时表现和失败请求的计费；`aborted` 的触发场景；速度数据每项只有 1 个样本，要用第 1 天 `dev_5` 的真实延迟校准超时；B0 的 `model_kwargs.max_tokens` 和 `timeout` 是否在 mini-swe-agent 里生效（没实测）
@@ -72,12 +72,12 @@
 - [~] 建仓库，写 `pyproject.toml`（`requires-python = ">=3.12,<3.13"`）、`.python-version`（`3.12`）、`.env.example`、`.gitignore`；用 `uv add` / `uv add --dev` 加依赖，`uv sync` 生成 `.venv` 和 `uv.lock`（**提交 `uv.lock`**）；加入 CLAUDE.md、plan.md 和 README.md
   - [x] `.python-version`（3.12）、`pyproject.toml`（`requires-python` 已锁 `>=3.12,<3.13`）、`.venv`（Python 3.12.12）、`uv.lock`（已提交）、plan.md、README.md 已就绪
   - [x] 依赖已用 `uv add` / `uv add --dev` 加入并提交（`e1aff8e`，121 个包）：运行时 litellm、docker、pydantic、pyyaml、fastapi、uvicorn、aiosqlite、python-dotenv、swebench；dev 组 ruff、pytest、pytest-asyncio、httpx、mini-swe-agent
-  - [x] `pyproject.toml` 加了 `[tool.pytest.ini_options]`（`testpaths=["tests"]`、`pythonpath=["eval/swebench"]`，让测试能按模块名 import `eval/swebench/` 里的脚本）（2026-10-04，未提交）
-  - [ ] （**暂不处理**，你的决定，2026-10-05）`pyproject.toml` 的 `name = "harness-demo"`（项目名是 harness-lab）和 `description` 还没改，也还没有 `[build-system]` / `[project.scripts]`（第 1 天写 `cli.py` 时一起配）
+  - [x] `pyproject.toml` 加了 `[tool.pytest.ini_options]`（`testpaths=["tests"]`、`pythonpath=["eval/swebench"]`，让测试能按模块名 import `eval/swebench/` 里的脚本）（2026-10-04，已提交）
+  - [ ] （**暂不处理**，你的决定，2026-10-05）`pyproject.toml` 的 `name = "harness-demo"`（项目名是 harness-lab）和 `description` 还没改。`[build-system]`、`[project.scripts]`、`[tool.uv.build-backend]` 已在第 1 天（2026-10-06）补上
   - [x] `.env.example` 已创建（2026-10-04）：OpenAI 兼容格式，含 `OPENAI_API_KEY`、`OPENAI_API_BASE`、`MODEL_MAIN`、`MODEL_CHEAP`、`MAX_TOTAL_COST_USD`（其中 `MAX_TOTAL_COST_USD=20` 只是占位值，待 dev_5 实测后重填）
   - [x] `CLAUDE.md` 已从 `.gitignore` 移除并提交（`e1aff8e`）
   - [x] `.gitignore` 已加入 `.env`（2026-10-04，`git check-ignore` 确认生效）
-  - [x] `.gitignore` 已加入 `results/runs/`、`.mswea/`（mini-swe-agent 的全局配置目录），并补了文件末尾换行（2026-10-04，未提交）
+  - [x] `.gitignore` 已加入 `results/runs/`、`.mswea/`（mini-swe-agent 的全局配置目录），并补了文件末尾换行（2026-10-04，已提交）
   - [x] 截至 2026-10-05，上述改动都已提交（最近一次 `aafd242`），工作区干净
 - [x] `eval/swebench/select_subset.py`：从 SWE-bench Verified 里固定随机种子选题，**集中在 3–5 个仓库**以减少镜像数量。输出 `verified_50.txt` 和 `dev_5.txt`，两者不重叠（2026-10-04；**配额已于 2026-10-05 确认，保持当前值**；真正的冻结标签 `v0.1-frozen` 在第 2 天主实验前打）
   - 种子 42；数据集固定在 revision `78f471bf655a3137b2e8a75af1501690ec009ec3`；输出同时写 `configs/subsets/subsets_meta.json`（种子、revision、配额、实际计数、难度分布，无时间戳）
@@ -135,7 +135,7 @@
 - [x] 手动在 `dev_5` 的 2 道题上跑通，能生成补丁（2026-10-06：`django__django-11066` 和 `sympy__sympy-16886`，flash 和 v4-pro 各跑一遍；补丁都是非空的，用官方 `swebench eval` 判分都是 resolved，**这是 dev 题的开发检查，不是实验结果，不进报告**）
 
 **验收（2026-10-06 全部达成）**
-- [x] `uv run pytest -q` 全部通过（195 个测试）；`ruff check` 和 `ruff format --check` 通过
+- [x] `uv run pytest -q` 全部通过（195 个测试；2026-10-07 复核为 194 通过、1 跳过，跳过的是只在 `HARNESS_STRICT_REPLAY=1` 时运行的严格回放测试）；`ruff check` 和 `ruff format --check` 通过
 - [x] toy_repo 能修复（回放测试断言项目自己的测试通过）
 - [x] 2 道 SWE-bench 题能产生非空补丁，轨迹文件完整（每个工具调用恰好对应一条 tool 消息，`run_start` 到 `run_end` 俱全，`llm_call` 字段齐全）
 - [x] 记录单题成本和平均步数：用默认配置（主模型 v4-pro，思考开，标准价）跑 `dev_5` 的 2 题，`django__django-11066` 15 步 / $0.0279，`sympy__sympy-16886` 11 步 / $0.0177，**平均 13 步、$0.0228**（只有 2 个样本，是开发检查，不是实验结果）；用 flash 跑同样两题是 11 步 / $0.0046 和 9 步 / $0.0020
@@ -146,6 +146,8 @@
 
 - [ ] `context/`：`tokens.py`（计数）、`manager.py`，以及四种策略；实现可恢复截断；压缩记录 span
 - [ ] 实现 KV 缓存友好的规则（CLAUDE.md §5.2），加单元测试：连续两轮的请求前缀逐字节相同
+- [x] `no_submit` 的用法（2026-10-07 完成）：连续 3 次纯文字回复以 `no_submit` 终止（详情 `no_tool_call`），不计入 `format_errors`；纯文字回合打断连续格式错误的计数，带工具调用的回合重置纯文字计数。改动在 `agent/loop.py`、`agent/state.py`，`tests/unit/test_loop.py` 补了 4 个测试，全套 197 通过、1 跳过
+- [ ] 回放客户端按录制的 usage 补写 `llm_call` span，使回放轨迹与真实运行同形状（见 `docs/notes.md` §10；第 4 天 CI 冒烟和 `aggregate.py` 需要）
 - [ ] 配置系统：`default.yaml` 和所有 `ablations/*.yaml`；启动时校验配置，并打印与主配置的差异
 - [ ] `security/`：先把 policy 和 guard 的**基础版**接进循环（主配置默认 guard 开启），第 3 天再完善
 - [ ] `eval/swebench/run_agent.py`：并发执行（`--workers`）、断点续跑、输出 `preds.jsonl`（字段 `instance_id`、`model_name_or_path`、`model_patch`）、跑之前打印成本预估并等待确认
@@ -410,9 +412,9 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - 回放：第一次录制后测试失败，原因是**测试自己先跑了一遍测试，生成了 `__pycache__`，改变了 agent 看到的环境**；进一步发现 `find`、`ls` 的顺序依赖宿主机文件系统，所以键不再包含工具输出内容
 
 **与 CLAUDE.md 不一致或值得你决定的地方**（我没有改 CLAUDE.md）
-- §3.2 还写着"成本用 `litellm.completion_cost` 计算"，但 §5.1 和实际实现用的是固定标准价的自有公式（`completion_cost` 随时钟用错峰价）。此前我说过 CLAUDE.md 不需要改，**漏看了这一处**
-- §5.7 的 span 清单里没有 `message`，实现里为了崩溃后仍保留完整对话加了这一类
-- `FailReason.no_submit` 目前没有使用：只回文字的回复按格式错误计数，连续 3 次记为 `format_error`
+- §3.2 还写着"成本用 `litellm.completion_cost` 计算"，但 §5.1 和实际实现用的是固定标准价的自有公式（`completion_cost` 随时钟用错峰价）。此前我说过 CLAUDE.md 不需要改，**漏看了这一处**（2026-10-07 已改 CLAUDE.md §3.2）
+- §5.7 的 span 清单里没有 `message`，实现里为了崩溃后仍保留完整对话加了这一类（2026-10-07 已补入 §5.7，同时补了 `truncation`）
+- `FailReason.no_submit` 目前没有使用：只回文字的回复按格式错误计数，连续 3 次记为 `format_error`（2026-10-07 已改：现在连续 3 次纯文字回复记为 `no_submit`，见第 2 天一项）
 - `pyproject.toml` 除了你说的项目名和描述之外，我加了 `[build-system]`、`[project.scripts]`、`[tool.uv.build-backend]`（让 `uv run harness` 可用，样板由 `uv init --package` 生成）、pytest 的 `asyncio_mode`、标记、`norecursedirs` 和 `tests` 的 `pythonpath`
 - 步数、成本、墙钟上限只是**开发默认值**（50 步、$0.5、1800 秒），真正的实验值要在第 2 天创建 `configs/default.yaml` 时定
 - 连接错误（没有响应，如 DNS、拒绝连接）我归入 `timeout` 类重试：规则里没有明说，是我的判断

@@ -239,21 +239,55 @@ async def test_a_clean_step_resets_the_consecutive_count():
     assert result.submitted and result.metrics["format_errors"] == 4
 
 
-async def test_a_reply_without_a_tool_call_is_a_format_error_with_a_nudge():
+async def test_a_reply_without_a_tool_call_is_not_a_format_error_and_gets_a_nudge():
     script = [
         R(content="I think it is fine.", finish="stop"),
         R(call("submit", id_="c2")),
     ]
     result, llm, _ = await run(script)
-    assert result.submitted and result.metrics["format_errors"] == 1
+    assert result.submitted and result.metrics["format_errors"] == 0
     msgs = llm.calls[1]["messages"]
     assert [m["role"] for m in msgs] == ["system", "user", "assistant", "user"]
     assert "no tool call" in msgs[3]["content"] and "[step 1/10" in msgs[3]["content"]
 
 
-async def test_three_text_only_replies_end_the_run():
-    result, _, _ = await run([R(content="x", finish="stop")] * 5)
-    assert result.fail_reason == FailReason.format_error
+async def test_three_text_only_replies_end_the_run_as_no_submit():
+    result, llm, _ = await run([R(content="x", finish="stop")] * 5)
+    assert (
+        result.fail_reason == FailReason.no_submit
+        and result.fail_detail == "no_tool_call"
+    )
+    assert len(llm.calls) == 3 and not result.submitted
+    assert result.metrics["format_errors"] == 0
+
+
+async def test_a_tool_call_resets_the_text_only_count():
+    text = R(content="x", finish="stop")
+    script = [
+        text,
+        text,
+        R(call("bash", {"command": "ls"}, "c3")),
+        text,
+        text,
+        R(call("submit", id_="c6")),
+    ]
+    result, _, _ = await run(script)
+    assert result.submitted and result.fail_reason is None
+
+
+async def test_a_malformed_call_also_resets_the_text_only_count():
+    text = R(content="x", finish="stop")
+    script = [text, text, R(call("nope", id_="c3")), text, text, R(call("submit"))]
+    result, _, _ = await run(script)
+    assert result.submitted and result.metrics["format_errors"] == 1
+
+
+async def test_text_only_replies_and_format_errors_do_not_add_up_across_kinds():
+    text = R(content="x", finish="stop")
+    bad = R(call("nope", id_="c"))
+    # bad, bad, text, bad: the text turn breaks the format-error run, so no limit is hit
+    result, _, _ = await run([bad, bad, text, bad, R(call("submit", id_="s"))])
+    assert result.submitted and result.metrics["format_errors"] == 3
 
 
 # ---- truncation ------------------------------------------------------------------------

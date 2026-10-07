@@ -151,7 +151,7 @@ curl -N localhost:8000/tasks/{{id}}/events     # SSE stream of spans
 ## Reproduce the experiments
 
 ```bash
-uv run python eval/swebench/pull_images.py --subset configs/subsets/verified_50.txt
+uv run python eval/swebench/pull_images.py --subsets configs/subsets/verified_50.txt
 uv run python eval/swebench/run_agent.py --config configs/default.yaml --subset configs/subsets/verified_50.txt --workers {{4}} --run-id m0
 uv run python eval/swebench/score.py --run-id m0
 # baseline: see eval/baselines/mini_swe_agent.md
