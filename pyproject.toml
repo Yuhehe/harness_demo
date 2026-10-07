@@ -25,10 +25,28 @@ dev = [
     "ruff>=0.16.10",
 ]
 
+[build-system]
+requires = ["uv_build>=0.9.13,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+# The project is named harness-demo but the importable package is src/harness.
+module-name = "harness"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # eval/ scripts are run as files (not a package); let tests import them by module name.
-pythonpath = ["eval/swebench"]
+# tests/ is on the path so test modules can share tests/fakes.py.
+pythonpath = ["eval/swebench", "tests"]
+asyncio_mode = "auto"
+# The toy repository under tests/fixtures has a deliberate bug and its own tests: they are
+# test DATA for the agent, not part of this project's suite. (This replaces pytest's
+# default list, so the usual ones are repeated.)
+norecursedirs = [".*", "build", "dist", "*.egg", "venv", "fixtures"]
+markers = [
+    "docker: needs a running Docker daemon and the toy image (skipped otherwise)",
+    "swebench_image: needs a local SWE-bench instance image (skipped otherwise)",
+]
 
 [tool.ruff]
 # ruff 0.16 also formats Python code blocks inside Markdown. Our docs (CLAUDE.md, plan.md,
