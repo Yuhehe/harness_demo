@@ -1,0 +1,9 @@
+# Configuration used to record and replay the toy end-to-end run. The replay key includes
+# model, thinking and max_tokens, so changing any of them requires re-recording.
+llm:
+  model: deepseek/deepseek-flash
+  thinking: enabled
+limits:
+  max_steps: 20
+  max_cost_per_task_usd: 0.2
+  max_wall_seconds: 600
