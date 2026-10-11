@@ -80,7 +80,7 @@ async def run_task(
     )
     tools = registry.schemas()
     context_mgr = context_mgr or ContextManager(cfg.context)
-    guard = guard or Guard(cfg.guard.enabled)
+    guard = guard or Guard.from_config(cfg.guard, sandbox.workdir)
     deadline = state.started_at + cfg.limits.max_wall_seconds
 
     tracer.emit(
@@ -95,6 +95,8 @@ async def run_task(
         seed=cfg.seed,
         tools=registry.names,
         prices_hash=cost.prices_hash(),
+        guard_enabled=cfg.guard.enabled,
+        policy_hash=getattr(guard, "policy_hash", None),
         task=task.instance_id,
         **(meta or {}),
     )
@@ -247,6 +249,7 @@ async def _handle_response(
                 tool=call.name,
                 action=decision.action,
                 rule_id=decision.rule_id,
+                level=decision.level,
             )
             if decision.allowed:
                 result = await registry.run(call.name, call.arguments, sandbox)

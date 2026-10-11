@@ -425,6 +425,9 @@ async def test_context_overflow_for_the_none_strategy_uses_the_previous_prompt_s
 
 # ---- guard, sandbox failure, bugs ------------------------------------------------------
 class Deny(Guard):
+    def __init__(self):
+        super().__init__(None, enabled=False)
+
     def check(self, call, state):
         return (
             Decision("deny", "R1", "no bash today")
