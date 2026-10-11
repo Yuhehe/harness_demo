@@ -49,6 +49,12 @@ class AgentState:
     reasoning_tokens: int = 0
     cost_usd: float = 0.0  # successful calls only, fixed standard price
     last_prompt_tokens: int = 0
+    # Compaction makes LLM calls of its own: their cost is part of cost_usd (and so of the
+    # budget guard), their tokens are kept apart from the agent's tokens_in / tokens_out.
+    compactions: int = 0
+    compaction_cost_usd: float = 0.0
+    compaction_tokens_in: int = 0
+    compaction_tokens_out: int = 0
 
     format_errors: int = 0
     format_errors_consecutive: int = 0
@@ -79,6 +85,13 @@ class AgentState:
         self.last_prompt_tokens = u.prompt_tokens
         self.cost_usd += cost.cost_usd(self.model, u)
 
+    def add_compaction(self, cost_usd: float, tokens_in: int, tokens_out: int) -> None:
+        self.compactions += 1
+        self.compaction_cost_usd += cost_usd
+        self.compaction_tokens_in += tokens_in
+        self.compaction_tokens_out += tokens_out
+        self.cost_usd += cost_usd
+
     def finish(self, reason: FailReason | None, detail: str | None = None) -> None:
         self.done = True
         if reason is not None and self.fail_reason is None:
@@ -94,4 +107,8 @@ class AgentState:
             "cost_usd": self.cost_usd,
             "format_errors": self.format_errors,
             "truncated_outputs": self.truncated_outputs,
+            "compactions": self.compactions,
+            "compaction_cost_usd": self.compaction_cost_usd,
+            "compaction_tokens_in": self.compaction_tokens_in,
+            "compaction_tokens_out": self.compaction_tokens_out,
         }

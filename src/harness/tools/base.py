@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
@@ -28,6 +29,36 @@ class ToolResult:
     format_error: bool = False
 
 
+# The note the limiter writes into a cut output, and the parser for it. Two modules depend on
+# this format: the limiter writes it, and the `truncate` context strategy reads the path from it
+# to see that an output is already saved. They share these definitions so that changing the
+# wording cannot silently break the second one (tests/unit/test_tools.py checks the round trip).
+OUT_DIR = "/tmp/harness"
+OUT_PATH = OUT_DIR + "/out_{n}.txt"
+OMITTED_NOTE = (
+    "[... {omitted} chars omitted; full output of {total} chars saved at {path} ...]"
+)
+_NOTE_RE = re.compile(
+    re.escape(OMITTED_NOTE)
+    .replace(re.escape("{omitted}"), r"\d+")
+    .replace(re.escape("{total}"), r"(?P<total>\d+)")
+    .replace(re.escape("{path}"), r"(?P<path>" + re.escape(OUT_DIR) + r"/out_\d+\.txt)")
+)
+
+
+def saved_output(text: str) -> tuple[str, int] | None:
+    """(sandbox path, length in chars) of the full output, if `text` contains a limiter note;
+    else None. Only the complete note counts, so text that merely mentions a path does not
+    match."""
+    match = _NOTE_RE.search(text)
+    return (match["path"], int(match["total"])) if match else None
+
+
+def saved_path(text: str) -> str | None:
+    found = saved_output(text)
+    return found[0] if found else None
+
+
 class OutputLimiter:
     """Keeps only the head and tail of a long output and saves the whole thing in the sandbox,
     so the model can read the rest when it needs it (CLAUDE.md 5.3)."""
@@ -40,12 +71,13 @@ class OutputLimiter:
         if len(text) <= self.max_chars:
             return text, False
         self._counter += 1
-        path = f"/tmp/harness/out_{self._counter}.txt"
+        path = OUT_PATH.format(n=self._counter)
         await sandbox.write_file(path, text)
         half = self.max_chars // 2
-        omitted = len(text) - 2 * half
-        note = f"\n[... {omitted} chars omitted; full output of {len(text)} chars saved at {path} ...]\n"
-        return text[:half] + note + text[-half:], True
+        note = OMITTED_NOTE.format(
+            omitted=len(text) - 2 * half, total=len(text), path=path
+        )
+        return text[:half] + f"\n{note}\n" + text[-half:], True
 
 
 class Tool(ABC):

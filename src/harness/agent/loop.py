@@ -19,8 +19,8 @@ from typing import Any
 
 from harness.agent import limits, prompts
 from harness.agent.state import AgentState, FailReason, Task
-from harness.config import AgentConfig
-from harness.context.manager import ContextManager, ContextOverflow
+from harness.config import AgentConfig, summary_llm_config
+from harness.context.manager import NEEDS_SUMMARIZER, ContextManager, ContextOverflow
 from harness.llm import cost
 from harness.llm.client import LLMClient
 from harness.llm.types import (
@@ -67,6 +67,7 @@ async def run_task(
     tracer: Tracer,
     *,
     context_mgr: ContextManager | None = None,
+    summarizer: LLMClient | None = None,
     guard: Guard | None = None,
     clock: Callable[[], float] = time.monotonic,
     meta: dict[str, Any] | None = None,
@@ -79,7 +80,18 @@ async def run_task(
         cfg, OutputLimiter(cfg.tool_output.max_chars), state.todo, state.submit_flag
     )
     tools = registry.schemas()
-    context_mgr = context_mgr or ContextManager(cfg.context)
+    if context_mgr is None:
+        context_mgr = ContextManager(
+            cfg.context,
+            model=model,
+            tools=tools,
+            sandbox=sandbox,
+            tracer=tracer,
+            summarizer=summarizer,
+            summary_model=summary_llm_config(cfg).resolved_model()
+            if cfg.context.strategy in NEEDS_SUMMARIZER
+            else None,
+        )
     guard = guard or Guard.from_config(cfg.guard, sandbox.workdir)
     deadline = state.started_at + cfg.limits.max_wall_seconds
 
@@ -96,6 +108,7 @@ async def run_task(
         tools=registry.names,
         prices_hash=cost.prices_hash(),
         guard_enabled=cfg.guard.enabled,
+        summary_model=context_mgr.summary_model,
         policy_hash=getattr(guard, "policy_hash", None),
         task=task.instance_id,
         **(meta or {}),
@@ -114,6 +127,9 @@ async def run_task(
         while not state.done:
             wasted_cost = cost.prompt_cost_usd(
                 model, llm.stats.wasted_prompt_tokens_est
+            ) + cost.prompt_cost_usd(
+                context_mgr.summary_model or model,
+                context_mgr.wasted_prompt_tokens_est,
             )
             stop = limits.check(
                 state, cfg.limits, wasted_cost_usd=wasted_cost, now=clock()
@@ -122,7 +138,7 @@ async def run_task(
                 state.finish(*stop)
                 break
             try:
-                messages = await context_mgr.build(state)
+                messages = await context_mgr.build(state, deadline=deadline)
             except ContextOverflow as e:
                 state.finish(FailReason.context_overflow, str(e))
                 break

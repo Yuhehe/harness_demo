@@ -5,7 +5,7 @@ from fakes import FakeSandbox
 
 from harness.config import AgentConfig
 from harness.sandbox.base import ExecResult
-from harness.tools.base import OutputLimiter, validate_args
+from harness.tools.base import OMITTED_NOTE, OutputLimiter, saved_path, validate_args
 from harness.tools.bash import BashTool
 from harness.tools.edit import VIEW_WINDOW, StrReplaceTool, ViewTool
 from harness.tools.registry import Registry
@@ -33,6 +33,29 @@ async def test_long_output_keeps_head_and_tail_and_is_saved_in_the_sandbox():
     assert "/tmp/harness/out_1.txt" in text and f"{len(full)} chars" in text
     assert sb.files["/tmp/harness/out_1.txt"] == full
     assert len(text) < len(full)
+
+
+async def test_the_note_the_limiter_writes_is_parsed_back_by_saved_path():
+    # truncate.py finds already-saved outputs through saved_path: the two must agree
+    sb = FakeSandbox()
+    limiter = lim(100)
+    first, _ = await limiter.apply("A" * 500, sb)
+    second, _ = await limiter.apply("B" * 500, sb)
+    assert saved_path(first) == "/tmp/harness/out_1.txt"
+    assert saved_path(second) == "/tmp/harness/out_2.txt"
+    assert saved_path("short, never cut") is None
+    note = OMITTED_NOTE.format(omitted=1, total=2, path="/tmp/harness/out_3.txt")
+    assert saved_path(f"x\n{note}\ny") == "/tmp/harness/out_3.txt"
+
+
+def test_saved_path_needs_the_whole_note_not_just_a_path():
+    assert saved_path("saved at /tmp/harness/out_1.txt") is None
+    assert (
+        saved_path("[... 5 chars omitted; saved at /tmp/harness/out_1.txt ...]") is None
+    )
+    assert (
+        saved_path(OMITTED_NOTE.format(omitted=1, total=2, path="/etc/passwd")) is None
+    )
 
 
 async def test_saved_outputs_are_numbered_and_the_result_is_deterministic():

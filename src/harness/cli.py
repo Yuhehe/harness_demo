@@ -103,7 +103,8 @@ async def _run(args: argparse.Namespace) -> int:
 
     from harness.agent.loop import run_task
     from harness.agent.state import Task
-    from harness.config import load_config
+    from harness.config import load_config, summary_llm_config
+    from harness.context.manager import NEEDS_SUMMARIZER
     from harness.llm.client import LiteLLMClient
     from harness.llm.replay import RecordingClient, ReplayClient
     from harness.sandbox.docker_sandbox import DockerSandbox
@@ -139,12 +140,24 @@ async def _run(args: argparse.Namespace) -> int:
         instance_id=task.instance_id,
     )
     try:
+        summarizer = None
+        summary_cfg = (
+            summary_llm_config(cfg)
+            if cfg.context.strategy in NEEDS_SUMMARIZER
+            else None
+        )
         if args.replay:
             llm = ReplayClient(cfg.llm, args.replay)
+            if summary_cfg:
+                summarizer = ReplayClient(summary_cfg, args.replay)
         else:
             llm = LiteLLMClient(cfg.llm, tracer)
+            if summary_cfg:
+                summarizer = LiteLLMClient(summary_cfg, tracer, purpose="summary")
             if args.record:
                 llm = RecordingClient(llm, cfg.llm, args.record)
+                if summarizer:
+                    summarizer = RecordingClient(summarizer, summary_cfg, args.record)
         sbx = cfg.sandbox
         async with DockerSandbox(
             image,
@@ -162,6 +175,7 @@ async def _run(args: argparse.Namespace) -> int:
                 sandbox,
                 llm,
                 tracer,
+                summarizer=summarizer,
                 meta={"run_id": run_id, **_git_meta()},
             )
     finally:
@@ -186,6 +200,11 @@ async def _run(args: argparse.Namespace) -> int:
         f"  cost=${m['cost_usd']:.4f} (fixed standard price)  failed_attempts={m['failed_attempts']}"
         f"  format_errors={m['format_errors']}  truncated={m['truncated_outputs']}  wall={m['wall_seconds']:.0f}s"
     )
+    if m["compactions"]:
+        print(
+            f"  compactions={m['compactions']} (cost ${m['compaction_cost_usd']:.4f}, "
+            f"summary tokens in/out {m['compaction_tokens_in']}/{m['compaction_tokens_out']})"
+        )
     print(f"  patch: {len(result.patch)} chars -> {patch_path}")
     print(f"  trajectory: {tracer.path}")
     return 0 if result.submitted else 1
