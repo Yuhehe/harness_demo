@@ -7,7 +7,7 @@ What a request is matched on matters, because requests contain *tool outputs* an
 sandbox output is not reproducible across runs and machines (`Ran 1 test in 0.003s`, temp
 paths, `ls` dates, and the ORDER of `find`/`ls` output, which depends on the host file
 system). So the key is built from everything that determines the recorded conversation
-path: model, thinking, max_tokens, tools, and every message EXCEPT the content of tool
+path: model, thinking, reasoning_effort, max_tokens, tools, and every message EXCEPT the content of tool
 results. Assistant messages (which come from the recording) and user messages are in it.
 
 Tool outputs are still compared, through a normalized digest (volatile parts replaced by
@@ -101,6 +101,7 @@ def fingerprint(
             {
                 "model": model,
                 "thinking": cfg.thinking,
+                "reasoning_effort": cfg.reasoning_effort,
                 "max_tokens": cfg.max_tokens,
                 "tools": sorted_tools,
                 "messages": path,
@@ -222,4 +223,7 @@ class ReplayClient:
                 f"message {best_common} differs.\n  now:      {previews[best_common]}\n"
                 f"  recorded: {best['msg_previews'][best_common]}"
             )
-        return head + " Model, thinking, max_tokens or tools differ from the recording."
+        return (
+            head
+            + " Model, thinking, reasoning_effort, max_tokens or tools differ from the recording."
+        )

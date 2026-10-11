@@ -199,7 +199,9 @@ async def test_a_miss_caused_by_other_parameters_says_so(tmp_path):
     path = tmp_path / "r.jsonl"
     await RecordingClient(ScriptedLLM([resp()]), CFG, path).complete(convo(), TOOLS)
     other = ReplayClient(LLMConfig(model=CFG.model, thinking="disabled"), path)
-    with pytest.raises(ReplayMiss, match="thinking, max_tokens or tools"):
+    with pytest.raises(
+        ReplayMiss, match="thinking, reasoning_effort, max_tokens or tools"
+    ):
         await other.complete(convo(), TOOLS)
 
 

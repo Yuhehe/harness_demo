@@ -107,6 +107,29 @@ async def test_generic_openai_route_sends_thinking_in_the_body(make):
     assert "tools" not in sent
 
 
+@pytest.mark.parametrize("model", ["deepseek/deepseek-flash", "openai/deepseek-flash"])
+@pytest.mark.parametrize("effort", ["high", "max"])
+async def test_reasoning_effort_reaches_the_server(make, model, effort):
+    # LiteLLM's DeepSeek provider pops the `reasoning_effort=` keyword and keeps only on/off,
+    # so the value has to travel in extra_body (docs/notes.md section 11).
+    client, server, _, _ = make(
+        [Step()], model=model, thinking="enabled", reasoning_effort=effort
+    )
+    await client.complete(MSGS)
+    sent = server.requests[0]["body"]
+    assert sent["reasoning_effort"] == effort
+    assert sent["thinking"] == {"type": "enabled"}
+
+
+async def test_default_effort_is_sent_explicitly_and_thinking_off_sends_none(make):
+    client, server, _, _ = make([Step()], thinking="enabled")
+    await client.complete(MSGS)
+    assert server.requests[0]["body"]["reasoning_effort"] == "high"
+    client, server, _, _ = make([Step()], thinking="disabled")
+    await client.complete(MSGS)
+    assert "reasoning_effort" not in server.requests[0]["body"]
+
+
 # ---- retries ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
     ("status", "reason"),

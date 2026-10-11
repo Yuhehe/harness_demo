@@ -1,0 +1,52 @@
+# M0: the main configuration. Every file in configs/ablations/ extends this one and changes
+# one factor. Frozen with the v0.1-frozen tag (CLAUDE.md 2.4).
+#
+# llm.model is left unset on purpose: the model comes from MODEL_MAIN in .env (and the
+# summarizer from MODEL_CHEAP), so the same files run on any model. The recorded replays use
+# tests/fixtures/toy_config.yaml, which names its model explicitly.
+
+llm:
+  thinking: enabled
+  reasoning_effort: high   # decided 2026-10-07, see docs/notes.md section 11
+  # max_tokens / timeout_s: left to the thinking-paired defaults (65536 / 900 s)
+
+action_space: tools        # bash, view, str_replace, search, todo, submit
+planning: "on"             # quoted: a bare `on` is a YAML boolean
+
+context:
+  strategy: hybrid         # clear old outputs first, summarize only if that is not enough
+  budget_tokens: 128000    # counts the prompt only (CLAUDE.md 5.3)
+  high_water: 0.85
+  low_water: 0.5
+  keep_recent_min_turns: 2
+  keep_recent_ratio: 0.25   # upper bound of the protected tail, as a share of budget_tokens
+  min_gain_ratio: 0.1
+  # What the summarizer reads: the full history as the agent saw it, reasoning included.
+  # Shrunk and retried only when a summary call fails for size (docs/notes.md section 12).
+  summary_include_reasoning: true
+  summary_retries: 3
+  summary_clip_chars: 4000
+  summary_clip_scale: 0.5
+
+guard:
+  enabled: true
+  policy_path: configs/policy.yaml
+
+sandbox:
+  network_mode: none
+  mem_limit: 4g
+  cpus: 2.0
+  pids_limit: 512
+
+tool_output:
+  max_chars: 8000
+
+# PROVISIONAL: to be confirmed against dev_5 before the freeze (plan.md, day 2). B0 gets the
+# same step and cost limits (eval/baselines/mini_swe_agent.md).
+limits:
+  max_steps: 100
+  max_cost_per_task_usd: 1.0
+  max_wall_seconds: 1800
+
+bash_timeout_s: 120
+seed: 0

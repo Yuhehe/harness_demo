@@ -89,6 +89,7 @@ async def run_task(
         config_hash=cfg.config_hash(),
         model=model,
         thinking=cfg.llm.thinking,
+        reasoning_effort=cfg.llm.reasoning_effort,
         max_tokens=cfg.llm.max_tokens,
         timeout_s=cfg.llm.timeout_s,
         seed=cfg.seed,

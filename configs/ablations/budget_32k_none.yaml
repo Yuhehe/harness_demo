@@ -1,0 +1,6 @@
+# A6 x A1: budget = 32k with context = none (the two factors combined; the one exception to 'one change').
+extends: ../default.yaml
+
+context:
+  strategy: none
+  budget_tokens: 32000

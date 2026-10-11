@@ -1,0 +1,5 @@
+# A3: context = truncate. Rule-based clearing of old tool outputs, no summary calls.
+extends: ../default.yaml
+
+context:
+  strategy: truncate

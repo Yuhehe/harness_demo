@@ -1,8 +1,7 @@
 """Run configuration (pydantic v2 + YAML).
 
-Day 1 holds only what the loop needs. The ablation files and the diff printing are Day 2.
-Limits below are DEVELOPMENT defaults, not experiment values: the real step, cost and
-wall-clock limits are fixed in configs/default.yaml when the main experiment is set up.
+The code defaults below are DEVELOPMENT defaults. The experiment values live in
+configs/default.yaml; every file in configs/ablations/ extends it and changes one factor.
 """
 
 from __future__ import annotations
@@ -31,9 +30,10 @@ class _Strict(BaseModel):
 
 class LLMConfig(_Strict):
     model: str | None = None  # None -> $MODEL_MAIN
-    thinking: Literal["enabled", "disabled"] = (
-        "enabled"  # open question: decide on dev_5
-    )
+    thinking: Literal["enabled", "disabled"] = "enabled"
+    # DeepSeek's `reasoning_effort` (docs/notes.md section 5). Only meaningful with thinking
+    # enabled; None resolves to "high", the server default, so it is always sent explicitly.
+    reasoning_effort: Literal["high", "max"] | None = None
     max_tokens: int | None = None  # None -> paired default for `thinking`
     timeout_s: float | None = None  # None -> paired default for `thinking`
     max_attempts: int = 3
@@ -43,6 +43,11 @@ class LLMConfig(_Strict):
 
     @model_validator(mode="after")
     def _fill_pair(self) -> LLMConfig:
+        if self.thinking == "disabled":
+            if self.reasoning_effort is not None:
+                raise ValueError("reasoning_effort needs thinking: enabled")
+        elif self.reasoning_effort is None:
+            self.reasoning_effort = "high"
         d = _THINKING_DEFAULTS[self.thinking]
         if self.max_tokens is None:
             self.max_tokens = d["max_tokens"]
@@ -62,10 +67,100 @@ class LLMConfig(_Strict):
 class ContextConfig(_Strict):
     strategy: Literal["none", "truncate", "summarize", "hybrid"] = "none"
     budget_tokens: int = 128_000  # counts the prompt only, not max_tokens
+    # Compaction runs when the next prompt would exceed high_water * budget and shrinks it to
+    # low_water * budget in one go (not a little every turn), so the cached prefix survives
+    # between compactions (CLAUDE.md 5.2).
+    high_water: float = 0.85
+    low_water: float = 0.5
+    # The newest turns are never cleared or summarized. How many: at least
+    # `keep_recent_min_turns` (the latest turn is what the model must answer), and more up to
+    # `keep_recent_ratio * budget_tokens` if the room left after the head and the summary allows
+    # it. The ratio is an upper bound; the tail shrinks when the budget is tight.
+    keep_recent_min_turns: int = 2
+    keep_recent_ratio: float = 0.25
+    # Skip a summary that would remove less than this share of the budget (it costs a call and
+    # breaks the cached prefix). Not applied when the prompt is already over the budget.
+    min_gain_ratio: float = 0.1
+    min_clear_chars: int = (
+        400  # clearing a shorter output saves less than the stub costs
+    )
+    summary_model: str | None = None  # None -> $MODEL_CHEAP
+    # Output cap of the summary call (thinking is always off, timeout 300 s) and the cap of the
+    # code-generated state block appended to the summary. Each is min(absolute, ratio * budget),
+    # so they shrink with a small budget and an ablation of the budget stays a one-key change.
+    summary_max_tokens: int = 4096
+    summary_max_ratio: float = 0.08
+    summary_restore_tokens: int = 2500
+    summary_restore_ratio: float = 0.05
+    summary_diff_chars: int = (
+        6000  # patch text in the state block (the stat is always there)
+    )
+    summary_index_entries: int = 20  # saved-output index lines
+    summary_viewed_files: int = 30  # viewed-file paths
+    # What the summarizer is shown: the agent's history as the agent saw it, in full, including
+    # its reasoning (in thinking mode the plan and the hypothesis live there). Only when a
+    # summary call fails for size (context overflow, timeout) is the input shrunk and retried:
+    # every item is cut to `summary_clip_chars`, then to that times `summary_clip_scale`, ...
+    summary_include_reasoning: bool = True
+    summary_retries: int = 3
+    summary_clip_chars: int = 4000
+    summary_clip_scale: float = 0.5
+
+    @model_validator(mode="after")
+    def _check_water_marks(self) -> ContextConfig:
+        if not 0 < self.low_water < self.high_water <= 1:
+            raise ValueError("need 0 < low_water < high_water <= 1")
+        if not 0 < self.summary_clip_scale < 1:
+            raise ValueError("need 0 < summary_clip_scale < 1")
+        if self.summary_retries < 0 or self.summary_clip_chars < 200:
+            raise ValueError("need summary_retries >= 0 and summary_clip_chars >= 200")
+        if self.keep_recent_min_turns < 1:
+            raise ValueError("need keep_recent_min_turns >= 1")
+        for name in (
+            "keep_recent_ratio",
+            "min_gain_ratio",
+            "summary_max_ratio",
+            "summary_restore_ratio",
+        ):
+            if not 0 < getattr(self, name) <= 1:
+                raise ValueError(f"need 0 < {name} <= 1")
+        # Even with an empty head and a minimal tail, the summary and the state block must
+        # fit under the level compaction aims for. The head itself is only known at run time.
+        if self.summary_tokens_cap() + self.restore_tokens_cap() >= self.low_target():
+            raise ValueError(
+                "summary_max_tokens + summary_restore_tokens (as capped by their ratios) "
+                "must be below low_water * budget_tokens"
+            )
+        return self
+
+    def summary_tokens_cap(self) -> int:
+        return min(
+            self.summary_max_tokens, int(self.summary_max_ratio * self.budget_tokens)
+        )
+
+    def restore_tokens_cap(self) -> int:
+        return min(
+            self.summary_restore_tokens,
+            int(self.summary_restore_ratio * self.budget_tokens),
+        )
+
+    def high_target(self) -> int:
+        return int(self.high_water * self.budget_tokens)
+
+    def low_target(self) -> int:
+        return int(self.low_water * self.budget_tokens)
 
 
 class GuardConfig(_Strict):
     enabled: bool = True
+    policy_path: str = "configs/policy.yaml"
+
+
+class SandboxConfig(_Strict):
+    network_mode: str = "none"
+    mem_limit: str = "4g"
+    cpus: float = 2.0
+    pids_limit: int = 512
 
 
 class ToolOutputConfig(_Strict):
@@ -84,6 +179,7 @@ class AgentConfig(_Strict):
     planning: Literal["on", "off"] = "on"
     context: ContextConfig = ContextConfig()
     guard: GuardConfig = GuardConfig()
+    sandbox: SandboxConfig = SandboxConfig()
     tool_output: ToolOutputConfig = ToolOutputConfig()
     limits: LimitsConfig = LimitsConfig()
     bash_timeout_s: int = 120
@@ -96,8 +192,61 @@ class AgentConfig(_Strict):
         return hashlib.sha256(self.canonical_json().encode()).hexdigest()[:12]
 
 
+def summary_llm_config(cfg: AgentConfig) -> LLMConfig:
+    """The client config for compaction calls: the cheap model, thinking always off (it is a
+    plain summarization), retry policy shared with the main client."""
+    model = cfg.context.summary_model or os.environ.get("MODEL_CHEAP")
+    if not model:
+        raise ValueError(
+            "no summary model: set context.summary_model in the config or MODEL_CHEAP in .env"
+        )
+    return cfg.llm.model_copy(
+        update={
+            "model": model,
+            "thinking": "disabled",
+            "reasoning_effort": None,
+            "max_tokens": cfg.context.summary_tokens_cap(),
+            "timeout_s": 300.0,
+        }
+    )
+
+
+def _merge(base: dict, over: dict) -> dict:
+    out = dict(base)
+    for key, value in over.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _merge(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
+def _load_yaml(path: Path) -> dict:
+    data = yaml.safe_load(path.read_text()) or {}
+    parent = data.pop("extends", None)  # a path relative to this file
+    if parent:
+        data = _merge(_load_yaml(path.parent / parent), data)
+    return data
+
+
 def load_config(path: str | Path | None) -> AgentConfig:
     if path is None:
         return AgentConfig()
-    data = yaml.safe_load(Path(path).read_text()) or {}
-    return AgentConfig.model_validate(data)
+    return AgentConfig.model_validate(_load_yaml(Path(path)))
+
+
+def config_diff(
+    base: AgentConfig, other: AgentConfig
+) -> list[tuple[str, object, object]]:
+    """Leaf settings where `other` differs from `base`: [(dotted.path, base, other)]."""
+
+    def flat(d: dict, prefix: str = "") -> dict[str, object]:
+        out: dict[str, object] = {}
+        for k, v in d.items():
+            out.update(
+                flat(v, f"{prefix}{k}.") if isinstance(v, dict) else {f"{prefix}{k}": v}
+            )
+        return out
+
+    a, b = flat(base.model_dump(mode="json")), flat(other.model_dump(mode="json"))
+    return [(k, a.get(k), b.get(k)) for k in sorted(a | b) if a.get(k) != b.get(k)]

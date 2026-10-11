@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 SUBSETS_META = Path("configs/subsets/subsets_meta.json")
+MAIN_CONFIG = Path("configs/default.yaml")
 DEFAULT_LOCAL_IMAGE = "harness-toy:latest"
 
 
@@ -45,6 +46,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--replay", type=Path, help="answer from this recording; no network"
     )
     return p
+
+
+def describe_config(cfg: Any, path: Path | None) -> list[str]:
+    """Lines printed at startup: which config, and how it differs from the main one (M0)."""
+    from harness.config import config_diff, load_config
+
+    name = str(path) if path else "built-in development defaults"
+    lines = [f"config: {name} (hash {cfg.config_hash()})"]
+    if not MAIN_CONFIG.exists() or (path and path.resolve() == MAIN_CONFIG.resolve()):
+        return lines
+    diff = config_diff(load_config(MAIN_CONFIG), cfg)
+    if not diff:
+        return lines + [f"  identical to {MAIN_CONFIG}"]
+    return (
+        lines
+        + [f"  differs from {MAIN_CONFIG}:"]
+        + [f"    {key}: {old!r} -> {new!r}" for key, old, new in diff]
+    )
 
 
 def _git_meta() -> dict[str, Any]:
@@ -92,6 +111,7 @@ async def _run(args: argparse.Namespace) -> int:
 
     load_dotenv(".env")
     cfg = load_config(args.config)
+    print("\n".join(describe_config(cfg, args.config)))
     run_id = args.run_id or time.strftime("%Y%m%d-%H%M%S")
 
     if args.repo:
@@ -125,11 +145,24 @@ async def _run(args: argparse.Namespace) -> int:
             llm = LiteLLMClient(cfg.llm, tracer)
             if args.record:
                 llm = RecordingClient(llm, cfg.llm, args.record)
-        async with DockerSandbox(image, docker_client=client) as sandbox:
+        sbx = cfg.sandbox
+        async with DockerSandbox(
+            image,
+            docker_client=client,
+            network_mode=sbx.network_mode,
+            mem_limit=sbx.mem_limit,
+            cpus=sbx.cpus,
+            pids_limit=sbx.pids_limit,
+        ) as sandbox:
             if args.repo:
                 await sandbox.load_repo(args.repo)
             result = await run_task(
-                task, cfg, sandbox, llm, tracer, meta={"run_id": run_id, **_git_meta()}
+                task,
+                cfg,
+                sandbox,
+                llm,
+                tracer,
+                meta={"run_id": run_id, **_git_meta()},
             )
     finally:
         tracer.close()

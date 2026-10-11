@@ -1,0 +1,5 @@
+# A6: context budget = 32k (hybrid), the pressure test for the strategies.
+extends: ../default.yaml
+
+context:
+  budget_tokens: 32000

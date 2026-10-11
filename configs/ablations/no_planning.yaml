@@ -1,0 +1,4 @@
+# A5: planning = off. No todo tool, no plan-first instruction in the prompt.
+extends: ../default.yaml
+
+planning: "off"

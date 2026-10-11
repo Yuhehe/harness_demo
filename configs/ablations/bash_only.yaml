@@ -1,0 +1,4 @@
+# A2: action space = bash_only. Only bash and submit (no view / str_replace / search / todo).
+extends: ../default.yaml
+
+action_space: bash_only

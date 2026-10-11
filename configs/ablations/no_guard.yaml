@@ -1,0 +1,5 @@
+# Security evaluation (day 4): the permission layer off. Not part of the ablation table.
+extends: ../default.yaml
+
+guard:
+  enabled: false

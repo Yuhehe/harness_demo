@@ -93,6 +93,18 @@ def assistant_message(resp: LLMResponse, *, keep_tool_calls: bool = True) -> Mes
     return msg
 
 
+def strip_reasoning(messages: list[Message]) -> list[Message]:
+    """The messages as the provider counts them. DeepSeek does not count a replayed
+    `reasoning_content` in `prompt_tokens` (docs/notes.md section 5), while a local token
+    counter does, so it is dropped before counting a prompt."""
+    return [
+        {k: v for k, v in m.items() if k != "reasoning_content"}
+        if "reasoning_content" in m
+        else m
+        for m in messages
+    ]
+
+
 # ---- errors ------------------------------------------------------------------------------
 
 

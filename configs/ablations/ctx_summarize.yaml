@@ -1,0 +1,5 @@
+# A4: context = summarize. Keep the newest turns, replace the rest with an LLM summary.
+extends: ../default.yaml
+
+context:
+  strategy: summarize

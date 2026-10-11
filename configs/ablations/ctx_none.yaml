@@ -1,0 +1,5 @@
+# A1: context = none. No compaction; a prompt over the budget ends the run (context_overflow).
+extends: ../default.yaml
+
+context:
+  strategy: none

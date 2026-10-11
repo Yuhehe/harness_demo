@@ -1,6 +1,7 @@
 """LLM client: LiteLLM transport plus our retry policy (CLAUDE.md 5.1, docs/notes.md section 5).
 
-* Non-streaming only. thinking, max_tokens and the timeout come from the config (paired).
+* Non-streaming only. thinking, reasoning_effort, max_tokens and the timeout come from the config
+  (max_tokens and the timeout are paired).
 * LiteLLM does no retrying of its own (num_retries=0); every retry decision is made here,
   from (exception type, status code, response shape), never from the status code alone:
   a wrong API key is a BadRequestError with status 401, a malformed 200 is an APIError
@@ -32,6 +33,7 @@ from harness.llm.types import (
     Message,
     ToolCall,
     Usage,
+    strip_reasoning,
 )
 from harness.tracing.tracer import Tracer
 
@@ -177,8 +179,10 @@ class LiteLLMClient:
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         rng: Callable[[], float] = random.random,
         clock: Callable[[], float] = time.monotonic,
+        purpose: str = "agent",  # "agent" or "summary": tells the two apart in the trace
     ) -> None:
         self.cfg = cfg
+        self.purpose = purpose
         self.model = cfg.resolved_model()
         cost.price_for(self.model)  # the budget guard is a hard rule: no price, no run
         self.tracer = tracer
@@ -199,12 +203,20 @@ class LiteLLMClient:
             kwargs["tools"] = sorted(tools, key=lambda t: t["function"]["name"])
             kwargs["tool_choice"] = "auto"
         thinking = {"type": self.cfg.thinking}
+        body: dict[str, Any] = {}
         if self.model.startswith("deepseek/"):
             kwargs["thinking"] = thinking  # LiteLLM maps it for its DeepSeek provider
         else:
             # The generic OpenAI route rejects `thinking=` (or silently drops it with
             # drop_params), so it has to travel in the request body.
-            kwargs["extra_body"] = {"thinking": thinking}
+            body["thinking"] = thinking
+        if self.cfg.reasoning_effort:
+            # Never as the `reasoning_effort=` keyword: LiteLLM's DeepSeek provider pops it and
+            # keeps only on/off, so "high"/"max" would never reach the server (verified against
+            # a local server, docs/notes.md section 11).
+            body["reasoning_effort"] = self.cfg.reasoning_effort
+        if body:
+            kwargs["extra_body"] = body
         return kwargs
 
     async def _estimate_prompt_tokens(
@@ -215,7 +227,7 @@ class LiteLLMClient:
                 return int(
                     litellm.token_counter(
                         model=cost.normalize_model(self.model),
-                        messages=messages,
+                        messages=strip_reasoning(messages),
                         tools=tools,
                     )
                 )
@@ -274,6 +286,7 @@ class LiteLLMClient:
                     "llm_call",
                     attempt=attempt,
                     outcome="ok",
+                    purpose=self.purpose,
                     model=self.model,
                     finish_reason=resp.finish_reason,
                     latency_s=round(latency, 3),
@@ -312,6 +325,7 @@ class LiteLLMClient:
                 outcome="retry" if will_retry else "fail",
                 retry_reason=decision.kind,
                 status_code=decision.status_code,
+                purpose=self.purpose,
                 model=self.model,
                 latency_s=round(latency, 3),
                 usage=None,
