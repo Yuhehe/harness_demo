@@ -40,7 +40,7 @@ module-name = "harness"
 testpaths = ["tests"]
 # eval/ scripts are run as files (not a package); let tests import them by module name.
 # tests/ is on the path so test modules can share tests/fakes.py.
-pythonpath = ["eval/swebench", "tests"]
+pythonpath = ["eval/swebench", "eval/report", "tests"]
 asyncio_mode = "auto"
 # The toy repository under tests/fixtures has a deliberate bug and its own tests: they are
 # test DATA for the agent, not part of this project's suite. (This replaces pytest's

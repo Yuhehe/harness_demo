@@ -75,7 +75,8 @@ async def run_task(
     model = cfg.llm.resolved_model()
     state = AgentState(task=task, cfg=cfg, model=model, started_at=clock())
     # Every message is traced as it is appended: a crash still leaves the whole conversation.
-    state.on_append = lambda m: tracer.emit("message", **m)
+    # `step`: the number of LLM responses so far (0 for the system prompt and the task)
+    state.on_append = lambda m: tracer.emit("message", step=state.steps, **m)
     registry = Registry(
         cfg, OutputLimiter(cfg.tool_output.max_chars), state.todo, state.submit_flag
     )
@@ -274,6 +275,7 @@ async def _handle_response(
         bad_calls += result.format_error
         tracer.emit(
             "tool_call",
+            step=state.steps,
             tool=call.name,
             args_hash=hashlib.sha256(call.arguments.encode()).hexdigest()[:16],
             exit_code=result.exit_code,
