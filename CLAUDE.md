@@ -70,7 +70,7 @@ harness-lab/
 │   ├── llm/{client.py, replay.py, cost.py, types.py}
 │   ├── tools/{base.py, registry.py, bash.py, edit.py, search.py, todo.py, submit.py}
 │   ├── sandbox/{base.py, docker_sandbox.py}
-│   ├── context/{manager.py, tokens.py, strategies/{none.py, truncate.py, summarize.py, hybrid.py}}
+│   ├── context/{manager.py, tokens.py, restore.py, strategies/{types.py, none.py, truncate.py, summarize.py, hybrid.py}}
 │   ├── security/{policy.py, guard.py}
 │   ├── tracing/{tracer.py, otel.py}
 │   ├── service/{api.py, worker.py, store.py}
@@ -79,7 +79,7 @@ harness-lab/
 │   ├── swebench/{select_subset.py, pull_images.py, run_agent.py, score.py}
 │   ├── baselines/{mini_swe_agent.md, codex_exec.py}
 │   ├── security/{cases/, build_cases.py, run_security.py}
-│   └── report/{aggregate.py, failure_taxonomy.py, make_tables.py, plots.py}
+│   └── report/{aggregate.py, summary_probe.py, failure_taxonomy.py, make_tables.py, plots.py}
 ├── docs/{notes.md, learning/}  # notes.md：外部接口核实记录；learning/：学习笔记
 ├── results/            # runs/ 目录 gitignore；summary/ 提交
 ├── tests/{unit/, e2e/, fixtures/toy_repo/, fixtures/replays/}
@@ -108,7 +108,7 @@ async def run_task(task: Task, cfg: AgentConfig, sandbox: Sandbox, llm: LLMClien
 ```
 
 - 调用失败时的重试放在 `llm/client.py` 里：指数退避并加随机抖动，**总共最多 3 次尝试**（首次加最多 2 次重试）。按（异常类型、状态码、响应形状）判断，可重试的有四类：**429**（响应带 `Retry-After` 时按它等待）、**5xx**、**客户端超时**（`Timeout`）、**不可用的 200**（响应体不是合法 JSON、缺少 `choices`，或 `finish_reason` 为 `insufficient_system_resource` / `aborted`，后者要丢弃半截内容）；4xx（含 400、401、404）不重试。每次重试都要记录次数和原因（`retry_reason`），重试用完仍失败就以 `env_error` 终止任务；重试的等待时间计入墙钟时间和延迟。
-- LLM 调用参数：**当前只用非流式**，基本功能全部完成后再支持流式。每次调用显式传 `thinking`（来自配置），一次运行内不切换。输出上限 `max_tokens` 和超时 `timeout_s` **成对设置**，超时必须大于输出顶满上限所需的时间，这样失控的生成会先以 `finish_reason=length` 结束（不重试），而不是先被超时（会重试 3 次）：思考开 `max_tokens=65536`、`timeout_s=900`；思考关 `max_tokens=16384`、`timeout_s=300`。两者都是配置项，记录在 `run_start`（依据见 `docs/notes.md` §5）。
+- LLM 调用参数：**当前只用非流式**，基本功能全部完成后再支持流式。每次调用显式传 `thinking`（来自配置），一次运行内不切换。思考开时还显式传 `reasoning_effort`（`high` | `max`，默认 `high`，不依赖服务端默认）；它必须经 `extra_body` 传，因为 LiteLLM 的 DeepSeek 转换会丢掉同名关键字，只保留思考的开关。输出上限 `max_tokens` 和超时 `timeout_s` **成对设置**，超时必须大于输出顶满上限所需的时间，这样失控的生成会先以 `finish_reason=length` 结束（不重试），而不是先被超时（会重试 3 次）：思考开 `max_tokens=65536`、`timeout_s=900`；思考关 `max_tokens=16384`、`timeout_s=300`。两者都是配置项，记录在 `run_start`（依据见 `docs/notes.md` §5）。
 - `finish_reason=length` 的响应**不重试**，里面半截的工具调用**绝不执行**；给模型一条"输出被长度限制截断，请改小"的反馈，计入 `truncated_outputs`（不计入 `format_errors`）。连续 3 次截断就终止任务，记为 `format_error`，详情字段写 `output_truncated`。
 - 失败的尝试（含重试）也要写一条 `llm_call` span（`outcome`、`retry_reason`、延迟，`usage` 为空）。`tokens_*` 和 `cost_per_task` **只统计成功的调用**；失败的尝试另报 `failed_attempts`、`retry_rate` 和 `wasted_prompt_tokens_est`（用 `litellm.token_counter` 估算被浪费的输入 token）。预算保护把这个估计也算进去，但不混进上面的指标。
 - 模型返回的工具调用格式不对时，把错误信息作为工具结果回给模型，**计入 `format_errors`**。连续 3 次格式错误就终止任务。
@@ -126,7 +126,7 @@ async def run_task(task: Task, cfg: AgentConfig, sandbox: Sandbox, llm: LLMClien
 2. **只追加不修改**：历史消息一旦写入就不再改动。唯一例外是上下文策略主动压缩，而且每次压缩都要记录。
 3. **确定性序列化**：JSON 一律 `sort_keys=True`，工具列表按名字排序。
 4. **动态信息后置**：步数、剩余预算这类提示信息，放在最新一条 user 或 tool 消息的末尾。
-5. 每次调用都记录 `cached_input_tokens`，按 `cached / input` 计算缓存命中率，这是一个必须报告的指标。
+5. 每次调用都记录命中缓存的输入 token 数（`llm_call` span 里叫 `cached_tokens`，`run_end` 里叫 `tokens_cached`），按 `cached / input` 计算缓存命中率，这是一个必须报告的指标。
 
 ### 5.3 可开关组件（全部由配置驱动）
 
@@ -134,18 +134,31 @@ async def run_task(task: Task, cfg: AgentConfig, sandbox: Sandbox, llm: LLMClien
 |---|---|---|
 | `action_space` | `bash_only` \| `tools` | `bash_only`：只有 bash 和 submit。`tools`：bash、view、str_replace、search、todo、submit |
 | `context.strategy` | `none` \| `truncate` \| `summarize` \| `hybrid` | 详见下方 |
+| `llm.reasoning_effort` | `high` \| `max` | 思考强度；`thinking: disabled` 时不能设（设了是配置错误）；不设且思考开时取 `high`；进 `config_hash`、回放键和 `run_start` |
 | `context.budget_tokens` | 例如 `128000` / `32000` | 人为限制上下文预算，用来制造上下文压力（小预算下各策略的差异才能显现）。**只算发给模型的提示词（输入）**，不含输出上限 `max_tokens`，两者互不扣减 |
 | `planning` | `on` \| `off` | `on`：启用 todo 工具，并在 prompt 里提示先规划再执行 |
+| `context.high_water` / `low_water` | 例如 `0.85` / `0.5` | 提示词越过 `high_water × budget` 时压缩，目标是一次压到 `low_water × budget`（不是每轮压一点，以保住缓存前缀）；摘要的结果可能高于它，见下面的规划等级 |
+| `context.keep_recent_min_turns` / `keep_recent_ratio` | 例如 `2` / `0.25` | 受保护的尾部：至少这么多轮；再往前扩，直到尾部达到 `ratio × budget`（**上限**，余量不够时尾部会缩短） |
+| `context.min_clear_chars` | 例如 `400` | `truncate` 不清理短于它的工具输出（占位符比它还长） |
+| `context.min_gain_ratio` | 例如 `0.1` | 摘要预计省下的 token 不足预算的这个比例就跳过；提示词已超预算时不适用 |
+| `context.summary_*` | 见 `config.py` | 摘要模型（默认 `$MODEL_CHEAP`，思考固定关）、输出和状态块的上限（绝对值与 `ratio × budget` 取小）、失败后收紧重试的参数、是否带推理内容 |
 | `guard.enabled` | `true` \| `false` | 权限层开关 |
+| `guard.policy_path` | `configs/policy.yaml` | 权限规则；与 M0 一起冻结，改它要换 tag 并重跑 M0 |
+| `sandbox.*` | `network_mode`、`mem_limit`、`cpus`、`pids_limit` | 沙箱资源上限，进 `config_hash` |
 | `tool_output.max_chars` | 例如 `8000` | 超过就截断，只保留开头和结尾 |
+
+本表只列影响实验的配置键；完整的键名和默认值以 `src/harness/config.py` 为准（重试与退避参数、`limits.*`、`bash_timeout_s`、`seed` 等不在表里）。
 
 **上下文策略：**
 
 - `none`：不做任何处理。超出预算就以 `context_overflow` 终止。
 - `truncate`：按规则清理，把较早的工具**输出**替换成 `[output cleared: N chars, saved at <path>]`，保留调用记录。
-- `summarize`：保留 system、任务描述和最近 K 轮，中间部分让 LLM 生成结构化摘要，内容包括已经尝试过什么、失败原因、当前假设、改过哪些文件。
-- `hybrid`：先 `truncate`，仍然超预算再 `summarize`。
+- `summarize`：保留 system、任务描述和受保护的尾部，中间部分让 LLM 生成结构化摘要（尝试过什么、失败原因、当前假设、下一步、测试状态、改过哪些文件）。摘要模型读的是 **agent 当时看到的完整历史（含 `reasoning_content`，由 `context.summary_include_reasoning` 控制，默认带），不预先裁剪**；只有摘要调用因输入过大失败（`context_overflow`、`timeout`）时才逐次收紧再重试。摘要消息末尾由**代码**拼一个状态块（当前 `git diff`、todo、已落盘输出的索引、读过的文件路径），与摘要正文用固定标记隔开，注明生成于第几步；状态块不进下一次摘要的输入，也不计入 `summary_file_recall`。
+- `hybrid`：先 `truncate`，仍然高于高水位线再 `summarize`。清理只作用于发给模型的视图；摘要读的是清理前的原文，不是占位符。
 - 所有策略都要记录压缩前后的 token 数、压缩次数和压缩自身的成本。
+- 管理器持有两个等长的列表：`view`（发给模型的）和 `original`（agent 当时看到的）；`state.messages` 永不修改。每次压缩前做规划：head（系统提示、工具定义、任务，首次调用后取服务端实报值）、尾部、余量，分五级：`normal`、`tail_shrunk`、`minimal`（短摘要，状态块只留 `diff --stat` 和放得下的 todo）、`unreachable`（仍高于低水位线但在预算内，照常压缩并记录）、`infeasible`（head 加最新一轮就放不下预算：不调用摘要；提示词已超预算时直接 `context_overflow`，未超预算时只是跳过这次压缩）。
+- 计算提示词大小时不计回传的 `reasoning_content`（服务端不计）；估计值有约 ±8% 的误差，水位线要留余量。
+- 压缩尝试被跳过（没有可压缩的、收益太小）也要更新滞后基准，下一次尝试等提示词增长一个水位带（上限是预算本身）。
 
 **可恢复截断**：工具输出超长时，完整内容写到沙箱里的 `/tmp/harness/out_<n>.txt`，返回给模型的截断结果里注明这个路径，模型需要时可以再去读。
 
@@ -165,19 +178,21 @@ async def run_task(task: Task, cfg: AgentConfig, sandbox: Sandbox, llm: LLMClien
 
 ### 5.6 权限层（`security/`）
 
-- `policy.yaml` 定义三个权限级别：`read`（cat/ls/grep 等）、`write`（编辑工具以及限定路径内的写操作）、`exec`（运行测试或脚本）。另有 `deny_patterns` 黑名单，例如 `curl|wget … | sh`、访问 `~/.ssh`、读取 `env`/`printenv` 中的令牌、`rm -rf /`、`git push`、修改 `tests/` 里的断言。
+- `policy.yaml` 定义三个权限级别：`read`（cat/ls/grep 等）、`write`（编辑工具以及限定路径内的写操作）、`exec`（运行测试或脚本）。另有 `deny` 规则（黑名单，每条带 `rule_id`、作用范围 `scope`、正则和原因；判定的 `rule_id` 形如 `deny.git_push`、放行的形如 `allow.read`）和 `ask` 规则（需要确认），`deny` 例如 `curl|wget … | sh`、访问 `~/.ssh`、读取 `env`/`printenv` 中的令牌、`rm -rf /`、`git push`、修改 `tests/` 里的断言。
 - `guard.check` 返回 `allow | deny | ask`，并附带 `rule_id`。每次判定都要记录 span，用来统计**误拦率**。
-- 批量评测时 `ask` 按 `deny` 处理；CLI 交互模式下提示用户确认。
+- 批量评测时 `ask` 按 `deny` 处理；CLI 交互模式下提示用户确认（尚未实现）。
+- 规则是对命令文本的正则匹配，是纵深防御而不是证明；真正的边界是沙箱。必须放行的日常命令也要有测试（防误拦）。
 
 ### 5.7 追踪（`tracing/tracer.py`）
 
 每次运行写到 `results/runs/<run_id>/trajectories/<instance_id>.jsonl`，一行一个 span：
 
-- `run_start`：包含 config 的哈希、git commit（及工作区是否有未提交改动 `git_dirty`）、模型名、随机种子、价格表的哈希 `prices_hash`、`max_tokens` / `timeout_s` / `thinking`
-- `llm_call`：输入、输出和缓存命中的 token 数，成本，延迟，重试次数和重试原因
-- `tool_call`：工具名，参数的哈希，exit code，耗时，是否截断
-- `guard_decision`、`compaction`（压缩前后 token 数）
-- `message`：每条追加进历史的消息各写一个 span，进程崩溃后仍能还原完整对话，供人工分析失败轨迹
+- `run_start`：包含 config 的哈希、git commit（及工作区是否有未提交改动 `git_dirty`）、模型名、随机种子、价格表的哈希 `prices_hash`、`max_tokens` / `timeout_s` / `thinking` / `reasoning_effort`、`guard_enabled`、`policy_hash`、`summary_model`
+- `llm_call`：输入、输出和缓存命中的 token 数，成本，延迟，重试次数和重试原因；`purpose` 区分 `agent` 和 `summary`
+- `tool_call`：步数 `step`，工具名，参数的哈希，exit code，耗时，是否截断
+- `guard_decision`（含权限级别 `level`）
+- `compaction`：步数、动作、压缩前后 token 数、规划等级（`plan_level`、`head_tokens`、`tail_tokens`、`room_tokens`、`target_unreachable`）、成本；`truncate` 记录 `cleared_outputs`、`cleared_chars`；摘要还记录 `summarized_messages`、`summary`（只含摘要模型的文字）、`restored`（状态块各项的长度和降级档位）、输入字符数、尝试次数、是否收紧，状态块构造失败时记 `restored_error`
+- `message`：带 `step`；每条追加进历史的消息各写一个 span，进程崩溃后仍能还原完整对话，供人工分析失败轨迹
 - `truncation`：一次 `finish_reason=length` 的响应被丢弃（步数、内容长度、被丢弃的工具调用名、连续次数）
 - `run_end`：FailReason 或 submitted，总成本，总步数
 
@@ -185,7 +200,8 @@ async def run_task(task: Task, cfg: AgentConfig, sandbox: Sandbox, llm: LLMClien
 
 - 录制模式：把每次 LLM 请求的哈希和对应响应写入 `tests/fixtures/replays/*.jsonl`。
 - 回放模式：按请求哈希找回响应，找不到就直接报错。CI 和端到端测试都只用回放模式，不产生 API 费用。
-- **请求哈希不含工具结果的内容**：它由模型、`thinking`、`max_tokens`、工具定义和除工具结果内容外的全部消息决定。原因：沙箱输出里有耗时、临时路径、`ls` 日期，`find`/`ls` 的顺序还取决于宿主机文件系统，换机器（如 CI）就会变。工具输出另做规范化摘要比对，不一致只记入 `ReplayClient.mismatches`，设 `HARNESS_STRICT_REPLAY=1` 才报错；端到端测试靠断言沙箱里项目自己的测试从失败变成通过来兜底。
+- **请求哈希不含工具结果的内容**：它由模型、`thinking`、`reasoning_effort`、`max_tokens`、工具定义和除工具结果内容外的全部消息决定。原因：沙箱输出里有耗时、临时路径、`ls` 日期，`find`/`ls` 的顺序还取决于宿主机文件系统，换机器（如 CI）就会变。工具输出另做规范化摘要比对，不一致只记入 `ReplayClient.mismatches`，设 `HARNESS_STRICT_REPLAY=1` 才报错；端到端测试靠断言沙箱里项目自己的测试从失败变成通过来兜底。
+- 摘要模型的输入是把工具输出拼进一条 user 消息，请求哈希“不含工具结果”的规则管不到它：**CI 的回放必须用不压缩的配置**（`context.strategy: none`），不要录制带摘要的运行。
 - 录制必须用显式设了 `llm.model` 的配置（键里用的是 `cfg.model or $MODEL_MAIN`，CI 没有 `.env`）。
 - 回放的轨迹目前不写 `llm_call` span，只有 `run_end` 的合计；`aggregate.py` 或 CI 冒烟如要与真实运行同形状，需由回放按录制的 usage 补写（待做）。
 
@@ -195,12 +211,16 @@ async def run_task(task: Task, cfg: AgentConfig, sandbox: Sandbox, llm: LLMClien
 |---|---|
 | `resolve_rate` | 官方 `swebench` 判分通过的题数 / 题目总数。同时报告 95% Wilson 置信区间 |
 | `cost_per_task` | 每题的 LLM 成本（含压缩调用），报告均值和 P50 |
-| `tokens_in/out/cached` | 每题的平均 token 数 |
+| `tokens_in/out/cached` | 每题的平均 token 数，只含 agent 自己的调用；压缩调用的 token 单列为 `compaction_tokens_in/out`，它们的成本计入 `cost_per_task` |
 | `cache_hit_rate` | Σcached_input / Σinput |
 | `latency` | 每题墙钟时间，报告 P50/P95 |
 | `steps` | 每题的平均步数 |
 | `overflow_rate` | 以 `context_overflow` 终止的比例 |
 | `fail_taxonomy` | 按 FailReason 分类，外加 `submitted_but_failed` |
+| `steps_after_compaction` | 第一次压缩之后的步数（摘要会使轨迹变长，要和不压缩的同题对比） |
+| `post_compaction_repeat_rate` | 第一次压缩之后，重复了压缩之前做过的 `(工具, 参数)` 的调用占比。**信号，不是判决**：改完文件再读是合理的，所以必须和不压缩的运行在同一步数处的同一指标对比 |
+| `summary_file_recall` | 压缩之前用 `str_replace` 改过的文件里，摘要正文提到的占比；不用 LLM 判断，也不计状态块 |
+| `compaction_cost_share` | 压缩成本 / 任务总成本 |
 | `ASR` | 攻击目标被执行的用例数 / 注入用例总数，用蜜罐（canary）确定性判定 |
 | `utility_under_attack` | 注入用例中良性任务仍然完成的比例 |
 | `false_block_rate` | SWE-bench 运行中被拦截的合法命令数 / 总命令数（抽样人工复核） |
@@ -213,6 +233,8 @@ uv run ruff check . && uv run ruff format --check . && uv run pytest -q
 uv run harness run --config configs/default.yaml --repo tests/fixtures/toy_repo --task "fix failing test"
 uv run python eval/swebench/run_agent.py --config configs/default.yaml --subset configs/subsets/dev_5.txt --workers 4 --run-id dev
 uv run python eval/swebench/score.py --run-id dev
+uv run python eval/report/aggregate.py --run-id dev [--baseline A1]   # 写 results/runs/<id>/metrics.json
+uv run python eval/report/summary_probe.py --trajectory <trajectory.jsonl> --patch <patch.diff>   # 强制压缩一次看摘要留了什么（几分钱）
 uv run python eval/report/make_tables.py        # 更新 README 里 RESULTS 标记之间的表格
 docker compose -f docker/docker-compose.yml up
 ```
@@ -225,3 +247,4 @@ docker compose -f docker/docker-compose.yml up
 - 批量任务要**支持断点续跑**：已完成的题目跳过，按 `instance_id` 判断。
 - 遇到文档里没写清楚的外部接口（swebench、mini-swe-agent、codex 的命令和参数），先用 `--help` 或看源码核实，把核实结果记到 `docs/notes.md`，**不要凭记忆写**。
 - 每天结束时在 `plan.md` 的"日志"一节追加：完成了什么、花了多少钱、遇到什么问题、明天先做什么。
+- 设计或代码的改动如果影响本文件里写到的规则、名字或字段，当场在 `plan.md` 的"待同步清单"登记一行；修改本文件前先给用户看 diff，同步后在清单里勾掉。修改本文件的陈述时以代码为准（读代码，不凭对话记忆）。

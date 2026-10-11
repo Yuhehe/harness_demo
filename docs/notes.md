@@ -450,3 +450,86 @@
 
 **另一个历史形状**（真实调用，flash）：内容为空、没有 `tool_calls` 的助手回复（例如只有思考就 `stop`）放进历史后，后面接一条 user 提示，三种情况（思考关、思考开且带 `reasoning_content`、思考开不带）**都被接受**，所以循环不需要特殊处理空的助手回复。
 
+
+## 11. 第 2 天实现中核实的接口行为（2026-10-07）
+
+### 11.1 思考强度（`reasoning_effort`）：主流 harness 怎么用
+
+| 来源 | 做法 | 可信度 |
+|---|---|---|
+| DeepSeek 官方文档（`api-docs.deepseek.com/guides/thinking_mode`，已抓取） | 思考默认开，强度默认 `high`；取值 `low/high/max`（OpenAI 格式用 `reasoning_effort`，思考开关用 `thinking.type`）；带 `tools` 时必须回传所有历史轮的 `reasoning_content` | 高（官方页面） |
+| 同上，搜索摘要 | `low`/`medium` 在服务端映射为 `high`；智能体场景官方建议 `max` | 中（摘要，抓取的页面正文里没有"建议 max"这句，用前再核对） |
+| DeepSeek-V4 公布的 SWE-bench Verified（搜索摘要，来自论文/模型卡） | Pro：不思考 73.6 / high 79.4 / max 80.6；Flash：73.7 / 78.6 / 79.0；官方用自己的最小 harness 在 `max` 下评测，第三方 OpenCode 的一次运行没设变体、用 API 默认 `high` | 中（二手摘要，没读原文） |
+| Codex CLI（官方配置参考，已抓取） | `model_reasoning_effort`，取值 low / medium / high / xhigh 等随模型而定；不设就用模型自己的默认 | 高 |
+| Claude Code（第三方博客，非官方） | 默认强度随模型：Opus 4.7 为 `xhigh`，4.6 为 `high`（订阅档位更低时为 `medium`）；自适应思考 | 低到中 |
+| mini-swe-agent 2.4.6（本机源码，已核实） | `swebench.yaml` 里**没有**任何思考或强度设置，只有 `drop_params: true`、`parallel_tool_calls: true`；所以 B0 跑在服务端默认上，即 DeepSeek 的思考开 + `high` | 高 |
+| SWE-agent | 没有核实 | — |
+
+**结论**：没有统一做法。通用 harness 多数不设，用模型默认；DeepSeek 默认是 `high`，官方自己的评测用 `max`。官方数字里 `max` 比 `high` 高 1.2 个点（Pro）或 0.4 个点（Flash），而 50 题的 95% Wilson 区间宽约 22–25 个点（70% 时 56%–81%），**这个差别在我们的样本量下分辨不出来**。
+
+**取值**：M0 和全部消融用 `high`（临时决定，等你确认）。理由：① 与 B0 的默认完全一致，对比不需要额外配置；② 强度不是消融因素，所有配置统一即可；③ `max` 要重新核对成对的 `max_tokens`/`timeout_s`（DeepSeek 在 `max` 下默认输出上限是 128K，我们的成对默认是 65536/900 秒，`length` 截断会更常见）；④ 成本：同一道很小的题上 flash 的思考 token 是 278（high）对 388（max），**只有 1 个样本，不是证据**。想量化强度的影响，用一个 P2 实验（`max` 重跑 M0），不要换主配置。
+
+### 11.2 `reasoning_effort` 怎么传：LiteLLM 会丢掉它
+
+- LiteLLM 1.104.0 的 DeepSeek 转换（`llms/deepseek/chat/transformation.py:36-60`）把 `reasoning_effort` 关键字弹出，只剩 `thinking` 的开或关：`high`、`max` 都到不了服务端。本机假服务器核实：`reasoning_effort="max"` 关键字 → 请求体里 `reasoning_effort` 为空；`extra_body={"reasoning_effort": "max"}` → 请求体里是 `"max"`。
+- 所以 `llm/client.py` 一律放进 `extra_body`（`deepseek/` 和通用 `openai/` 两条路线都测了，`tests/unit/test_llm_client.py`）。
+- **推论**：第 1 天的所有真实运行（含 `dev-*`、toy 录制）都没传强度，跑在服务端默认 `high` 上，与现在显式传 `high` 等价。
+- 真实 DeepSeek 核实（flash，各 1 次）：`high` 和 `max` 都被接受，`finish_reason=stop`。
+
+### 11.3 token 估计（`context/tokens.py`）的校准
+
+- LiteLLM 的 `token_counter` 对 DeepSeek 模型**不计 `tools`**（带不带 tools 结果一样），而工具定义约 800 token，所以把序列化后的工具定义当文本单独计数。
+- 用第 1 天 `dev-flash-1`、`dev-pro-1` 的 4 条轨迹（44 个调用对）对照服务端的 `prompt_tokens`：本地计数偏低 8%–21%（每条消息的模板开销和分词差异），比例在一条轨迹内很稳定。
+- **更正（2026-10-11）**：本地计数器会把回传的 `reasoning_content` 算进去（同一条消息 14 → 2026 token），而服务端不计，所以计算提示词大小前先去掉这个字段（`strip_reasoning`）。去掉之后在同样的 4 条轨迹上重新测得：误差平均 −0.1%，范围 −8.4% 到 +7.8%（42 个对）；dev 轨迹里推理文字很短，真实任务里推理更长，不去掉会被严重高估。下面一条是更正前的数字。
+- 采用"上一次服务端实报值 + 新增消息的本地计数 × 比例"，误差：平均 +0.6%，范围 −2.2% 到 +7.3%（只用本地计数 × 比例是 +0.5%，−2.3% 到 +7.2%，两者几乎一样）。**所以水位线要留余量**：`high_water=0.85`；预算硬判断用估计值，可能有约 7% 的偏差。
+- 溢出由估计值判定，估计值有约 7% 的偏差，所以 A1 的 `overflow_rate` 可能比"真实超出"早一点。所有配置共用同一个估计器，相互之间可比；报告里要注明。
+- 压缩触发有滞后：压缩后若仍高于高水位线（受保护的尾部本身就很大），下一次压缩要等提示词增长一个完整水位带（`high_water − low_water`）以后，上限是预算本身。否则每一轮都会再调用一次摘要、每次都让缓存前缀失效（有测试：去掉滞后时该测试失败）。
+- 压缩之后没有锚点，下一次请求前用本地计数 × 上次的比例，请求完成后重新锚定。
+
+### 11.4 压缩后的历史形状（真实 DeepSeek）
+
+`system, user(任务), user(摘要), assistant(tool_calls), tool(已清理的占位)` 这样**连续两条 user 消息**的历史被接受，工具调用正常返回。两种设置各核实 1 次：flash、思考关；以及 **M0 的设置**（v4-pro、思考开、`reasoning_effort=high`、带 tools，保留的那条 assistant 消息带 `reasoning_content` 和 `tool_calls`）。各只有 1 次，是"没有被 400 拒绝"的证据，不是稳定性证据。
+
+### 11.5 权限层的边界
+
+`configs/policy.yaml` 靠正则匹配命令文本，是纵深防御，不是证明：引号拆分、脚本内部做的事（`python -c` 里写测试文件、`open(..., 'w')`）拦不住。已知取舍：`tests/` 只匹配复数目录名，因为 `django/test/`、`sympy/testing/` 是库代码；`git stash`、`git checkout -- <file>` 常被模型用来回退，所以放行，只有 `reset --hard`、`clean -f`、`checkout .`、`stash drop/clear` 走 `ask`（批量运行里按 `deny`）。真正的边界是沙箱（断网、资源上限）；第 3 天的注入用例量的是这一层在沙箱之上多拦了多少。
+
+## 12. summarize 的调研与更正（2026-10-11）
+
+### 12.1 主流实现对摘要输入的做法
+
+| 来源 | 摘要模型看到什么 | 依据 |
+|---|---|---|
+| OpenHands | 被遗忘的每个事件用 `str(event)` 全文；正常路径不截断，只在"硬重置重试"时才限制长度（首次重试不缩，之后每次乘 0.8） | `llm_summarizing_condenser.py` 源码（已读） |
+| Complexity Trap 论文（arXiv 2508.21433v3） | 摘要由"上一份摘要 + 待压缩轮次"递归生成；混合变体里传给摘要的是**未遮蔽的完整上下文**；N=21、M=10，摘要温度 0，摘要与 agent 同一个模型 | arXiv HTML（已读；摘要模型是否逐配置相同没写清） |
+| Codex CLI | 完整历史 + 压缩提示；只有上下文溢出时才从头部丢条目重试 | `codex-rs/core/src/compact.rs`（已读） |
+| Claude Code | 官方文档只写"用结构化摘要替换对话"；摘要输入细节没有一手资料 | code.claude.com 文档 |
+
+**因此我们的旧实现是偏离的**：`summarize.py` 把每条工具结果裁到 1500 字符、参数裁到 1000，而且 `hybrid` 先清理再摘要，摘要模型读到的是 `[output cleared]` 占位符。已改为：读 `original`（agent 当时看到的全文，含 `reasoning_content`），不预先裁剪，只有摘要调用因输入过大失败（`context_overflow`、`timeout`）时才逐次收紧再重试。
+
+### 12.2 对我之前说法的更正
+
+- "Claude Code、OpenCode 和论文混合变体都是先清理再摘要"：**没有一手依据**。Claude Code 的"先清理旧工具输出"只来自一篇第三方指南；Claude API 的 context editing 文档没有说它与压缩的先后顺序，也没提 Claude Code；OpenCode 的 gist 只列了 `prune` 的参数，没说它在摘要之前还是之后，也没说摘要看到的是裁剪前还是裁剪后（源码链接两次 404，没读到）。有一手证据的几个系统，摘要模型看到的都是原文。
+- "Claude Code 和 Codex 都靠重读文件恢复状态"：Claude Code 官方文档（经搜索结果引用）说压缩后重读最近读过或改过的至多 5 个文件，超过 5000 token 的只给路径引用，并**重新读取 git 状态**；Codex 的 `compact.rs` 里没有读文件，也没有注入 git 状态，只重新注入初始上下文和最近的用户消息。"重读 5 个文件、50k token"对 Codex 来自第三方博客，**未能确认**。两家都没有公开解释为什么不用 diff。
+
+### 12.3 遮蔽（observation masking）与 `truncate`
+
+论文的遮蔽：只把早于滚动窗口（M=10 轮）的环境观察换成占位符（如 `Previous 8 lines omitted for brevity`），动作和推理保留，**每轮都生效**，与上下文大小无关。`truncate` 是同一类方法的变体，但不是复现：我们只在越过高水位线时触发、保护最近 6 轮、占位符带可读回的路径、短于 400 字符的不清、批量清理并带滞后。论文里"遮蔽把成本减半"来自一直开着的窗口，所以 128k 预算下 A3 很可能与 A1、M0 几乎一样，差别主要出现在 A6（32k）。
+
+### 12.4 论文数据（SWE-bench Verified，SWE-agent，n=500，arXiv HTML 提取）
+
+Qwen3-Coder 480B：原始 / 遮蔽 / 摘要的解决率 53.4 / 54.8 / 53.8%，单题成本 $1.29 / $0.61 / $0.64；摘要使轮数比原始多约 15%；摘要调用占单题成本 0.65% 到 7.2%。Gemini 2.5 Flash 思考模式是反例：遮蔽 −9.9%、摘要 −22.3%。我们用的也是思考模式，不要预设 A3、A4 一定优于 M0。局限：只覆盖 SWE-agent，触发条件固定，OpenHands 上只是初步验证。
+
+### 12.5 状态块与阶段 2 的真实核实（2026-10-11）
+
+- Claude Code 官方文档（经搜索结果引用）：压缩后重读最近读过或改过的至多 5 个文件，超过 5000 token 的只给路径引用，并重新读取 git 状态；Codex 的 `compact.rs` 里没有读文件。我们的状态块用沙箱自己的 `git diff`（补丁就是最终要判分的东西），不重读文件内容，只给读过的文件路径。两种做法哪种更好没有数据，要看阶段 4 的"压缩后重复率"。
+- 状态块不进下一次摘要的输入，也不进 `compaction` span 的 `summary` 字段；否则 `summary_file_recall` 永远是 100%（状态块里本来就有 diff stat）。
+- 摘要模型的输入是把工具输出拼进一条 **user** 消息，回放键"不含工具结果内容"的规则管不到它。录制一次带压缩的运行，换机器回放会对不上。**CI 的回放要继续用不压缩的配置**（toy 录制用的是 `strategy: none`，不受影响）。
+- 真实核实（flash，1 次，n=1）：`dev-pro-1` 的 django 轨迹强制压缩一次。摘要输入 10517 token（全文，未裁剪），摘要输出 1200 token（提示要求至多 700 词，实际略超：字数只是软约束，硬上限是 `summary_max_tokens`），$0.0046。摘要含 7 节，状态块 339 token，补丁文件在摘要正文里被提到。
+
+### 12.6 aggregate.py 的接口约定与探针结果（2026-10-11）
+
+- `aggregate.py` 从 `results/runs/<run_id>/trajectories/*.jsonl` 算指标，写 `metrics.json`。**是否解决由官方判分给出，不在轨迹里**：已解决的 `instance_id` 列表放 `<run_dir>/resolved.json`（或 `--resolved`），没有时 `resolve_rate` 为 null、`fail_taxonomy` 不区分 `submitted_but_failed`。`score.py` 写好后按这个约定对接（它原计划是"把结果合并进 metrics.json"）。
+- `tool_call` 和 `message` span 在这次之前没有 `step`，所以更早的运行（`dev-*`）只能算不依赖步数的指标；它们也都没有发生过压缩，不受影响。
+- `summary_file_recall` 的口径：压缩之前用 `str_replace` 改过的文件里，摘要正文（只含摘要模型的文字）提到路径或文件名的占比。已知盲区：通过 `bash`（`sed -i`、重定向）做的修改看不到。没用"最终补丁里的文件"，因为压缩之后才改的文件不该出现在摘要里。
+- 探针（`summary_probe.py`，flash 摘要，n=2，易题）：django-11066 在第 14 步压缩，提示 10255 → 3417 token，摘要输入 8643 token，$0.0008；sympy-16886 在第 10 步压缩，6250 → 2238，摘要输入 6040 token，$0.0034；两个摘要都提到了改过的唯一文件（召回率 1.0）。两个任务都只改了一个文件，**区分度不够**，真正的比较要等 dev_5 之后的、改多个文件的题。探针里摘要客户端的输出上限用的是默认配置（4096），不是探针自己缩小的预算，所以 sympy 的摘要输出 1304 token 超过了按小预算折算的上限；这是探针的简化，不影响真实运行。

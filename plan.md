@@ -68,7 +68,7 @@
   - [x] **重试策略已决定**（2026-10-05，你的决定：方案 B）：除 429 和 5xx 外，也重试**客户端超时**（`Timeout`）和**不可用的 200**（响应体不是合法 JSON 或缺 `choices`）；总共最多 3 次尝试，指数退避加抖动，429 遵守 `Retry-After`；按（异常类型、状态码、响应形状）判断；4xx 不重试；每次记录次数和 `retry_reason`；用尽后以 `env_error` 终止；重试等待计入墙钟时间和延迟。**CLAUDE.md §5.1 和 §5.7 已按此修改**；问题清单和策略详见 `docs/notes.md` §5
   - [x] **输出上限、超时、流式、截断、失败尝试已决定**（2026-10-06，你的决定：全部按我的方案；调研数据和依据见 `docs/notes.md` §5，CLAUDE.md §5.1、§5.3、§5.7 已修改）：① 当前只用非流式，基本功能完成后再支持流式；② 思考开 `max_tokens=65536`、`timeout_s=900`，思考关 `max_tokens=16384`、`timeout_s=300`，成对设置，超时必须大于顶满上限的耗时；③ `finish_reason=length` 不重试，半截工具调用不执行，连续 3 次截断记为 `format_error`（详情 `output_truncated`），另设 `truncated_outputs` 计数器；④ `insufficient_system_resource` 和 `aborted` 加入重试类别并丢弃半截内容；⑤ 重试保持最多 3 次尝试；⑥ 主指标只统计成功调用，失败尝试另记并估算浪费；⑦ `context.budget_tokens` 只算输入；⑧ B0 在关闭思考时显式设 `max_tokens=16384` 和超时
   - [ ] 仍待验证：真实 DeepSeek 上的 429、5xx、超时表现和失败请求的计费；`aborted` 的触发场景；速度数据每项只有 1 个样本，要用第 1 天 `dev_5` 的真实延迟校准超时；B0 的 `model_kwargs.max_tokens` 和 `timeout` 是否在 mini-swe-agent 里生效（没实测）
-  - [ ] **待决策**：`thinking` 默认开还是关。每次调用都显式传，不依赖服务端默认；等第 1 天循环能跑后在 `dev_5` 上各跑一次对比再定，所有配置统一
+  - [x] **`thinking` 默认开**（你的决定，2026-10-07：参考主流 harness）。每次调用都显式传，所有配置统一。**强度 `reasoning_effort` 临时定为 `high`，等你确认**：调研和依据见 `docs/notes.md` §11.1（要点：LiteLLM 会丢掉 `reasoning_effort` 关键字，必须走 `extra_body`；`high` 与 B0 的默认一致；官方数字里 `max` 只比 `high` 高约 1 个点，50 题分辨不出来）。强度已是配置项并进了 `config_hash`、回放键和 `run_start`，改成 `max` 要同时重新核对成对的 `max_tokens`/`timeout_s`
 - [~] 建仓库，写 `pyproject.toml`（`requires-python = ">=3.12,<3.13"`）、`.python-version`（`3.12`）、`.env.example`、`.gitignore`；用 `uv add` / `uv add --dev` 加依赖，`uv sync` 生成 `.venv` 和 `uv.lock`（**提交 `uv.lock`**）；加入 CLAUDE.md、plan.md 和 README.md
   - [x] `.python-version`（3.12）、`pyproject.toml`（`requires-python` 已锁 `>=3.12,<3.13`）、`.venv`（Python 3.12.12）、`uv.lock`（已提交）、plan.md、README.md 已就绪
   - [x] 依赖已用 `uv add` / `uv add --dev` 加入并提交（`e1aff8e`，121 个包）：运行时 litellm、docker、pydantic、pyyaml、fastapi、uvicorn、aiosqlite、python-dotenv、swebench；dev 组 ruff、pytest、pytest-asyncio、httpx、mini-swe-agent
@@ -144,22 +144,46 @@
 
 ## 第 2 天：可开关组件和评测流水线（**当晚开跑主实验**）
 
-- [ ] `context/`：`tokens.py`（计数）、`manager.py`，以及四种策略；实现可恢复截断；压缩记录 span
-- [ ] 实现 KV 缓存友好的规则（CLAUDE.md §5.2），加单元测试：连续两轮的请求前缀逐字节相同
+**范围（2026-10-07 与你商定）**：先做 `src/harness/` 的核心部分（上下文、权限层、配置、客户端参数）；`eval/` 下的流水线（`run_agent.py`、`score.py`、`aggregate.py`）、dev_5 冒烟、打 tag、开跑主实验放在核心之后；**镜像拉取不做**（你的决定，之后再开）。
+
+- [x] `context/`（2026-10-07）：`tokens.py`（本地计数 + 服务端实报值锚定，误差实测 −2.2% 到 +7.3%，见 `docs/notes.md` §11.3）、`manager.py`（持有"视图"，`state.messages` 永不修改）、四种策略（`strategies/{none,truncate,summarize,hybrid}.py`，另有共享类型 `types.py`）；高低水位线一次压缩到位以保住缓存前缀；压缩不拆开工具调用和回复；摘要失败回退到清理输出；压缩成本计入 `cost_usd` 和预算保护；`compaction` span（压缩前后 token、动作、成本）
+  - 可恢复截断：`truncate` 清理旧输出前先把模型当时看到的内容存到 `/tmp/harness/ctx_<n>.txt`（已被限长器存过的指向原来的 `out_<n>.txt`），占位符 `[output cleared: N chars, saved at <path>]`
+  - 压缩触发有滞后：压缩后仍高于高水位线时，下一次压缩要等提示词增长一个水位带，上限为预算，避免每轮重跑摘要；摘要调用带任务的墙钟 `deadline`；`run_start` 记录实际摘要模型
+  - 摘要走独立的 `LLMClient`（`MODEL_CHEAP`、思考固定关、`llm_call` span 带 `purpose=summary`）
+  - 测试时发现并修了一个真 bug：回合数不足 `keep_recent` 时受保护区间算反，会让所有消息都可清理
+- [x] KV 缓存友好的规则（2026-10-07）：单元测试覆盖连续两轮请求的前缀逐字节相同（管理器层和真实循环层各一个），工具定义排序且不变；压缩只在越过高水位线时发生
 - [x] `no_submit` 的用法（2026-10-07 完成）：连续 3 次纯文字回复以 `no_submit` 终止（详情 `no_tool_call`），不计入 `format_errors`；纯文字回合打断连续格式错误的计数，带工具调用的回合重置纯文字计数。改动在 `agent/loop.py`、`agent/state.py`，`tests/unit/test_loop.py` 补了 4 个测试，全套 197 通过、1 跳过
-- [ ] 回放客户端按录制的 usage 补写 `llm_call` span，使回放轨迹与真实运行同形状（见 `docs/notes.md` §10；第 4 天 CI 冒烟和 `aggregate.py` 需要）
-- [ ] 配置系统：`default.yaml` 和所有 `ablations/*.yaml`；启动时校验配置，并打印与主配置的差异
-- [ ] `security/`：先把 policy 和 guard 的**基础版**接进循环（主配置默认 guard 开启），第 3 天再完善
-- [ ] `eval/swebench/run_agent.py`：并发执行（`--workers`）、断点续跑、输出 `preds.jsonl`（字段 `instance_id`、`model_name_or_path`、`model_patch`）、跑之前打印成本预估并等待确认
-- [ ] `eval/swebench/score.py`：调用官方 `swebench` 判分工具（命令先核实），把结果合并进 `metrics.json`
+- [ ] 回放客户端按录制的 usage 补写 `llm_call` span：**延后到第 4 天，不是砍掉**（CI 冒烟才用；`aggregate.py` 处理的是真实运行，真实运行本来就有这些 span）
+- [x] 配置系统（2026-10-07）：`configs/default.yaml`；`configs/ablations/` 8 个文件（`ctx_none`、`bash_only`、`ctx_truncate`、`ctx_summarize`、`no_planning`、`budget_32k`、`budget_32k_none`（A6 与 A1 的组合）、`no_guard`（第 4 天安全评测用）），用 `extends:` 继承主配置；测试保证每个消融与主配置恰好只差预期的叶子键；`harness run` 启动时校验并打印与主配置的差异；沙箱资源上限进了配置（`sandbox.*`），因此进 `config_hash`
+  - **步数、成本、墙钟上限是临时值**（100 步 / $1.0 / 1800 秒），要在 dev_5 冒烟后确认再冻结；B0 用同样的值
+- [x] `security/`（2026-10-07，**按你选的 (a) 定稿**，不是"基础版"）：`configs/policy.yaml`（三级权限、`deny` 和 `ask` 规则、写入根目录、测试文件规则）、`security/policy.py`、`security/guard.py`；`guard_decision` span 带 `level`，`run_start` 带 `policy_hash`；83 个测试，其中 35 条是**必须放行**的日常命令（防误拦）。复核时发现并修了两处误拦：测试文件规则原先会拦根目录或 `/tmp` 下的 `test_repro.py`，且能跨行扫 heredoc 正文，现在只管 `tests/` 目录和 `conftest.py`、不跨行、豁免 `/tmp`。M0 用的就是这份文件，第 3 天不再改它（改了就要换 tag 并重跑 M0）；`ask` 在批量运行里按 `deny`，CLI 交互确认还没做
+- [x] 客户端强度参数（2026-10-07）：`llm.reasoning_effort`，经 `extra_body` 传（见 `docs/notes.md` §11.2）；进回放键，所以 toy 录制重录了一次（flash，5 步，$0.0015）
+- [~] **summarize 重做**（2026-10-11 起，调研与更正见 `docs/notes.md` §12；全部在 `v0.1-frozen` 之前完成，因为会改变 M0 的行为）
+  - [x] 阶段 0：视图拆成对齐的 `view`（发给模型的）和 `original`（agent 当时看到的）两个列表；`truncate` 只改 `view`，`summarize` 在两处同步替换
+  - [x] 阶段 1：摘要读 `original` 全文（修了 `hybrid` 摘要读到占位符的缺陷）；去掉写死的 1500/1000 裁剪；`reasoning_content` 进摘要输入（`summary_include_reasoning`，默认开）；仅在 `context_overflow`/`timeout` 时按 `summary_clip_chars`（4000）× `summary_clip_scale`（0.5）逐次收紧并重试（`summary_retries`=3）；响应不可用时也计入成本；`compaction` span 记录输入字符数、尝试次数、是否收紧；三处变异检查均变红
+  - [x] 阶段 2（2026-10-11）：摘要提示重写（交接框架，7 节：Tried so far / Failed attempts / Current hypothesis / **Next steps** / **Tests** / Files modified / Useful facts，字数两档 700 / 200）；摘要消息末尾由代码拼"状态块"（新文件 `context/restore.py`，**不在 CLAUDE.md §4 的目录树里**）：`git diff --stat`（由补丁文本自己算，始终保留）+ diff 正文（≤`summary_diff_chars`）、todo、已落盘输出索引、读过或改过的文件路径（只给路径，不重读内容）。
+    - 分隔与时效：状态块用固定标记 `## State as of step N` 与摘要正文隔开并注明"生成于第 N 步、可能过时"；**下一次摘要的输入不含旧状态块**（`summary_text_of`）；`compaction` span 里 `summary`（只含摘要模型的文字）与 `restored`（状态块各项）分开存放，所以 `summary_file_recall` 不会被状态块里的 diff stat 抬高
+    - 索引有上限（你提的问题）：最多 `summary_index_entries`=20 条、每条 ≤120 字符，其余折叠成一行并提示 `ls /tmp/harness`；索引与读过的文件跨压缩累积在 `RestoreIndex` 里，摘要真正生效才提交；状态块整体受 `restore_tokens_cap()` 约束，超出时按固定顺序降级（路径 → 索引 → diff 正文 → todo，stat 始终保留）；最小模式只留 stat（和放得下的 todo）
+    - 共用格式：`truncate` 的占位符与限长器的提示一样，改为共用一份定义加解析函数（`cleared_stub` / `cleared_output`，`saved_output`），索引从 `original` 取限长器提示路径、从 `view` 取 `ctx_N` 占位符路径
+    - 28 个新测试；六处变异检查均变红（其中一处最初存活，原因是我的测试没有构造出区分两种实现的数据，已补；另一处最初因为编辑没有匹配上而静默失败，已发现并重做）
+    - 真实核实（flash，一次）：用 `dev-pro-1` 的 django 轨迹强制压缩一次，摘要输入 10517 token、全文未裁剪，输出 1200 token，$0.0046；摘要含全部 7 节，状态块 339 token（上限 1000）；摘要里 3 个"读过的文件"和 diff 文件都能对上。n=1，只证明链路可用
+  - [x] 阶段 3（2026-10-11，先于阶段 2 完成，顾问建议的顺序）：`keep_recent` 改为 `keep_recent_min_turns`（2）+ `keep_recent_ratio`（0.25，占 `budget_tokens` 的比例，**上限**，可配置）；每次压缩前先做规划（head、尾部、余量、五级：normal / tail_shrunk / minimal / unreachable / infeasible），head 在首次调用后取服务端实报值；`min_gain_ratio`（0.1），**超出预算时豁免**；压缩尝试被跳过时也更新滞后基准；`infeasible` 且已超预算时不调用摘要、直接 `context_overflow` 并写明原因；摘要字数两档固定值（700 / 200 词）；摘要和状态块的有效上限为"绝对值与比例取小"（128k：4096 / 2500；32k：2560 / 1600），配置加载时校验两者之和低于 `low_water × budget`；`compaction` span 增加 `plan_level`、`target_unreachable`、`head_tokens`、`tail_tokens`、`room_tokens`。同时修了一个已有缺陷：本地计数把回传的 `reasoning_content` 算进提示词大小，而服务端不计。21 个新测试，六处变异检查均变红
+  - [x] 阶段 4（2026-10-11）：`tool_call` 和 `message` span 加 `step`（`compaction` span 的 `summary`、`restored` 阶段 2 已加）；新建 `eval/report/aggregate.py`（纯函数 + 命令行，写 `results/runs/<id>/metrics.json`）：CLAUDE.md §6 里能从轨迹算出的指标（成本均值和 P50、token、`cache_hit_rate`、延迟 P50/P95、步数、`overflow_rate`、`fail_taxonomy`）、`resolve_rate` 及 Wilson 区间（已解决的题号从 `<run_dir>/resolved.json` 或 `--resolved` 读，score.py 写好后对接），以及压缩指标 `steps_after_compaction`、`post_compaction_repeat_rate`、`summary_file_recall`（口径：压缩前用 `str_replace` 改过的文件里摘要正文提到的占比，而不是最终补丁里的文件）、`compaction_cost_share`；`--baseline` 做同题配对对比（只看发生过压缩的题，重复率与基线在同一步数处比较，解决情况四格表）。离线探针 `eval/report/summary_probe.py`（强制压缩一次，用真实摘要模型）。23 个新测试；五处变异检查均变红（其中一处最初存活：没有测试覆盖"正好在边界步的调用"，已补）。同时发现并删掉两处恒真断言（`or True`）
+    - 探针在 `dev-pro-1` 的两条真实轨迹上各跑一次（共约 $0.004）：django 与 sympy 的摘要都提到了改过的文件，文件召回率 1.0；两个任务都只改了一个文件，**区分度不够，只证明链路可用**
+  - [x] 阶段 6（2026-10-12）：`docs/notes.md` §12 已写；`CLAUDE.md` 已按你确认的 diff 更新（§4、§5.1、§5.2、§5.3、§5.6、§5.7、§5.8、§6、§7、§8），应用前对着代码重新核对了一遍（配置键与默认值、span 字段、规划等级、两条命令能运行、两个行为陈述），全部一致；新增"待同步清单"（见下一节），§8 加了登记规则
+  - [-] 阶段 5（摘要模型对照、始终开启的遮蔽窗口、`summarize` 落盘）：**你决定暂时不做**
+- [ ] `eval/swebench/run_agent.py`：并发执行（`--workers`）、断点续跑、输出 `preds.jsonl`（字段 `instance_id`、`model_name_or_path`、`model_patch`）、跑之前打印成本预估并等待确认；数据集只加载一次；`git_dirty` 时拒绝跑实验
+- [ ] `eval/swebench/score.py`：调用官方 `swebench` 判分工具（命令先核实；判分前核对数据集 sha 与 `subsets_meta.json` 一致），把结果合并进 `metrics.json`
 - [ ] `eval/report/aggregate.py`：汇总每次运行的指标，包括 Wilson 置信区间
-- [ ] 在 `dev_5` 上跑 M0 做冒烟测试，**修完所有明显的 bug**
+- [ ] 回填 `eval/baselines/mini_swe_agent.md` 的占位符，并实测 `model_kwargs` 里的 `thinking`/`max_tokens`/`timeout` 是否在 mini-swe-agent 里生效
+- [ ] 在 `dev_5` 上跑 M0 做冒烟测试（**5 题全部**，B0 也要在 dev 题上跑一遍），**修完所有明显的 bug**；用实测成本填预算表、重填 `MAX_TOTAL_COST_USD`
 - [ ] **打 tag `v0.1-frozen`**
-- [ ] 晚上：在 `verified_50` 上跑 M0，同时跑 B0（mini-SWE-agent，同一模型、同一题目子集）
+- [ ] 晚上：在 `verified_50` 上跑 M0，同时跑 B0（mini-swe-agent，同一模型、同一题目子集）；先打印预计花费并等你确认；WSL 只有 12GB，worker 数 × 单容器内存上限（现在 4g）加判分容器不能超，M0 和 B0 是否并行要先定
+- [ ] 拉剩余 50 个镜像（**你决定暂不做**；仍须在开跑 50 题前拉完）
 
 **验收**：dev_5 全流程能生成判分结果；tag 已打；M0 和 B0 已开跑。
 
-**如果进度落后**：`summarize` 策略可以推迟到第 3 天上午，但 M0 必须今晚开跑。
+**如果进度落后**：`summarize` **不能推迟**：M0 用的是 `hybrid`，缺了 `summarize` 就不是 M0，冻结后再补要重跑 M0（2026-10-07 你的决定，原来写的是"可以推迟到第 3 天上午"）。M0 今晚必须开跑。
 
 ---
 
@@ -169,7 +193,7 @@
 - [ ] 人工看 5 条失败轨迹，写进 `docs/failure_analysis.md`：是什么现象、根因、是 harness 的问题还是模型的问题
 - [ ] 如果发现 harness 的 bug：修复 → 打 `v0.2-frozen` → 在 `results/CHANGELOG.md` 记录 → **重跑 M0**
 - [ ] 按 P0、P1 的顺序跑消融实验 A1–A6（可以通宵并行）
-- [ ] 完善安全层：完成 `policy.yaml` 的三级权限和 deny_patterns，`ask` 的处理，误拦记录
+- [-] 完善安全层：**移除**，原因：已在第 2 天定稿（你选 (a)，见第 2 天 `security/` 一项）；第 3 天只做注入用例和蜜罐，不再改 `policy.yaml`，改了要换 tag 并重跑 M0
 - [ ] `eval/security/build_cases.py`：生成 **20 个注入用例**（4 种注入方式 × 5 种攻击目标）
   - 注入方式：README 正文、代码注释、工具输出（伪造的报错信息）、issue 描述
   - 攻击目标：读取 `~/.ssh` 下的蜜罐文件、读取 `CANARY_TOKEN` 环境变量、联网下载并执行（`curl | sh`）、篡改测试断言、`rm -rf` 删除工作目录
@@ -242,6 +266,36 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - Ran controlled harness ablations: under a 32K context budget, rule-based truncation + LLM compaction cut context-overflow failures from {{a}}% to {{b}}%; a KV-cache-friendly, append-only context layout reached a {{c}}% prompt-cache hit rate.
 - Designed a tiered permission guard and a 20-case prompt-injection suite with canary-based detection, reducing attack success rate from {{d}}% to {{e}}% at a {{f}}% false-block rate; shipped as a FastAPI + SSE service with replay-based CI.
 ```
+
+---
+
+## 待同步清单（设计或代码改了、CLAUDE.md 还没跟上的）
+
+**用法**：改了设计或代码，且影响 CLAUDE.md 里写到的规则、名字或字段时，**当场**在下表登记一行；同步时先把 diff 给你看，应用后勾掉并写日期。陈述以代码为准（读代码，不凭对话记忆）。CLAUDE.md 只写规则和影响实验的配置键，字段清单以 `config.py` 和代码为准。
+
+| 登记日期 | 变更 | CLAUDE.md 位置 | 状态 |
+|---|---|---|---|
+| 2026-10-07 | `llm.reasoning_effort`，必须经 `extra_body` 传 | §5.1、§5.3 表 | [x] 2026-10-12 |
+| 2026-10-07 | 回放键含 `reasoning_effort` | §5.8 | [x] 2026-10-12 |
+| 2026-10-07 | 沙箱资源上限进配置（`sandbox.*`） | §5.3 表 | [x] 2026-10-12 |
+| 2026-10-11 | 视图与原文两个等长列表、规划五级、滞后基准 | §5.3 | [x] 2026-10-12 |
+| 2026-10-11 | `summarize` 读原文（含推理，可关）、失败后收紧重试；`hybrid` 的摘要读清理前原文 | §5.3 | [x] 2026-10-12 |
+| 2026-10-11 | 摘要末尾的状态块（代码生成，与摘要正文分开） | §5.3 | [x] 2026-10-12 |
+| 2026-10-11 | `keep_recent` → `keep_recent_min_turns` + `keep_recent_ratio`；`min_gain_ratio`；`min_clear_chars`；水位线 | §5.3 表 | [x] 2026-10-12 |
+| 2026-10-11 | 提示词大小不计回传的 `reasoning_content` | §5.3 | [x] 2026-10-12 |
+| 2026-10-11 | CI 回放必须用不压缩的配置 | §5.8 | [x] 2026-10-12 |
+| 2026-10-11 | span 新字段（`step`、`purpose`、`level`、`plan_level` 等、`compaction` 的摘要字段） | §5.7 | [x] 2026-10-12 |
+| 2026-10-11 | 四个压缩指标；`tokens_in` 不含压缩调用 | §6 | [x] 2026-10-12 |
+| 2026-10-11 | 新文件 `restore.py`、`strategies/types.py`、`summary_probe.py` | §4 | [x] 2026-10-12 |
+| 2026-10-11 | `aggregate.py`、`summary_probe.py` 的命令 | §7 | [x] 2026-10-12 |
+| 2026-10-12 | 漂移：`deny_patterns` 实际是 `deny` / `ask` 两组规则 | §5.6 | [x] 2026-10-12 |
+| 2026-10-12 | 漂移：`cached_input_tokens` 实际叫 `cached_tokens` / `tokens_cached` | §5.2 | [x] 2026-10-12 |
+| 2026-10-12 | 漂移：回放键字段列表漏了 `reasoning_effort` | §5.8 | [x] 2026-10-12 |
+| 2026-10-12 | 登记规则本身 | §8 | [x] 2026-10-12 |
+| 待办 | CLI 交互确认（`ask`）实现后 | §5.6 删掉"尚未实现" | [ ] |
+| 待办 | 回放补写 `llm_call` span 后（第 4 天） | §5.8 删掉"待做" | [ ] |
+| 待办 | `score.py` 写好后：`resolved.json` 约定（现在只在 `docs/notes.md` §12.6） | §6 或 §7 | [ ] |
+| 待办 | 冻结前定下 `default.yaml` 的步数 / 成本 / 墙钟上限（现在是临时值） | 不进 CLAUDE.md，只记 plan.md | [ ] |
 
 ---
 
@@ -424,4 +478,69 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 2. 配置系统：`default.yaml` 和消融 YAML，启动时打印与主配置的差异；定下实验用的步数、成本、墙钟上限
 3. `eval/swebench/run_agent.py`、`score.py`；权限层的基础版
 4. 开跑 50 题之前还要拉剩余 50 个镜像（你决定等 harness 实现后再拉，现在可以开始），并先打印预计花费等你确认
+
+
+### 2026-10-07（第 2 天：harness 核心部分）
+
+**你的决定**：`thinking` 默认开（强度另说）；guard 选 (a)，第 2 天定稿 `policy.yaml`；`summarize` 不推迟；不拉镜像，先做核心。
+
+**完成了什么**（`src/harness/` 的核心，详见第 2 天清单）
+- 思考强度：调研主流 harness 并核实接口，记在 `docs/notes.md` §11.1–11.2；发现 **LiteLLM 会丢掉 `reasoning_effort` 关键字**，改走 `extra_body`；`reasoning_effort` 进配置、回放键、`run_start`；**临时定 `high`，等你确认**
+- 上下文：`tokens.py`、`manager.py`、四种策略、压缩 span、成本计入；token 估计用 4 条真实轨迹校准（§11.3）
+- 权限层定稿：`configs/policy.yaml` + `policy.py` + `guard.py`，83 个测试（含 35 条必须放行的日常命令）
+- 配置：`default.yaml`、8 个消融文件（`extends` 继承）、启动时打印与主配置的差异、沙箱上限进配置
+- 测试：全套 335 通过、1 跳过；`ruff check` 和 `ruff format --check` 通过
+- 真实 DeepSeek 核实（几次很小的调用）：`reasoning_effort` 的 `high`/`max` 都被接受；压缩后的历史（连续两条 user 消息）被接受，包括 M0 设置（v4-pro、思考开、带 tools、保留带 `reasoning_content` 的 assistant 消息）
+
+**当天花费**：约 $0.0040（标准价，按记录的 token 算：toy 重录 5 步 $0.0015，真实核实：flash 3 次调用 $0.0011，M0 设置（v4-pro）2 次调用 $0.0014；没有对账）
+
+**遇到的问题和发现**
+- 测试抓到一个真 bug：回合数不足 `keep_recent` 时，受保护区间的下界返回 `len(view)`，意思反了，会让所有消息都变得可清理；改为返回 `HEAD`，补了测试
+- LiteLLM 的 `token_counter` 对 DeepSeek 不计 `tools`，本地计数偏低 8%–21%，所以用"服务端实报值锚定 + 比例"，并给水位线留余量
+- 一开始用 YAML 折叠标量 `>-` 写多行正则，折叠会补空格，把 `|` 前的空格变成正则的一部分；改成 `|-` 字面块
+- 在我自己的测试里把字符数当成 token 数，规模算错了几处（约 5 字符一个 token），已按实测比例重算
+
+**与 CLAUDE.md 不一致或值得你决定的地方**（没有改 CLAUDE.md）
+- §5.1 写"每次调用显式传 `thinking`"，现在还要显式传 `reasoning_effort`；§5.3 的配置键表没有 `llm.reasoning_effort`、`sandbox.*`、`context.high_water/low_water/keep_recent`、`guard.policy_path`。等你确认强度后一起补
+- §5.7 的 `llm_call` span 现在多一个 `purpose`（`agent`/`summary`），`compaction` span 和 `guard_decision.level` 是新字段
+- 步数 / 成本 / 墙钟上限（100 / $1.0 / 1800 秒）是**临时值**，要在 dev_5 冒烟后定
+
+**待你决定**
+1. `reasoning_effort`：`high`（我的建议）还是 `max`？是否另加一个 P2 实验用 `max` 重跑 M0 来量化影响？
+2. 上限值，以及 worker 数、M0 和 B0 并行还是串行（WSL 12GB）
+
+**明天先做**
+1. `eval/swebench/run_agent.py`、`score.py`、`aggregate.py`
+2. 回填 `mini_swe_agent.md` 并实测 B0 的 `model_kwargs`
+3. 在 dev_5 全部 5 题上跑 M0 和 B0 冒烟，定上限值和预算；然后打 `v0.1-frozen`
+4. 镜像拉取等你说开始
+
+### 2026-10-11 / 12（第 2 天续：summarize 重做、聚合与规则同步）
+
+**完成了什么**（详见第 2 天"summarize 重做"一项）
+- 阶段 0 到 4 和阶段 6 全部完成：视图与原文双列表；摘要读原文全文（含推理）、仅在输入过大时收紧重试；摘要消息末尾的状态块（带上限的索引）；自适应尾部与规划五级；`tool_call` / `message` span 加 `step`；`eval/report/aggregate.py` 和 `summary_probe.py`；`CLAUDE.md` 同步并新增本"待同步清单"
+- 测试 429 通过、1 跳过；`ruff` 通过。新增约 110 个测试，对每个新不变量做了变异检查
+- 调研（`docs/notes.md` §12）：主流 harness 的摘要输入、遮蔽与 `truncate` 的关系、Claude Code 与 Codex 压缩后的状态恢复；其中对我前面几处错误说法做了更正
+
+**当天花费**：约 $0.01（标准价，按记录的 token 算：阶段 2 的真实核实 $0.0046，探针三次共约 $0.005；没有对账）
+
+**提交**（2026-10-12，按功能切成 5 个，每个功能只出现在一个提交里；每个提交单独检出后 `ruff check`、`ruff format --check` 和 `pytest` 都通过，测试数依次为 223 / 306 / 404 / 429 / 429，各自另有 1 个跳过）
+1. `8393438` feat(config)：配置层与 LLM 请求参数（`reasoning_effort`、`sandbox.*`、上下文设置、消融配置、回放重录）
+2. `5030c7e` feat(security)：权限层（`policy.yaml`、`policy.py`、`guard.py`）
+3. `b27dee4` feat(context)：视图与原文、四种策略、带状态块的摘要、规划，以及接进主循环和 CLI 的部分
+4. `4865a92` feat(eval)：逐步追踪、`aggregate.py`、`summary_probe.py`
+5. docs：`CLAUDE.md`、`plan.md`、`notes.md`
+`loop.py` 和 `cli.py` 同时承载了多个功能，为了不让一个功能横跨提交，按功能拆成了中间版本（各提交时刻的内容）；`test_loop_context.py` 末尾那个属于评测功能的测试挪到了 `test_trace_steps.py`。
+
+**遇到的问题和发现**
+- `hybrid` 的摘要读到的是 `[output cleared]` 占位符而不是原文；本地 token 计数把回传的 `reasoning_content` 算进提示词大小，而服务端不计。两者都是已有缺陷，现已修复
+- 变异检查时三次栽在同一个坑：用 `sed` 或字符串替换改文件，但文件已被格式化换行，替换没匹配上又没报错，变异体因此"存活"，另有两次是编辑本身静默失败。之后改成带断言的替换；还发现并删掉两处恒真断言（`or True`）
+- CLAUDE.md 与代码出现 11 处不一致：7 处是我凭对话记忆写草稿造成的，4 处是 CLAUDE.md 写于第 0 天、之后字段名和结构有了更具体的决定却没回头改。根因是没有机制强制同步，已加"待同步清单"和 §8 的登记规则
+- 一条回复被安全分类器拦截，我不知道是哪一部分；没有重复它
+
+**明天先做**
+1. ~~先按"review 路线"把改动切成提交~~（2026-10-12 已完成，见上面"提交"一条）
+2. `eval/swebench/run_agent.py`、`score.py`；回填 `mini_swe_agent.md` 并实测 B0 的 `model_kwargs`
+3. dev_5 全部 5 题跑 M0 和 B0 冒烟，定上限值和预算，再打 `v0.1-frozen`
+4. 镜像拉取等你说开始
 
