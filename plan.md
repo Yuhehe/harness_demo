@@ -175,7 +175,7 @@
 - [x] `eval/swebench/run_agent.py`（2026-10-12）：顺序运行；按 `instance_id` 断点续跑（`preds.jsonl` 里有这一行才算做完，半截轨迹先挪开再重跑）；一个 `run_id` 只对应一个配置（`config_hash` 不一致就拒绝）；工作区有未提交改动时拒绝（`--allow-dirty` 仅限开发运行并记录）；开跑前检查镜像在不在（不拉取）、打印预计与最坏花费，超过 10 题要确认，累计花费到 `MAX_TOTAL_COST_USD` 的 80% 自动停；`env_error` 记入并标记，`--retry-env-errors` 重跑它们；每题的装配抽成 `cli.run_one`，`harness run` 与批量运行器共用。**并行是 TODO**（`--workers` 大于 1 报错并打印本机上限）。输出 `preds.jsonl`、`status.jsonl`、`run_meta.json`、`metrics.json`
 - [x] `eval/swebench/score.py`（2026-10-12）：调用 `swebench eval verified`（`-p preds.jsonl -i <我们的题号> --report-dir .`，在运行目录里跑，`logs/` 因此落在被 gitignore 的目录）；判分前核对数据集最新 revision 与 `subsets_meta.json` 一致，不一致就不判；报告按 `*.<run_id>.json` 找；写出 `resolved.json`、`score.json`（每个题号按判分器的结论归类）并更新 `metrics.json`。**判分器没法判的题**（基础设施失败、出错、空补丁）与"判了但没修好"分开，`fail_taxonomy` 里是 `scoring_error` / `submitted_empty_patch`，不并入 `submitted_but_failed`。测试用 B0 冒烟的真实报告做固定数据，假 `swebench` 跑通整条流程；还没有在真实运行上端到端跑过（等 dev_5 冒烟）
 - [x] `eval/report/aggregate.py`：汇总每次运行的指标，包括 Wilson 置信区间（见 summarize 重做的阶段 4；B0 的轨迹格式不同，读不了，见下面 B0 一项）
-- [ ] 回填 `eval/baselines/mini_swe_agent.md` 的占位符，并实测 `model_kwargs` 里的 `thinking`/`max_tokens`/`timeout` 是否在 mini-swe-agent 里生效
+- [x] B0 对齐（2026-10-12）：新增 `eval/baselines/run_b0.py`（**不在 CLAUDE.md §4 的目录树里**，已登记待同步）：从 `configs/default.yaml` 生成 `mini-extra swebench` 命令，步数 / 成本 / 墙钟 / 命令超时 / 容器上限 / 思考 / `reasoning_effort` / `max_tokens` / 请求超时都来自那份配置，不再手写；`mini_swe_agent.md` 的占位符已清掉。**`model_kwargs` 是否生效已实测**：用 mini-swe-agent 自己的 `LitellmModel` 对着本机假服务器，请求体里确有 `thinking`、`reasoning_effort`（经 `extra_body`）、`max_tokens`，`timeout` 在 `litellm.completion` 的参数里。已核实 mini-swe-agent 的"一步"= 一次模型调用（`n_calls`）。`convert` 把 mini-swe-agent 的输出（`mini/preds.json` + `*.traj.json`）转成 `preds.jsonl`、`status.jsonl` 和只含 `run_start` / `run_end` 的轨迹，所以 `score.py`、`aggregate.py` 和花费统计都读得了 B0；B0 的成本按它记录的 token 用我们自己的标准价重算（mini-swe-agent 自己的数字另存为 `b0_reported_cost`）。已知差异：B0 的 `wall_seconds` 是第一次到最后一次响应的间隔，略短；B0 没有逐步 span，所以压缩指标不适用
 - [ ] 在 `dev_5` 上跑 M0 做冒烟测试（**5 题全部**，B0 也要在 dev 题上跑一遍），**修完所有明显的 bug**；用实测成本填预算表、重填 `MAX_TOTAL_COST_USD`
 - [ ] **打 tag `v0.1-frozen`**
 - [ ] 晚上：在 `verified_50` 上跑 M0，同时跑 B0（mini-swe-agent，同一模型、同一题目子集）；先打印预计花费并等你确认；WSL 只有 12GB，worker 数 × 单容器内存上限（现在 4g）加判分容器不能超，M0 和 B0 是否并行要先定
@@ -293,6 +293,7 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 | 2026-10-12 | 漂移：回放键字段列表漏了 `reasoning_effort` | §5.8 | [x] 2026-10-12 |
 | 2026-10-12 | 登记规则本身 | §8 | [x] 2026-10-12 |
 | 2026-10-12 | `run_agent.py` 的示例命令不再有 `--workers 4`（并行是 TODO，大于 1 会报错） | §7 | [ ] |
+| 2026-10-12 | 新文件 `eval/baselines/run_b0.py`（B0 命令生成与输出转换）；B0 的命令示例 | §4 目录树、§7 | [ ] |
 | 待办 | CLI 交互确认（`ask`）实现后 | §5.6 删掉"尚未实现" | [ ] |
 | 待办 | 回放补写 `llm_call` span 后（第 4 天） | §5.8 删掉"待做" | [ ] |
 | 待办 | `score.py` 写好后：`resolved.json` 约定（现在只在 `docs/notes.md` §12.6） | §6 或 §7 | [ ] |
@@ -557,3 +558,4 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - **决定（你的）**：`reasoning_effort` 定为 `high`；步数 / 成本 / 墙钟上限做成配置，数值参考主流 harness 和现有数据；并行先只算资源，实现是 TODO；加一次真实压缩冒烟；先不拉 50 个镜像；暂不打 `v0.1-frozen`，先做核心功能
 - 批量运行器 `run_agent.py` 完成（见第 2 天对应一项）；每题的装配抽成 `cli.run_one`
 - 本机资源（`docker info`）：15.6GB 内存、10 核；沙箱上限 4g / 2 核时，按用满上限算最多同时 3 个（内存限制出 3 个，CPU 允许 5 个）；上限是封顶不是预留，实际可以更多，但这是不会撑爆内存的数
+- B0 对齐完成（`run_b0.py`）；限制值定为 100 步 / $2.0 / 1800 秒（`default.yaml` 的注释写明了依据和我的算术）

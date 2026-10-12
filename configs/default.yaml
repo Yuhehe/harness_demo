@@ -41,11 +41,24 @@ sandbox:
 tool_output:
   max_chars: 8000
 
-# PROVISIONAL: to be confirmed against dev_5 before the freeze (plan.md, day 2). B0 gets the
-# same step and cost limits (eval/baselines/mini_swe_agent.md).
+# Per-task limits. All three are plain configuration: override them in a config file that
+# `extends` this one. B0 gets the same values (eval/baselines/run_b0.py reads them from here).
+#
+# Where the numbers come from (docs/notes.md section 13):
+#   max_steps 100   OpenHands' SWE-bench docs use 100 iterations; mini-swe-agent's SWE-bench
+#                   config allows 250, SWE-agent has no call limit. A step here, as in
+#                   mini-swe-agent (n_calls), is one model call. Our two dev tasks took 11 and
+#                   15 steps, but they are easy ones.
+#   $2.0 per task   SWE-agent's batch commands use $2.00 (its default is $3), mini-swe-agent
+#                   $3. Arithmetic, not measurement: a 100-step run whose prompt ramps to the
+#                   128k budget costs about $1.2 at the 89% cache hit rate seen on dev, and
+#                   about $8.7 if the cache never hits, so the cap also guards the cache.
+#   1800 s          the dev tasks took 26 to 35 s for 11 to 15 steps (about 2.5 s a step), so
+#                   100 steps plus test runs in the sandbox stay well inside half an hour.
+# Re-check after the dev_5 smoke run: the dev data is two easy tasks.
 limits:
   max_steps: 100
-  max_cost_per_task_usd: 1.0
+  max_cost_per_task_usd: 2.0
   max_wall_seconds: 1800
 
 bash_timeout_s: 120

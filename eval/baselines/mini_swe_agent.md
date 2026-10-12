@@ -1,7 +1,7 @@
 # 基线 B0：mini-SWE-agent
 
 > 核实日期 2026-10-04，版本 mini-swe-agent **2.4.6**（`uv add --dev` 安装，锁在 `uv.lock`）。依据是源码和 `--help` 实测，细节与行号见 `docs/notes.md` §4。
-> 本文件里的 `{{…}}` 是还没确定的值（取决于 `configs/default.yaml`，目前尚未创建），不估算。
+> **命令不再手写**：`eval/baselines/run_b0.py` 从 `configs/default.yaml` 生成下面的命令（步数、成本、墙钟、命令超时、容器上限、思考设置、`max_tokens`、请求超时都来自那份配置），并把 mini-swe-agent 的输出转成流水线其他部分读的格式。下面各节解释每个参数为什么这样写；具体的数值以配置为准，所以文档里不再写死。
 
 ## 1. 定位
 
@@ -26,11 +26,14 @@ set -a; source .env; set +a                    # 导出 OPENAI_API_KEY / OPENAI_
 uv run mini-extra swebench \
   --subset SWE-bench/SWE-bench_Verified --split test \
   --filter "^($(paste -sd'|' configs/subsets/verified_50.txt))\$" \
-  -w {{WORKERS}} -m "$MODEL_MAIN" \
+  -w 1 -m "$MODEL_MAIN" \
   -c swebench.yaml \
-  -c agent.step_limit={{STEP_LIMIT}} -c agent.cost_limit={{COST_LIMIT}} \
-  -c 'environment.run_args=["--rm","--network","none"]' \
-  -o results/runs/B0
+  -c agent.step_limit=<limits.max_steps> -c agent.cost_limit=<limits.max_cost_per_task_usd> \
+  -c agent.wall_time_limit_seconds=<limits.max_wall_seconds> -c environment.timeout=<bash_timeout_s> \
+  -c 'environment.run_args=["--rm","--network","none","--memory","4g","--cpus","2.0","--pids-limit","512"]' \
+  -c 'model.model_kwargs.thinking={"type":"enabled"}' -c 'model.model_kwargs.extra_body={"reasoning_effort":"high"}' \
+  -c model.model_kwargs.max_tokens=65536 -c model.model_kwargs.timeout=900.0 \
+  -o results/runs/B0-dev/mini      # 看实际命令：run_b0.py run ... --print-command
 ```
 
 | 参数 | 为什么这样写 |
@@ -40,7 +43,7 @@ uv run mini-extra swebench \
 | `--filter "^(id1\|id2\|…)\$"` | 没有读文件的参数；`--filter` 用 `re.match`（前缀匹配），必须加 `^…$` 才是精确匹配。用 `paste -sd'\|'` 直接从子集文件生成，不用另写脚本 |
 | 不用 `--shuffle` | 它没有随机种子，不可复现 |
 | `-c swebench.yaml` | 传了任何 `-c` 就会**替换**默认配置，所以要显式带上内置的 `swebench.yaml`（默认模型是 anthropic，`-m` 会覆盖它） |
-| `agent.step_limit` / `agent.cost_limit` | 默认是 250 步、3.0 美元；要改成与 M0 相同的上限：`{{STEP_LIMIT}}`、`{{COST_LIMIT}}` 取自 `configs/default.yaml` |
+| `agent.step_limit` / `agent.cost_limit` / `agent.wall_time_limit_seconds` | 核心代码默认 0 步（不限）、3.0 美元、不限时；SWE-bench 配置覆盖为 250 步 / $3。改成与 M0 相同的上限，取自 `configs/default.yaml` 的 `limits`。**一步 = 一次模型调用**（源码 `agents/default.py`：`n_calls` 每次 `query` 加一，`step_limit` 与它比较），与我们的口径一致 |
 | `environment.run_args` | 见 §4；列表按 JSON 解析（`config/__init__.py:39-43`，已离线验证），会**整体替换**默认的 `["--rm"]`，所以 `--rm` 要保留 |
 | `-o results/runs/B0` | `results/runs/` 已被 gitignore |
 
@@ -61,12 +64,12 @@ PYTHONPATH=eval/swebench uv run python -c "import json; from select_subset impor
 | 项 | mini-swe-agent 默认 | M0 | 处理 |
 |---|---|---|---|
 | 网络 | `docker run --rm`，**联网** | `network_mode="none"` | 加 `--network none`（建议，待你确认） |
-| 内存 / CPU / pids 上限 | 无 | 有（`configs/default.yaml` 尚未创建） | 在 `run_args` 里加同样的 `--memory`、`--cpus`、`--pids-limit`：`{{M0 container limits}}` |
-| 单条命令超时 | 60 秒（`environment.timeout`） | 120 秒（CLAUDE.md §5.4） | 改成同样的值，或在报告里注明差异：`{{decision}}` |
-| 步数、成本上限 | 250 步、3.0 美元 | `{{…}}` | 对齐，见上表 |
-| 模型 | anthropic 默认 | `{{MODEL_MAIN}}` | `-m` 指定同一个 |
-| 输出上限 `max_tokens` | 不设，用 DeepSeek 默认（思考 64K、不思考 8K） | 思考开 65536；思考关 16384 | 思考开时已一致；思考关时显式加 `-c model.model_kwargs.max_tokens=16384`（`model_kwargs` 透传给 `litellm.completion`，`litellm_model.py:66-71`；**在 mini-swe-agent 里实际是否生效尚未实测**） |
-| 单次请求超时 | LiteLLM 默认 6000 秒 | 思考开 900 秒；思考关 300 秒 | 显式加 `-c model.model_kwargs.timeout=...` 对齐（同上，未实测） |
+| 内存 / CPU / pids 上限 | 无 | 有（`sandbox.*`） | 在 `run_args` 里加同样的 `--memory`、`--cpus`、`--pids-limit`（由 `run_b0.py` 从 `sandbox.*` 生成） |
+| 单条命令超时 | 60 秒（`environment.timeout`） | 120 秒（`bash_timeout_s`） | 对齐，取自配置 |
+| 步数、成本、墙钟上限 | 250 步、3.0 美元、不限时 | `limits.*` | 对齐，见上表 |
+| 模型 | anthropic 默认 | `MODEL_MAIN` | `-m` 指定同一个 |
+| 输出上限 `max_tokens` | 不设，用 DeepSeek 默认（思考 64K、不思考 8K） | 思考开 65536；思考关 16384 | 思考开时已一致；思考关时显式加 `-c model.model_kwargs.max_tokens=16384`（`model_kwargs` 透传给 `litellm.completion`，`litellm_model.py:66-71`；**2026-10-12 已实测生效**：用 mini-swe-agent 自己的 `LitellmModel` 对着本机假服务器，请求体里有 `thinking`、`reasoning_effort`（经 `extra_body`）和 `max_tokens`，`timeout` 在 `litellm.completion` 的参数里，见 `tests/unit/test_run_b0.py`） |
+| 单次请求超时 | LiteLLM 默认 6000 秒 | 思考开 900 秒；思考关 300 秒 | 显式加 `-c model.model_kwargs.timeout=...` 对齐（同上，已实测） |
 | 流式 | 不用 | 当前不用 | 一致 |
 | 提示词、工具 | 只有 bash，自带提示词 | tools + planning 等 | **这是被比较的因素，不对齐** |
 | 判分 | — | `swebench eval` | 同一个判分器（见 §6） |
@@ -85,7 +88,7 @@ PYTHONPATH=eval/swebench uv run python -c "import json; from select_subset impor
 ## 6. 判分（与 M0 共用同一个判分器）
 
 ```bash
-uv run swebench eval verified -p results/runs/B0/preds.json --run-id B0 -j {{N}} --report-dir results/runs/B0
+uv run python eval/swebench/score.py --run-id B0-dev      # 与 M0 同一个脚本；`run_b0.py` 已把输出转成 preds.jsonl
 ```
 
 - swebench 5.0.2 的 `-p` 直接接受 mini-swe-agent 的 `preds.json`（字典会被取 values，`swebench/harness/utils.py:65-75`）。
