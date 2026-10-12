@@ -173,7 +173,7 @@
   - [x] 阶段 6（2026-10-12）：`docs/notes.md` §12 已写；`CLAUDE.md` 已按你确认的 diff 更新（§4、§5.1、§5.2、§5.3、§5.6、§5.7、§5.8、§6、§7、§8），应用前对着代码重新核对了一遍（配置键与默认值、span 字段、规划等级、两条命令能运行、两个行为陈述），全部一致；新增"待同步清单"（见下一节），§8 加了登记规则
   - [-] 阶段 5（摘要模型对照、始终开启的遮蔽窗口、`summarize` 落盘）：**你决定暂时不做**
 - [x] `eval/swebench/run_agent.py`（2026-10-12）：顺序运行；按 `instance_id` 断点续跑（`preds.jsonl` 里有这一行才算做完，半截轨迹先挪开再重跑）；一个 `run_id` 只对应一个配置（`config_hash` 不一致就拒绝）；工作区有未提交改动时拒绝（`--allow-dirty` 仅限开发运行并记录）；开跑前检查镜像在不在（不拉取）、打印预计与最坏花费，超过 10 题要确认，累计花费到 `MAX_TOTAL_COST_USD` 的 80% 自动停；`env_error` 记入并标记，`--retry-env-errors` 重跑它们；每题的装配抽成 `cli.run_one`，`harness run` 与批量运行器共用。**并行是 TODO**（`--workers` 大于 1 报错并打印本机上限）。输出 `preds.jsonl`、`status.jsonl`、`run_meta.json`、`metrics.json`
-- [ ] `eval/swebench/score.py`：调用官方 `swebench` 判分工具（命令先核实；判分前核对数据集 sha 与 `subsets_meta.json` 一致），把结果合并进 `metrics.json`
+- [x] `eval/swebench/score.py`（2026-10-12）：调用 `swebench eval verified`（`-p preds.jsonl -i <我们的题号> --report-dir .`，在运行目录里跑，`logs/` 因此落在被 gitignore 的目录）；判分前核对数据集最新 revision 与 `subsets_meta.json` 一致，不一致就不判；报告按 `*.<run_id>.json` 找；写出 `resolved.json`、`score.json`（每个题号按判分器的结论归类）并更新 `metrics.json`。**判分器没法判的题**（基础设施失败、出错、空补丁）与"判了但没修好"分开，`fail_taxonomy` 里是 `scoring_error` / `submitted_empty_patch`，不并入 `submitted_but_failed`。测试用 B0 冒烟的真实报告做固定数据，假 `swebench` 跑通整条流程；还没有在真实运行上端到端跑过（等 dev_5 冒烟）
 - [x] `eval/report/aggregate.py`：汇总每次运行的指标，包括 Wilson 置信区间（见 summarize 重做的阶段 4；B0 的轨迹格式不同，读不了，见下面 B0 一项）
 - [ ] 回填 `eval/baselines/mini_swe_agent.md` 的占位符，并实测 `model_kwargs` 里的 `thinking`/`max_tokens`/`timeout` 是否在 mini-swe-agent 里生效
 - [ ] 在 `dev_5` 上跑 M0 做冒烟测试（**5 题全部**，B0 也要在 dev 题上跑一遍），**修完所有明显的 bug**；用实测成本填预算表、重填 `MAX_TOTAL_COST_USD`

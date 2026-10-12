@@ -190,7 +190,9 @@ def task_metrics(t: Task) -> dict[str, Any] | None:
 
 
 def aggregate(
-    tasks: dict[str, Task], resolved: set[str] | None = None
+    tasks: dict[str, Task],
+    resolved: set[str] | None = None,
+    score: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     rows = [m for t in tasks.values() if (m := task_metrics(t))]
     n = len(rows)
@@ -215,7 +217,7 @@ def aggregate(
         },
         "steps_mean": mean([r["steps"] for r in rows]),
         "overflow_rate": sum(r["fail_reason"] == "context_overflow" for r in rows) / n,
-        "fail_taxonomy": _taxonomy(rows, resolved),
+        "fail_taxonomy": _taxonomy(rows, resolved, score),
         "compaction": {
             "tasks_with_compaction": len(compacted),
             "compactions_total": sum(r["compactions"] for r in rows),
@@ -263,16 +265,29 @@ def _share(part: float, whole: float) -> float | None:
     return part / whole if whole else None
 
 
-def _taxonomy(rows: list[dict[str, Any]], resolved: set[str] | None) -> dict[str, int]:
+def _taxonomy(
+    rows: list[dict[str, Any]],
+    resolved: set[str] | None,
+    score: dict[str, list[str]] | None = None,
+) -> dict[str, int]:
+    """Count the runs by how they ended. With the scorer's verdicts (`score`), a submitted run
+    the scorer could not judge is `scoring_error` or `submitted_empty_patch`, not
+    `submitted_but_failed`: a broken scoring environment is not the model's failure."""
+    broken: set[str] = set()
+    empty: set[str] = set()
+    if score:
+        for name in ("error", "infra_failure", "ambiguous_failure", "incomplete"):
+            broken |= set(score.get(name, []))
+        empty = set(score.get("empty_patch", []))
     counts: dict[str, int] = {}
     for r in rows:
-        key = r["fail_reason"] or "submitted"
-        if (
-            key == "submitted"
-            and resolved is not None
-            and r["instance_id"] not in resolved
-        ):
+        iid, key = r["instance_id"], r["fail_reason"] or "submitted"
+        if key == "submitted" and resolved is not None and iid not in resolved:
             key = "submitted_but_failed"
+            if iid in empty:
+                key = "submitted_empty_patch"
+            elif iid in broken:
+                key = "scoring_error"
         counts[key] = counts.get(key, 0) + 1
     return counts
 
@@ -345,7 +360,9 @@ def main(argv: list[str] | None = None) -> int:
     if not tasks:
         raise SystemExit(f"no trajectories in {run_dir / 'trajectories'}")
     resolved = _resolved(run_dir, args.resolved)
-    result = aggregate(tasks, resolved)
+    score_path = run_dir / "score.json"
+    score = json.loads(score_path.read_text()) if score_path.exists() else None
+    result = aggregate(tasks, resolved, score)
     if args.baseline:
         base_dir = args.results_dir / args.baseline
         result["vs_baseline"] = {
