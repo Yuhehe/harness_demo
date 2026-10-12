@@ -2,6 +2,16 @@
 
 The Docker SDK is blocking, so every call goes through asyncio.to_thread. The host never
 builds a shell string out of model output: commands reach the container as an argv list.
+
+Conventions the rest of the code relies on:
+* Exit code 124 means the command timed out. It runs under the container's `timeout`, because
+  the SDK's exec_run has no timeout of its own.
+* The container is created with init=True, so PID 1 reaps the zombies a timed-out command
+  leaves behind (they would otherwise use up pids_limit).
+* git_diff rebuilds a temporary index with `git read-tree HEAD` every time, so it includes
+  new files and is not fooled by git's stat cache (a same-size rewrite within one second).
+* load_repo copies a local repository in with fixed file times and commit dates, so two loads
+  are byte-identical and a recording replays.
 """
 
 from __future__ import annotations

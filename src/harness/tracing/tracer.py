@@ -1,7 +1,36 @@
 """JSONL span tracer: one line per span, written and flushed immediately.
 
-A run that dies half way still leaves its trajectory on disk. Span types (CLAUDE.md 5.7):
-run_start, llm_call, tool_call, guard_decision, compaction, run_end.
+A run that dies half way still leaves its trajectory on disk. This docstring is the catalogue
+of span types and their fields; CLAUDE.md 5.7 keeps only the conventions (what a run must
+record to be reproducible). JsonlTracer adds `type`, `ts`, `run_id` and `instance_id` to every
+span.
+
+run_start       config, config_hash, model, thinking, reasoning_effort, max_tokens, timeout_s,
+                seed, tools, prices_hash, guard_enabled, policy_hash, summary_model, task, and
+                the caller's meta (run_id, git_commit, git_dirty)
+llm_call        one per attempt: attempt, outcome (ok | retry | fail), purpose (agent | summary),
+                model, latency_s; ok: finish_reason, prompt_tokens, cached_tokens,
+                completion_tokens, reasoning_tokens, cost_usd, response_id, retries;
+                retry / fail: retry_reason, status_code, usage (None), wasted_prompt_tokens_est,
+                error
+tool_call       step, tool, args_hash, exit_code, truncated, format_error, duration_s
+guard_decision  tool, action, rule_id, level
+compaction      step, strategy, actions, tokens_before, tokens_after, budget_tokens, plan_level,
+                target_unreachable, head_tokens, tail_tokens, room_tokens, cost_usd,
+                summary_tokens_in, summary_tokens_out, duration_s; truncate adds cleared_outputs
+                and cleared_chars; a summary adds summarized_messages, summary (the
+                summarizer's own text only), summary_chars, summary_latency_s, summary_model,
+                summary_input_chars, summary_input_chars_full, summary_attempts,
+                summary_clipped, restored (what went into the state block), restored_error;
+                fallback or summary_failed when the summary did not work out
+message         step, and the message itself (role, content, tool_calls, tool_call_id,
+                reasoning_content)
+truncation      step, content_chars, tool_calls, consecutive
+run_end         fail_reason, fail_detail, submitted, patch_chars, todo, and the run's metrics:
+                steps, tokens_in, tokens_cached, tokens_out, tokens_reasoning, cost_usd (with the
+                compaction calls), compaction_cost_usd, compactions, compaction_tokens_in,
+                compaction_tokens_out, format_errors, truncated_outputs, failed_attempts,
+                retry_rate, wasted_prompt_tokens_est, retry_reasons, wall_seconds
 """
 
 from __future__ import annotations

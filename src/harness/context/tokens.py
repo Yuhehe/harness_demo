@@ -11,6 +11,11 @@ prompt before the call. The provider only reports it afterwards, so two numbers 
 The anchor makes the estimate exact for everything already sent; only the new messages are
 approximated. After a compaction there is no anchor, and the local count is scaled by the last
 provider/local ratio instead.
+
+How far off it is: against the provider's own prompt_tokens on 42 request pairs of real runs it
+was between -8.4% and +7.8% (docs/notes.md 11.3), so the water marks in ContextConfig leave a
+margin. A replayed reasoning_content is not counted, because the provider does not count it
+(llm.types.strip_reasoning).
 """
 
 from __future__ import annotations
