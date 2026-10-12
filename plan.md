@@ -45,7 +45,7 @@
   - [x] Docker Engine 29.1.3（Ubuntu 自带源 `docker.io`）、`docker compose` 2.40.3（v2 插件）、`docker buildx` 0.30.1，均在 2026-10-04 实测可用；已开启 systemd 并设为开机自启；用户已加入 `docker` 组，免 sudo
   - [x] `uv` 0.9.13，装在 `~/.local/bin/uv`（注意：Claude Code 的 shell 里 `which uv` 找不到，需确认该目录在 PATH 中）
   - [x] 空闲磁盘：当前 149GB 可用（总 251GB），略低于 150GB 的要求；**按用户决定暂不考虑**，拉镜像时再留意
-  - [x] 内存：`.wslconfig` 限制 WSL 为 12GB / 10 核 / 8GB swap，低于 16GB 的要求；**按用户决定暂不考虑**，但并行 worker 数和容器内存上限设置时仍要保守
+  - [x] 内存：`.wslconfig` 原先限制 WSL 为 12GB / 10 核 / 8GB swap，低于 16GB 的要求；**2026-10-12 `docker info` 实测为 15.6GB / 10 核**（配置显然已变，以实测为准）；**按用户决定暂不考虑**，但并行 worker 数和容器内存上限设置时仍要保守
   - [x] 沙箱限制实测通过（2026-10-04，用 `alpine` 镜像，命令见 `docs/learning/docker_related.md` §4）：
     - cgroup 文件：`memory.max=67108864`、`cpu.max=50000 100000`、`pids.max=20`
     - `--network none`：容器里只有 `lo`，`wget example.com` 报 `bad address`
@@ -158,7 +158,7 @@
   - **步数、成本、墙钟上限是临时值**（100 步 / $1.0 / 1800 秒），要在 dev_5 冒烟后确认再冻结；B0 用同样的值
 - [x] `security/`（2026-10-07，**按你选的 (a) 定稿**，不是"基础版"）：`configs/policy.yaml`（三级权限、`deny` 和 `ask` 规则、写入根目录、测试文件规则）、`security/policy.py`、`security/guard.py`；`guard_decision` span 带 `level`，`run_start` 带 `policy_hash`；83 个测试，其中 35 条是**必须放行**的日常命令（防误拦）。复核时发现并修了两处误拦：测试文件规则原先会拦根目录或 `/tmp` 下的 `test_repro.py`，且能跨行扫 heredoc 正文，现在只管 `tests/` 目录和 `conftest.py`、不跨行、豁免 `/tmp`。M0 用的就是这份文件，第 3 天不再改它（改了就要换 tag 并重跑 M0）；`ask` 在批量运行里按 `deny`，CLI 交互确认还没做
 - [x] 客户端强度参数（2026-10-07）：`llm.reasoning_effort`，经 `extra_body` 传（见 `docs/notes.md` §11.2）；进回放键，所以 toy 录制重录了一次（flash，5 步，$0.0015）
-- [~] **summarize 重做**（2026-10-11 起，调研与更正见 `docs/notes.md` §12；全部在 `v0.1-frozen` 之前完成，因为会改变 M0 的行为）
+- [x] **summarize 重做**（2026-10-11 起，调研与更正见 `docs/notes.md` §12；全部在 `v0.1-frozen` 之前完成，因为会改变 M0 的行为）
   - [x] 阶段 0：视图拆成对齐的 `view`（发给模型的）和 `original`（agent 当时看到的）两个列表；`truncate` 只改 `view`，`summarize` 在两处同步替换
   - [x] 阶段 1：摘要读 `original` 全文（修了 `hybrid` 摘要读到占位符的缺陷）；去掉写死的 1500/1000 裁剪；`reasoning_content` 进摘要输入（`summary_include_reasoning`，默认开）；仅在 `context_overflow`/`timeout` 时按 `summary_clip_chars`（4000）× `summary_clip_scale`（0.5）逐次收紧并重试（`summary_retries`=3）；响应不可用时也计入成本；`compaction` span 记录输入字符数、尝试次数、是否收紧；三处变异检查均变红
   - [x] 阶段 2（2026-10-11）：摘要提示重写（交接框架，7 节：Tried so far / Failed attempts / Current hypothesis / **Next steps** / **Tests** / Files modified / Useful facts，字数两档 700 / 200）；摘要消息末尾由代码拼"状态块"（新文件 `context/restore.py`，**不在 CLAUDE.md §4 的目录树里**）：`git diff --stat`（由补丁文本自己算，始终保留）+ diff 正文（≤`summary_diff_chars`）、todo、已落盘输出索引、读过或改过的文件路径（只给路径，不重读内容）。
@@ -172,9 +172,9 @@
     - 探针在 `dev-pro-1` 的两条真实轨迹上各跑一次（共约 $0.004）：django 与 sympy 的摘要都提到了改过的文件，文件召回率 1.0；两个任务都只改了一个文件，**区分度不够，只证明链路可用**
   - [x] 阶段 6（2026-10-12）：`docs/notes.md` §12 已写；`CLAUDE.md` 已按你确认的 diff 更新（§4、§5.1、§5.2、§5.3、§5.6、§5.7、§5.8、§6、§7、§8），应用前对着代码重新核对了一遍（配置键与默认值、span 字段、规划等级、两条命令能运行、两个行为陈述），全部一致；新增"待同步清单"（见下一节），§8 加了登记规则
   - [-] 阶段 5（摘要模型对照、始终开启的遮蔽窗口、`summarize` 落盘）：**你决定暂时不做**
-- [ ] `eval/swebench/run_agent.py`：并发执行（`--workers`）、断点续跑、输出 `preds.jsonl`（字段 `instance_id`、`model_name_or_path`、`model_patch`）、跑之前打印成本预估并等待确认；数据集只加载一次；`git_dirty` 时拒绝跑实验
+- [x] `eval/swebench/run_agent.py`（2026-10-12）：顺序运行；按 `instance_id` 断点续跑（`preds.jsonl` 里有这一行才算做完，半截轨迹先挪开再重跑）；一个 `run_id` 只对应一个配置（`config_hash` 不一致就拒绝）；工作区有未提交改动时拒绝（`--allow-dirty` 仅限开发运行并记录）；开跑前检查镜像在不在（不拉取）、打印预计与最坏花费，超过 10 题要确认，累计花费到 `MAX_TOTAL_COST_USD` 的 80% 自动停；`env_error` 记入并标记，`--retry-env-errors` 重跑它们；每题的装配抽成 `cli.run_one`，`harness run` 与批量运行器共用。**并行是 TODO**（`--workers` 大于 1 报错并打印本机上限）。输出 `preds.jsonl`、`status.jsonl`、`run_meta.json`、`metrics.json`
 - [ ] `eval/swebench/score.py`：调用官方 `swebench` 判分工具（命令先核实；判分前核对数据集 sha 与 `subsets_meta.json` 一致），把结果合并进 `metrics.json`
-- [ ] `eval/report/aggregate.py`：汇总每次运行的指标，包括 Wilson 置信区间
+- [x] `eval/report/aggregate.py`：汇总每次运行的指标，包括 Wilson 置信区间（见 summarize 重做的阶段 4；B0 的轨迹格式不同，读不了，见下面 B0 一项）
 - [ ] 回填 `eval/baselines/mini_swe_agent.md` 的占位符，并实测 `model_kwargs` 里的 `thinking`/`max_tokens`/`timeout` 是否在 mini-swe-agent 里生效
 - [ ] 在 `dev_5` 上跑 M0 做冒烟测试（**5 题全部**，B0 也要在 dev 题上跑一遍），**修完所有明显的 bug**；用实测成本填预算表、重填 `MAX_TOTAL_COST_USD`
 - [ ] **打 tag `v0.1-frozen`**
@@ -292,6 +292,7 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 | 2026-10-12 | 漂移：`cached_input_tokens` 实际叫 `cached_tokens` / `tokens_cached` | §5.2 | [x] 2026-10-12 |
 | 2026-10-12 | 漂移：回放键字段列表漏了 `reasoning_effort` | §5.8 | [x] 2026-10-12 |
 | 2026-10-12 | 登记规则本身 | §8 | [x] 2026-10-12 |
+| 2026-10-12 | `run_agent.py` 的示例命令不再有 `--workers 4`（并行是 TODO，大于 1 会报错） | §7 | [ ] |
 | 待办 | CLI 交互确认（`ask`）实现后 | §5.6 删掉"尚未实现" | [ ] |
 | 待办 | 回放补写 `llm_call` span 后（第 4 天） | §5.8 删掉"待做" | [ ] |
 | 待办 | `score.py` 写好后：`resolved.json` 约定（现在只在 `docs/notes.md` §12.6） | §6 或 §7 | [ ] |
@@ -550,3 +551,9 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - 按你的决定补全了 `todo` 的 `items` 子 schema；新增 4 个测试（所有数组参数必须声明元素类型、LiteLLM 能数四种工具集合、`todo` schema 与运行时校验一致、失败请求的估计不再回退），旧 schema 下全部变红；toy 回放重录（$0.0011）；真实核实 3 次调用 $0.0009。**M0 的工具定义因此变了，必须在 `v0.1-frozen` 之前**（已满足）
 - 受影响：`wasted_prompt_tokens_est`（失败请求的估计）此前在 M0 的工具集下悄悄回退到"字符数 // 4"，现在走分词器；dev 阶段没有失败请求，没有已记录的数据受影响
 - 未提交（`tokens.py`、`todo.py`、`test_tools.py`、`test_llm_client.py`、`test_context.py`、`toy_fix.jsonl`、`notes.md`、`plan.md`）
+
+### 2026-10-12（第 2 天续：评测流水线）
+
+- **决定（你的）**：`reasoning_effort` 定为 `high`；步数 / 成本 / 墙钟上限做成配置，数值参考主流 harness 和现有数据；并行先只算资源，实现是 TODO；加一次真实压缩冒烟；先不拉 50 个镜像；暂不打 `v0.1-frozen`，先做核心功能
+- 批量运行器 `run_agent.py` 完成（见第 2 天对应一项）；每题的装配抽成 `cli.run_one`
+- 本机资源（`docker info`）：15.6GB 内存、10 核；沙箱上限 4g / 2 核时，按用满上限算最多同时 3 个（内存限制出 3 个，CPU 允许 5 个）；上限是封顶不是预留，实际可以更多，但这是不会撑爆内存的数

@@ -8,6 +8,7 @@ import json
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -97,18 +98,135 @@ def load_swebench_task(instance_id: str) -> tuple[Any, str]:
     return Task(instance_id, row["problem_statement"]), row["image"]
 
 
-async def _run(args: argparse.Namespace) -> int:
-    import docker
-    from dotenv import load_dotenv
+@dataclass
+class RunOutcome:
+    result: Any  # agent.loop.RunResult
+    patch_path: Path
+    trajectory_path: Path
 
+
+def retire_stale_trajectory(path: Path) -> Path | None:
+    """Move aside the trajectory of an earlier, unfinished attempt at the same task.
+
+    The tracer appends. Without this a resumed run would leave two runs in one file, and
+    every count made from it (tool calls, compactions) would add them together. The old file
+    is kept, under a name the aggregator's *.jsonl glob does not match, for debugging."""
+    if not path.exists():
+        return None
+    n = 1
+    while (stale := path.with_name(f"{path.name}.stale{n}")).exists():
+        n += 1
+    path.rename(stale)
+    return stale
+
+
+async def run_one(
+    task: Any,
+    image: str,
+    cfg: Any,
+    run_dir: Path,
+    run_id: str,
+    *,
+    docker_client: Any,
+    repo: Path | None = None,
+    record: Path | None = None,
+    replay: Path | None = None,
+    meta: dict[str, Any] | None = None,
+) -> RunOutcome:
+    """Run one task end to end: trajectory, sandbox, LLM and summarizer clients, patch file.
+
+    The single place where a task is assembled, so `harness run` and the batch runner
+    (eval/swebench/run_agent.py) cannot drift apart."""
     from harness.agent.loop import run_task
-    from harness.agent.state import Task
-    from harness.config import load_config, summary_llm_config
+    from harness.config import summary_llm_config
     from harness.context.manager import NEEDS_SUMMARIZER
     from harness.llm.client import LiteLLMClient
     from harness.llm.replay import RecordingClient, ReplayClient
     from harness.sandbox.docker_sandbox import DockerSandbox
     from harness.tracing.tracer import JsonlTracer
+
+    trajectory = run_dir / "trajectories" / f"{task.instance_id}.jsonl"
+    retire_stale_trajectory(trajectory)
+    tracer = JsonlTracer(trajectory, run_id=run_id, instance_id=task.instance_id)
+    try:
+        summarizer = None
+        summary_cfg = (
+            summary_llm_config(cfg)
+            if cfg.context.strategy in NEEDS_SUMMARIZER
+            else None
+        )
+        if replay:
+            llm = ReplayClient(cfg.llm, replay)
+            if summary_cfg:
+                summarizer = ReplayClient(summary_cfg, replay)
+        else:
+            llm = LiteLLMClient(cfg.llm, tracer)
+            if summary_cfg:
+                summarizer = LiteLLMClient(summary_cfg, tracer, purpose="summary")
+            if record:
+                llm = RecordingClient(llm, cfg.llm, record)
+                if summarizer:
+                    summarizer = RecordingClient(summarizer, summary_cfg, record)
+        sbx = cfg.sandbox
+        async with DockerSandbox(
+            image,
+            docker_client=docker_client,
+            network_mode=sbx.network_mode,
+            mem_limit=sbx.mem_limit,
+            cpus=sbx.cpus,
+            pids_limit=sbx.pids_limit,
+        ) as sandbox:
+            if repo:
+                await sandbox.load_repo(repo)
+            result = await run_task(
+                task,
+                cfg,
+                sandbox,
+                llm,
+                tracer,
+                summarizer=summarizer,
+                meta=meta if meta is not None else {"run_id": run_id, **_git_meta()},
+            )
+    finally:
+        tracer.close()
+
+    patch_path = run_dir / "patches" / f"{task.instance_id}.diff"
+    patch_path.parent.mkdir(parents=True, exist_ok=True)
+    patch_path.write_text(result.patch)
+    return RunOutcome(result, patch_path, tracer.path)
+
+
+def print_outcome(task_id: str, outcome: RunOutcome) -> None:
+    result, m = outcome.result, outcome.result.metrics
+    hit = m["tokens_cached"] / m["tokens_in"] if m["tokens_in"] else 0.0
+    status = "submitted" if result.submitted else f"FAILED: {result.fail_reason}"
+    print(
+        f"{task_id}: {status}"
+        + (f" ({result.fail_detail})" if result.fail_detail else "")
+    )
+    print(
+        f"  steps={m['steps']}  tokens in/cached/out={m['tokens_in']}/{m['tokens_cached']}/{m['tokens_out']}"
+        f" (cache hit {hit:.1%}, reasoning {m['tokens_reasoning']})"
+    )
+    print(
+        f"  cost=${m['cost_usd']:.4f} (fixed standard price)  failed_attempts={m['failed_attempts']}"
+        f"  format_errors={m['format_errors']}  truncated={m['truncated_outputs']}  wall={m['wall_seconds']:.0f}s"
+    )
+    if m["compactions"]:
+        print(
+            f"  compactions={m['compactions']} (cost ${m['compaction_cost_usd']:.4f}, "
+            f"summary tokens in/out {m['compaction_tokens_in']}/{m['compaction_tokens_out']})"
+        )
+    print(f"  patch: {len(result.patch)} chars -> {outcome.patch_path}")
+    print(f"  trajectory: {outcome.trajectory_path}")
+
+
+async def _run(args: argparse.Namespace) -> int:
+    import docker
+    from dotenv import load_dotenv
+
+    from harness.agent.state import Task
+    from harness.config import load_config
 
     load_dotenv(".env")
     cfg = load_config(args.config)
@@ -133,81 +251,19 @@ async def _run(args: argparse.Namespace) -> int:
         )
         raise SystemExit(f"image {image} is not available locally ({hint})") from None
 
-    run_dir = args.results_dir / run_id
-    tracer = JsonlTracer(
-        run_dir / "trajectories" / f"{task.instance_id}.jsonl",
-        run_id=run_id,
-        instance_id=task.instance_id,
+    outcome = await run_one(
+        task,
+        image,
+        cfg,
+        args.results_dir / run_id,
+        run_id,
+        docker_client=client,
+        repo=args.repo,
+        record=args.record,
+        replay=args.replay,
     )
-    try:
-        summarizer = None
-        summary_cfg = (
-            summary_llm_config(cfg)
-            if cfg.context.strategy in NEEDS_SUMMARIZER
-            else None
-        )
-        if args.replay:
-            llm = ReplayClient(cfg.llm, args.replay)
-            if summary_cfg:
-                summarizer = ReplayClient(summary_cfg, args.replay)
-        else:
-            llm = LiteLLMClient(cfg.llm, tracer)
-            if summary_cfg:
-                summarizer = LiteLLMClient(summary_cfg, tracer, purpose="summary")
-            if args.record:
-                llm = RecordingClient(llm, cfg.llm, args.record)
-                if summarizer:
-                    summarizer = RecordingClient(summarizer, summary_cfg, args.record)
-        sbx = cfg.sandbox
-        async with DockerSandbox(
-            image,
-            docker_client=client,
-            network_mode=sbx.network_mode,
-            mem_limit=sbx.mem_limit,
-            cpus=sbx.cpus,
-            pids_limit=sbx.pids_limit,
-        ) as sandbox:
-            if args.repo:
-                await sandbox.load_repo(args.repo)
-            result = await run_task(
-                task,
-                cfg,
-                sandbox,
-                llm,
-                tracer,
-                summarizer=summarizer,
-                meta={"run_id": run_id, **_git_meta()},
-            )
-    finally:
-        tracer.close()
-
-    patch_path = run_dir / "patches" / f"{task.instance_id}.diff"
-    patch_path.parent.mkdir(parents=True, exist_ok=True)
-    patch_path.write_text(result.patch)
-
-    m = result.metrics
-    hit = m["tokens_cached"] / m["tokens_in"] if m["tokens_in"] else 0.0
-    status = "submitted" if result.submitted else f"FAILED: {result.fail_reason}"
-    print(
-        f"{task.instance_id}: {status}"
-        + (f" ({result.fail_detail})" if result.fail_detail else "")
-    )
-    print(
-        f"  steps={m['steps']}  tokens in/cached/out={m['tokens_in']}/{m['tokens_cached']}/{m['tokens_out']}"
-        f" (cache hit {hit:.1%}, reasoning {m['tokens_reasoning']})"
-    )
-    print(
-        f"  cost=${m['cost_usd']:.4f} (fixed standard price)  failed_attempts={m['failed_attempts']}"
-        f"  format_errors={m['format_errors']}  truncated={m['truncated_outputs']}  wall={m['wall_seconds']:.0f}s"
-    )
-    if m["compactions"]:
-        print(
-            f"  compactions={m['compactions']} (cost ${m['compaction_cost_usd']:.4f}, "
-            f"summary tokens in/out {m['compaction_tokens_in']}/{m['compaction_tokens_out']})"
-        )
-    print(f"  patch: {len(result.patch)} chars -> {patch_path}")
-    print(f"  trajectory: {tracer.path}")
-    return 0 if result.submitted else 1
+    print_outcome(task.instance_id, outcome)
+    return 0 if outcome.result.submitted else 1
 
 
 def main(argv: list[str] | None = None) -> int:

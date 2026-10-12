@@ -22,3 +22,23 @@ def test_record_and_replay_are_mutually_exclusive():
 def test_repo_mode_needs_a_task():
     with pytest.raises(SystemExit, match="--task is required"):
         main(["run", "--repo", "tests/fixtures/toy_repo"])
+
+
+def test_a_half_written_trajectory_is_moved_aside_before_a_rerun(tmp_path):
+    from harness.cli import retire_stale_trajectory
+
+    path = tmp_path / "t.jsonl"
+    assert retire_stale_trajectory(path) is None  # nothing to move
+    path.write_text("first attempt\n")
+    first = retire_stale_trajectory(path)
+    path.write_text("second attempt\n")
+    second = retire_stale_trajectory(path)
+    assert not path.exists()
+    assert (
+        first.read_text() == "first attempt\n"
+        and second.read_text() == "second attempt\n"
+    )
+    assert first != second  # nothing is overwritten
+    assert not list(
+        tmp_path.glob("*.jsonl")
+    )  # the aggregator's glob no longer sees them
