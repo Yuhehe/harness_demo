@@ -45,19 +45,24 @@ tool_output:
 # `extends` this one. B0 gets the same values (eval/baselines/run_b0.py reads them from here).
 #
 # Where the numbers come from (docs/notes.md section 13):
-#   max_steps 100   OpenHands' SWE-bench docs use 100 iterations; mini-swe-agent's SWE-bench
+#   max_steps 150   OpenHands' SWE-bench docs use 100 iterations, mini-swe-agent's SWE-bench
 #                   config allows 250, SWE-agent has no call limit. A step here, as in
-#                   mini-swe-agent (n_calls), is one model call. Our two dev tasks took 11 and
-#                   15 steps, but they are easy ones.
+#                   mini-swe-agent (n_calls), is one model call. The dev_5 smoke run (M0-dev):
+#                   10, 79, 32, 56 and 12 steps, and these are the tasks rated "<15 min fix".
+#                   With 100 the easy task that needed 79 steps would have had a 21% margin,
+#                   and verified_50 has harder tasks, so 100 would cut off runs that would
+#                   have finished. 150 sits between the two published values.
 #   $2.0 per task   SWE-agent's batch commands use $2.00 (its default is $3), mini-swe-agent
-#                   $3. Arithmetic, not measurement: a 100-step run whose prompt ramps to the
-#                   128k budget costs about $1.2 at the 89% cache hit rate seen on dev, and
-#                   about $8.7 if the cache never hits, so the cap also guards the cache.
-#   1800 s          the dev tasks took 26 to 35 s for 11 to 15 steps (about 2.5 s a step), so
-#                   100 steps plus test runs in the sandbox stay well inside half an hour.
-# Re-check after the dev_5 smoke run: the dev data is two easy tasks.
+#                   $3. Observed: the 79-step task cost $0.27 at a 98% cache hit rate and a
+#                   prompt of up to 62k tokens. Arithmetic, not measurement: a 150-step run
+#                   whose prompt ramps to the 128k budget would cost about $1 at that cache
+#                   hit rate, and about $13 if the cache never hit, so the cap also guards
+#                   the cache.
+#   1800 s          the dev tasks took 33 to 370 s (about 4.7 s a step on the long ones), so 150
+#                   steps would take about twelve minutes plus test runs in the sandbox.
+# Re-check after the first full run: five easy tasks are a small sample.
 limits:
-  max_steps: 100
+  max_steps: 150
   max_cost_per_task_usd: 2.0
   max_wall_seconds: 1800
 

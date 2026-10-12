@@ -176,7 +176,7 @@
 - [x] `eval/swebench/score.py`（2026-10-12）：调用 `swebench eval verified`（`-p preds.jsonl -i <我们的题号> --report-dir .`，在运行目录里跑，`logs/` 因此落在被 gitignore 的目录）；判分前核对数据集最新 revision 与 `subsets_meta.json` 一致，不一致就不判；报告按 `*.<run_id>.json` 找；写出 `resolved.json`、`score.json`（每个题号按判分器的结论归类）并更新 `metrics.json`。**判分器没法判的题**（基础设施失败、出错、空补丁）与"判了但没修好"分开，`fail_taxonomy` 里是 `scoring_error` / `submitted_empty_patch`，不并入 `submitted_but_failed`。测试用 B0 冒烟的真实报告做固定数据，假 `swebench` 跑通整条流程；还没有在真实运行上端到端跑过（等 dev_5 冒烟）
 - [x] `eval/report/aggregate.py`：汇总每次运行的指标，包括 Wilson 置信区间（见 summarize 重做的阶段 4；B0 的轨迹格式不同，读不了，见下面 B0 一项）
 - [x] B0 对齐（2026-10-12）：新增 `eval/baselines/run_b0.py`（**不在 CLAUDE.md §4 的目录树里**，已登记待同步）：从 `configs/default.yaml` 生成 `mini-extra swebench` 命令，步数 / 成本 / 墙钟 / 命令超时 / 容器上限 / 思考 / `reasoning_effort` / `max_tokens` / 请求超时都来自那份配置，不再手写；`mini_swe_agent.md` 的占位符已清掉。**`model_kwargs` 是否生效已实测**：用 mini-swe-agent 自己的 `LitellmModel` 对着本机假服务器，请求体里确有 `thinking`、`reasoning_effort`（经 `extra_body`）、`max_tokens`，`timeout` 在 `litellm.completion` 的参数里。已核实 mini-swe-agent 的"一步"= 一次模型调用（`n_calls`）。`convert` 把 mini-swe-agent 的输出（`mini/preds.json` + `*.traj.json`）转成 `preds.jsonl`、`status.jsonl` 和只含 `run_start` / `run_end` 的轨迹，所以 `score.py`、`aggregate.py` 和花费统计都读得了 B0；B0 的成本按它记录的 token 用我们自己的标准价重算（mini-swe-agent 自己的数字另存为 `b0_reported_cost`）。已知差异：B0 的 `wall_seconds` 是第一次到最后一次响应的间隔，略短；B0 没有逐步 span，所以压缩指标不适用
-- [ ] 在 `dev_5` 上跑 M0 做冒烟测试（**5 题全部**，B0 也要在 dev 题上跑一遍），**修完所有明显的 bug**；用实测成本填预算表、重填 `MAX_TOTAL_COST_USD`
+- [x] dev_5 冒烟（2026-10-12，**开发运行，不是实验结果，不进报告**；`--allow-dirty`，因为工作区有你的学习笔记没提交）：M0（`M0-dev`）、B0（`B0-dev`）各跑全部 5 题，都经 `score.py` 官方判分，**都是 5/5 解决**，没有基础设施故障 / 空补丁 / 出错。M0：$0.5453，平均 37.8 步，缓存命中率 97.9%，提示词峰值 6.8k 到 61.9k；B0：$0.2666（按 token 重建，与 mini-swe-agent 自己报的数 5 题都在 4 位小数内一致），平均 21 步。另做两次真实压缩冒烟：`smoke-compaction`（`configs/smoke/compaction.yaml`，预算 10k）5 题全解决，4 题共发生 30 次压缩，没有一次回退或摘要失败；`smoke-32k`（A6 配置）2 题，`django-15930` 压缩 5 次、全是 `normal` 级别的清理，没有摘要。完整状态块的真实样例来自探针（`django-15930` 第 70 步：44167 → 3665 token，$0.0177）。**这一步发现并改了一个配置**：`django-15930` 在 10k 预算下用了 109 步（M0 是 79 步），超过原来的 100 步上限，所以 `max_steps` 改为 150（依据见 `default.yaml` 注释）；预算表和 `MAX_TOTAL_COST_USD` 见下面的日志。没有发现需要修的 harness bug
 - [ ] **打 tag `v0.1-frozen`**
 - [ ] 晚上：在 `verified_50` 上跑 M0，同时跑 B0（mini-swe-agent，同一模型、同一题目子集）；先打印预计花费并等你确认；WSL 只有 12GB，worker 数 × 单容器内存上限（现在 4g）加判分容器不能超，M0 和 B0 是否并行要先定
 - [ ] 拉剩余 50 个镜像（**你决定暂不做**；仍须在开跑 50 题前拉完）
@@ -294,6 +294,7 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 | 2026-10-12 | 登记规则本身 | §8 | [x] 2026-10-12 |
 | 2026-10-12 | `run_agent.py` 的示例命令不再有 `--workers 4`（并行是 TODO，大于 1 会报错） | §7 | [ ] |
 | 2026-10-12 | 新文件 `eval/baselines/run_b0.py`（B0 命令生成与输出转换）；B0 的命令示例 | §4 目录树、§7 | [ ] |
+| 2026-10-12 | 新目录 `configs/smoke/`（冒烟配置，不是消融）；`aggregate.py` 的 `--baseline` 用法已验证 | §4 目录树 | [ ] |
 | 待办 | CLI 交互确认（`ask`）实现后 | §5.6 删掉"尚未实现" | [ ] |
 | 待办 | 回放补写 `llm_call` span 后（第 4 天） | §5.8 删掉"待做" | [ ] |
 | 待办 | `score.py` 写好后：`resolved.json` 约定（现在只在 `docs/notes.md` §12.6） | §6 或 §7 | [ ] |
@@ -559,3 +560,6 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - 批量运行器 `run_agent.py` 完成（见第 2 天对应一项）；每题的装配抽成 `cli.run_one`
 - 本机资源（`docker info`）：15.6GB 内存、10 核；沙箱上限 4g / 2 核时，按用满上限算最多同时 3 个（内存限制出 3 个，CPU 允许 5 个）；上限是封顶不是预留，实际可以更多，但这是不会撑爆内存的数
 - B0 对齐完成（`run_b0.py`）；限制值定为 100 步 / $2.0 / 1800 秒（`default.yaml` 的注释写明了依据和我的算术）
+- **dev_5 冒烟完成**（开发运行，不进报告）：M0 与 B0 各 5/5；真实压缩冒烟 30 次压缩无失败。数据与观察见 `docs/notes.md` §14
+- **花费**：今天累计约 $1.8（`results/runs/` 下所有已完成轨迹的标准价合计 $1.7765，含 B0；另有零星的核实调用约 $0.03；没有和控制台对账），占 `MAX_TOTAL_COST_USD`（$20，仍是占位值）的约 9%
+- **预算表（用 dev_5 的 M0 实测填，样本只有 5 道简单题，偏低）**：M0 平均 $0.109 / 题；若 verified_50 与 dev_5 相当，一个配置 50 题约 $5.5；更难的题会更贵，所以这个数应当当作下限。预估公式的教训：运行前的预估 $0.11（依据是之前 2 道最简单的题）比实际 $0.545 低了约 5 倍。`MAX_TOTAL_COST_USD` 要等你按"配置数 × 每配置成本"重定，我的建议在下面"待你决定"里

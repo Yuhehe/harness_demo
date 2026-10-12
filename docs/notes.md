@@ -545,3 +545,22 @@ Qwen3-Coder 480B：原始 / 遮蔽 / 摘要的解决率 53.4 / 54.8 / 53.8%，�
 - **花费统计的范围**：`spent_so_far` 汇总 `results/runs/` 下所有已完成轨迹的 `run_end.cost_usd`，**不含 B0**（mini-swe-agent 的轨迹格式不同，`aggregate.py` 和这里都读不了）。80% 预算的判断因此漏掉 B0 的花费，B0 的适配器见 plan.md。
 - **判分产物**（`swebench` 5.0.2，`swebench eval verified -p … --report-dir .`）：报告文件名是 `<model_name_or_path，斜杠换成 __>.<run_id>.json`，字段有 `resolved_ids`、`unresolved_ids`、`empty_patch_ids`、`error_ids`、`infra_failure_ids`、`ambiguous_failure_ids`、`incomplete_ids` 等。`swebench` 是控制台脚本（`.venv/bin/swebench`），没有 `__main__`，不能 `python -m swebench`。`score.py` 按 `*.<run_id>.json` 找报告，不自己拼文件名。
 - **B0 的轨迹格式**（mini-swe-agent 2.4.6，`*.traj.json`，`trajectory_format: mini-swe-agent-1.1`）：`info.model_stats` 有 `instance_cost`、`api_calls`；`info.exit_status`（`Submitted`、`LimitsExceeded`、`TimeExceeded`、`RepeatedFormatError` 等）；每条 assistant 消息的 `extra.response.usage` 有 `prompt_tokens`、`completion_tokens`、`prompt_tokens_details.cached_tokens`、`completion_tokens_details.reasoning_tokens`，`extra.timestamp` 是 `time.time()`。`run_b0.py convert` 据此重建 `run_end`。mini-swe-agent 还有 `agent.wall_time_limit_seconds`（默认 0，不限），已用来对齐墙钟上限。
+
+## 14. dev_5 冒烟的数据与观察（2026-10-12，开发运行，**不是实验结果，不进报告**）
+
+五道 dev 题都是"<15 分钟修复"。`--allow-dirty` 运行（工作区有未提交的学习笔记）。标准价，v4-pro，思考开，`reasoning_effort=high`。
+
+| 运行 | 配置 | 解决 | 花费 | 平均步数 | 缓存命中率 | 说明 |
+|---|---|---|---|---|---|---|
+| `M0-dev` | `default.yaml`（128k，hybrid） | 5/5 | $0.5453 | 37.8（10 / 79 / 32 / 56 / 12） | 97.9% | 提示词峰值 9.4k / 61.9k / 25k / 42.7k / 6.8k，没有压缩，没有被权限层拦截 |
+| `B0-dev` | mini-swe-agent，同一组限制 | 5/5 | $0.2666 | 21.0（9 / 29 / 17 / 39 / 11） | 95.3% | 成本是按 token 用我们的标准价重建的，与 mini-swe-agent 自己报的数 5 题都在 4 位小数内一致 |
+| `smoke-compaction` | `configs/smoke/compaction.yaml`（预算 10k） | 5/5 | $0.5114 | 38.0 | 84.0% | 4 题发生 30 次压缩（清理 24 次、其中 6 次又加摘要），无回退、无摘要失败；压缩成本占 5.9%；压缩后重复率 4.2%，不压缩的同题在同一步数处是 0%（4 道题，样本太小） |
+| `smoke-32k` | `ablations/budget_32k.yaml` | 2/2（未判分） | $0.3961 | 55.5 | — | `django-15930` 压缩 5 次，全是 `normal` 级别的清理，没有摘要；`sphinx-7889` 没越过触发线 |
+
+**观察（都只是 n=5 的描述，不是结论）**
+- 缓存命中率 97.9% 比我之前估算成本时假设的 89% 高；压缩把它拉到 84.0%，这是压缩的真实代价之一。
+- 同样是 5/5，M0 的步数约为 B0 的 1.8 倍，成本约 2 倍。看了 `django-15930`：M0 用了 83 次工具调用（51 次 `bash`、24 次 `view`、4 次 `search`、2 次 `todo`、1 次 `str_replace`），B0 只有 29 次 `bash`；没有精确重复的调用、没有格式错误、没有输出被截断，所以不是 bug，更像是 `view` 的 400 行窗口让读文件变碎。这正是 A2（`bash_only` 对 `tools`）要检验的因素。
+- 10k 预算下压缩的每一次都是 `minimal` 或 `unreachable` 级别（head 1573 + 尾部约 2k + 开销已经占了目标的大部分），所以那次冒烟走的全是降级路径，状态块里的索引、读过的文件、diff 正文没有出现。完整路径的真实样例来自探针：`django-15930` 第 70 步，预算 55208，规划 `normal`，提示词 44167 → 3665 token，摘要输入 51808 token（全文，未裁剪），摘要输出 1773 token，$0.0177，状态块带 diff stat 与 diff 正文、3 条落盘输出索引、11 个文件路径，摘要提到了被改的文件（召回率 1.0）。
+- **"至多 N 词"不被遵守**：最小模式要求 200 词（约 300 token），摘要实际输出 510 到 806 token；探针里要求 700 词，输出 1773 token（约 1200 词）。字数是软约束，硬上限是 `summary_max_tokens`。后果：规划里按 300 token 估摘要大小偏低约一半；摘要偏长也会让压缩后的提示词比预期大。还没有处理。
+- 步数上限：`django-15930` 在 10k 预算下用了 109 步才完成，超过原来的 100，所以改为 150。
+- 运行前预估偏低：$0.11（依据是之前两道最简单的题的均值）对 $0.545。

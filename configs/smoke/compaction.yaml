@@ -1,0 +1,13 @@
+# A smoke test, not an ablation (hence not in configs/ablations/, which a test enumerates).
+#
+# The dev_5 tasks need at most about 13k prompt tokens, so under the 128k budget of M0 they never
+# compact and a compaction would never be seen on a real run. With a budget of 10k the trigger is
+# at 8.5k and the compaction target at 5k. The two ratios are raised so that the summary and the
+# state block caps (as a share of this small budget) are big enough to hold a real summary:
+# summary cap min(4096, 0.2 * 10000) = 2000 tokens, state block min(2500, 0.1 * 10000) = 1000.
+extends: ../default.yaml
+
+context:
+  budget_tokens: 10000
+  summary_max_ratio: 0.2
+  summary_restore_ratio: 0.1
