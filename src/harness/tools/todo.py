@@ -34,8 +34,18 @@ class TodoTool(Tool):
         {
             "items": {
                 "type": "array",
-                "description": "The complete list: objects with 'text' and 'status' "
-                f"(one of {STATUSES}).",
+                "description": "The complete list, one object per step.",
+                # the schema of one element (JSON Schema's `items` keyword); without it the
+                # parameter named `items` has no element type at all
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string", "description": "What the step is."},
+                        "status": {"type": "string", "enum": STATUSES},
+                    },
+                    "required": ["text", "status"],
+                    "additionalProperties": False,
+                },
             }
         },
         ["items"],

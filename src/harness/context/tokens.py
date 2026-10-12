@@ -51,9 +51,13 @@ class TokenEstimator:
         return count_messages(self.model, messages) if messages else 0
 
     async def tools_tokens(self) -> int:
-        """Tool definitions are part of every prompt. LiteLLM's counter ignores `tools` for
-        DeepSeek models (measured: the same count with and without), so the serialized
-        definitions are counted as text."""
+        """Tool definitions are part of every prompt, so they are counted. They are counted as
+        serialized text, not through `litellm.token_counter(tools=...)`: LiteLLM formats the
+        definitions the way OpenAI does, not DeepSeek (that call used to raise KeyError('items')
+        on our `todo` tool until its array parameter declared an `items` sub-schema).
+        The JSON text is a stable approximation that does not depend on that formatter; the
+        ratio the estimator learns from the provider's own counts absorbs the difference
+        (docs/notes.md section 11.3)."""
         if self._tools_tokens is None:
             text = json.dumps(self.tools or [], sort_keys=True)
             self._tools_tokens = (

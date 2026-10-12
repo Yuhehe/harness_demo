@@ -478,7 +478,9 @@
 
 ### 11.3 token 估计（`context/tokens.py`）的校准
 
-- LiteLLM 的 `token_counter` 对 DeepSeek 模型**不计 `tools`**（带不带 tools 结果一样），而工具定义约 800 token，所以把序列化后的工具定义当文本单独计数。
+- 工具定义约 800 token，所以把序列化后的工具定义当文本单独计数。
+- **更正（2026-10-12）**：这里原来写的是"LiteLLM 的 `token_counter` 对 DeepSeek 不计 `tools`（带不带结果一样）"，**这个原因是错的**。重新测了：`token_counter(..., tools=工具列表)` 对**所有模型**（`gpt-4o`、`deepseek/…` 都一样）都抛 `KeyError: 'items'`，因为我们的 `todo` 工具的数组参数 `{"type": "array"}` 没有写 `items` 子 schema，而 LiteLLM 的 `_format_object_parameters`（`token_counter.py`）会去读它。去掉 `todo` 后，其余 5 个工具都被正常计入（对 DeepSeek 是 +421 token）。当时看到的"8 对 8"，是我自己的兜底分支（`len(json.dumps(messages)) // 4`）在两次调用里都被触发。当时只做了实测，没有读源码确认原因。结论里**文本计数工具定义**这一做法仍然成立（它不经过 LiteLLM 的格式化函数），只是理由要改。
+- **已处理（2026-10-12，按方案 1）**：给 `todo` 的 `items` 补上元素子 schema（`{text: string, status: enum}`，`additionalProperties: false`，`status` 的取值复用运行时校验用的同一个 `STATUSES`）。补完后四种工具集合（`tools` / `bash_only` × 规划开 / 关）LiteLLM 的 `token_counter(tools=…)` 都能正常计入（+507 / +421 / +137 / +137 token；完整工具集的文本计数是 799，两者口径不同，仍以文本计数加服务端校准为准）。真实 DeepSeek（flash）核实：服务端接受嵌套 schema，3 次调用里 2 次给出的 `todo` 参数通过校验（样本太小，只说明可用，不说明比旧 schema 更好）。工具定义变了，toy 回放已重录（5 步，$0.0011）。下面描述的是修复前的情况：`llm/client.py` 的 `_estimate_prompt_tokens`（失败请求浪费的输入 token 估计）把 `tools` 传给了 `token_counter`，M0 的工具集里有 `todo`，所以会抛异常并悄悄回退到 `字符数 // 4`，既不含工具定义，也不是分词器的结果。影响限于 `wasted_prompt_tokens_est` 和预算保护里对失败请求的估计。两种修法：给 `todo` 的 `items` 补上子 schema（对 OpenAI 的严格校验也更合规，但会改工具定义，toy 回放要重录），或让这个估计也走文本计数。
 - 用第 1 天 `dev-flash-1`、`dev-pro-1` 的 4 条轨迹（44 个调用对）对照服务端的 `prompt_tokens`：本地计数偏低 8%–21%（每条消息的模板开销和分词差异），比例在一条轨迹内很稳定。
 - **更正（2026-10-11）**：本地计数器会把回传的 `reasoning_content` 算进去（同一条消息 14 → 2026 token），而服务端不计，所以计算提示词大小前先去掉这个字段（`strip_reasoning`）。去掉之后在同样的 4 条轨迹上重新测得：误差平均 −0.1%，范围 −8.4% 到 +7.8%（42 个对）；dev 轨迹里推理文字很短，真实任务里推理更长，不去掉会被严重高估。下面一条是更正前的数字。
 - 采用"上一次服务端实报值 + 新增消息的本地计数 × 比例"，误差：平均 +0.6%，范围 −2.2% 到 +7.3%（只用本地计数 × 比例是 +0.5%，−2.3% 到 +7.2%，两者几乎一样）。**所以水位线要留余量**：`high_water=0.85`；预算硬判断用估计值，可能有约 7% 的偏差。

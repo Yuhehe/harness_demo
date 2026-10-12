@@ -496,7 +496,7 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 
 **遇到的问题和发现**
 - 测试抓到一个真 bug：回合数不足 `keep_recent` 时，受保护区间的下界返回 `len(view)`，意思反了，会让所有消息都变得可清理；改为返回 `HEAD`，补了测试
-- LiteLLM 的 `token_counter` 对 DeepSeek 不计 `tools`，本地计数偏低 8%–21%，所以用"服务端实报值锚定 + 比例"，并给水位线留余量
+- 本地计数偏低 8%–21%（工具定义约 800 token 也不在 LiteLLM 的 `token_counter(tools=…)` 里：它遇到 `todo` 工具缺 `items` 子 schema 会抛 `KeyError`，原因已在 `docs/notes.md` §11.3 更正），所以用"服务端实报值锚定 + 比例"，并给水位线留余量
 - 一开始用 YAML 折叠标量 `>-` 写多行正则，折叠会补空格，把 `|` 前的空格变成正则的一部分；改成 `|-` 字面块
 - 在我自己的测试里把字符数当成 token 数，规模算错了几处（约 5 字符一个 token），已按实测比例重算
 
@@ -544,3 +544,9 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 3. dev_5 全部 5 题跑 M0 和 B0 冒烟，定上限值和预算，再打 `v0.1-frozen`
 4. 镜像拉取等你说开始
 
+### 2026-10-12（修正：`todo` 工具的 schema）
+
+- 复盘 `tokens.py` 里一条注释时发现，之前"LiteLLM 的 `token_counter` 对 DeepSeek 不计 `tools`"的结论是**错的**：真实原因是我们的 `todo` 工具的数组参数没有 `items` 子 schema，`token_counter(tools=…)` 对所有模型都抛 `KeyError`（更正记录在 `docs/notes.md` §11.3）
+- 按你的决定补全了 `todo` 的 `items` 子 schema；新增 4 个测试（所有数组参数必须声明元素类型、LiteLLM 能数四种工具集合、`todo` schema 与运行时校验一致、失败请求的估计不再回退），旧 schema 下全部变红；toy 回放重录（$0.0011）；真实核实 3 次调用 $0.0009。**M0 的工具定义因此变了，必须在 `v0.1-frozen` 之前**（已满足）
+- 受影响：`wasted_prompt_tokens_est`（失败请求的估计）此前在 M0 的工具集下悄悄回退到"字符数 // 4"，现在走分词器；dev 阶段没有失败请求，没有已记录的数据受影响
+- 未提交（`tokens.py`、`todo.py`、`test_tools.py`、`test_llm_client.py`、`test_context.py`、`toy_fix.jsonl`、`notes.md`、`plan.md`）

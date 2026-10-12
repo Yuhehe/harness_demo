@@ -113,7 +113,7 @@ async def test_estimator_counts_tool_definitions_as_text():
     est = TokenEstimator(MODEL, TOOLS)
     assert (
         await est.tools_tokens() > 10
-    )  # LiteLLM's own counter ignores `tools` for DeepSeek
+    )  # counted as JSON text: litellm.token_counter(tools=...) raises on the todo tool
     assert await TokenEstimator(MODEL, None).tools_tokens() == 0
 
 

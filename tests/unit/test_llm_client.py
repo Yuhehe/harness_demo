@@ -320,3 +320,29 @@ def test_classify_ignores_non_llm_exceptions_and_knows_our_bad_response():
     assert classify(ValueError("x")) is None
     d = classify(BadResponse("no choices"))
     assert d is not None and d.kind == "bad_response" and d.retry
+
+
+async def test_the_estimate_for_a_failed_attempt_counts_the_tools_with_the_tokenizer(
+    make,
+):
+    # it used to raise inside litellm.token_counter on the todo tool and silently fall back to
+    # len(json.dumps(messages)) // 4, which ignores the tool definitions
+    import json
+
+    from harness.config import AgentConfig
+    from harness.context.tokens import count_messages
+    from harness.tools.base import OutputLimiter
+    from harness.tools.registry import Registry
+    from harness.tools.submit import SubmitFlag
+    from harness.tools.todo import TodoList
+
+    client, _, _, _ = make([Step()])
+    tools = Registry(
+        AgentConfig(), OutputLimiter(8000), TodoList(), SubmitFlag()
+    ).schemas()
+    assert "todo" in [t["function"]["name"] for t in tools]
+    estimate = await client._estimate_prompt_tokens(MSGS, tools)
+    assert estimate != len(json.dumps(MSGS)) // 4  # not the fallback
+    assert (
+        estimate >= count_messages("deepseek/deepseek-flash", MSGS) + 400
+    )  # the tools are in

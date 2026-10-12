@@ -401,3 +401,59 @@ async def test_a_tool_that_runs_and_fails_is_not_a_format_error():
         "str_replace", '{"path": "x", "old_str": "a", "new_str": "b"}', sb
     )
     assert r.output.startswith("Error: no such file") and not r.format_error
+
+
+# ---- tool schemas ------------------------------------------------------------------------
+def _all_tool_sets():
+    import itertools
+
+    for action, planning in itertools.product(("tools", "bash_only"), ("on", "off")):
+        cfg = AgentConfig(action_space=action, planning=planning)
+        yield Registry(cfg, lim(), TodoList(), SubmitFlag()).schemas()
+
+
+def _arrays_without_items(schema, path="parameters"):
+    """Paths of every `type: array` in a JSON schema that does not say what its elements are."""
+    found = []
+    if isinstance(schema, dict):
+        if schema.get("type") == "array" and "items" not in schema:
+            found.append(path)
+        for key, value in schema.items():
+            found += _arrays_without_items(value, f"{path}.{key}")
+    elif isinstance(schema, list):
+        for i, value in enumerate(schema):
+            found += _arrays_without_items(value, f"{path}[{i}]")
+    return found
+
+
+def test_every_array_parameter_declares_what_its_elements_are():
+    # LiteLLM's token counter (and OpenAI's strict validation) reads `items`; the todo tool's
+    # parameter named `items` once had none and made token_counter(tools=...) raise KeyError
+    for tools in _all_tool_sets():
+        for tool in tools:
+            missing = _arrays_without_items(tool["function"]["parameters"])
+            assert not missing, f"{tool['function']['name']}: {missing}"
+
+
+def test_litellm_can_count_every_tool_set_we_send():
+    import litellm
+
+    plain = litellm.token_counter(
+        model="deepseek-v4-pro", messages=[{"role": "user", "content": "x"}]
+    )
+    for tools in _all_tool_sets():
+        counted = litellm.token_counter(
+            model="deepseek-v4-pro",
+            messages=[{"role": "user", "content": "x"}],
+            tools=tools,
+        )
+        assert counted > plain + 100  # the definitions are counted, not skipped
+
+
+def test_the_todo_schema_matches_what_the_tool_accepts():
+    from harness.tools.todo import STATUSES
+
+    element = TodoTool(TodoList()).parameters["properties"]["items"]["items"]
+    assert element["required"] == ["text", "status"]
+    assert element["properties"]["status"]["enum"] == STATUSES
+    assert element["additionalProperties"] is False
