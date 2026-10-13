@@ -299,3 +299,96 @@ def test_main_refuses_an_empty_run(tmp_path):
     (tmp_path / "R" / "trajectories").mkdir(parents=True)
     with pytest.raises(SystemExit):
         main(["--run-id", "R", "--results-dir", str(tmp_path)])
+
+
+# ---- the size after a compaction: the provider's count when a request followed ---------------------
+def sized(step, est, **extra):
+    return {"type": "compaction", "step": step, "tokens_after": est, **extra}
+
+
+def llm(prompt, outcome="ok", purpose="agent"):
+    return {
+        "type": "llm_call",
+        "purpose": purpose,
+        "outcome": outcome,
+        "prompt_tokens": prompt,
+    }
+
+
+def test_the_size_after_a_compaction_is_the_next_agent_requests_count():
+    from aggregate import sizes_after_compaction
+
+    t = task([])
+    t.spans = [
+        sized(5, 6000),
+        llm(None, outcome="retry"),  # a failed attempt has no usage
+        llm(
+            900, purpose="summary"
+        ),  # the summarizer's own call is not the agent's prompt
+        llm(4800),
+        {"type": "message", "step": 6},
+        sized(9, 7000),
+        {
+            "type": "message",
+            "step": 9,
+        },  # the history moved on before any request: no count
+        llm(9999),
+        sized(12, 5000),  # the run ended (context_overflow): nothing followed
+    ]
+    assert sizes_after_compaction(t) == [
+        {
+            "step": 5,
+            "tokens_after_est": 6000,
+            "tokens_after": 4800,
+            "source": "provider",
+        },
+        {
+            "step": 9,
+            "tokens_after_est": 7000,
+            "tokens_after": 7000,
+            "source": "estimate",
+        },
+        {
+            "step": 12,
+            "tokens_after_est": 5000,
+            "tokens_after": 5000,
+            "source": "estimate",
+        },
+    ]
+
+
+def test_estimated_sizes_are_counted_apart_and_kept_out_of_the_mean(tmp_path):
+    spans = [
+        sized(5, 6000), llm(4000), {"type": "message", "step": 6},
+        sized(8, 9000),
+        run_end(8, fail="context_overflow"),
+    ]  # fmt: skip
+    write(tmp_path, "R", "t1", spans)
+    out = aggregate(load_run(tmp_path / "R"))["compaction"]["tokens_after"]
+    assert out["tokens_after_source"] == {"provider": 1, "estimate": 1}
+    assert out["provider_mean"] == 4000
+    assert out["estimate_error_mean"] == pytest.approx(6000 / 4000 - 1)
+
+
+def test_monitoring_counts_oversized_summaries_skips_and_unusual_ratios(tmp_path):
+    spans = [
+        sized(3, 5000, summary="s", summary_expected_tokens=1000, summary_tokens_out=1200,
+              ratio_unusual=True),
+        sized(7, 5000, summary="s", summary_expected_tokens=1000, summary_tokens_out=800),
+        sized(9, 5000),  # truncate only: no summary to compare
+        {"type": "compaction_skipped", "step": 11, "reason": "no_gain", "ratio_unusual": False},
+        {"type": "compaction_skipped", "step": 14, "reason": "no_gain", "ratio_unusual": True},
+        {"type": "compaction_skipped", "step": 15, "reason": "infeasible"},
+        run_end(15),
+    ]  # fmt: skip
+    write(tmp_path, "R", "t1", spans)
+    out = aggregate(load_run(tmp_path / "R"))
+    mon = out["monitoring"]
+    assert mon["summary_size"] == {
+        "n": 2, "over_expected": 1, "actual_over_expected_max": pytest.approx(1.2)
+    }  # fmt: skip
+    assert mon["compactions_skipped"] == {"no_gain": 2, "infeasible": 1}
+    assert mon["ratio_unusual"] == 2
+    assert (
+        out["compaction"]["compactions_total"] == 3
+    )  # skipped attempts are not compactions

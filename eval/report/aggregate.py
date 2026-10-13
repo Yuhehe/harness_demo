@@ -22,6 +22,17 @@ The compaction metrics answer "what happens after a summary":
                                the summary text mentions. Uses the summarizer's own text, not
                                the generated state block (which lists the patch by design)
     compaction_cost_share      compaction cost / task cost
+
+How large a prompt was after a compaction: the `compaction` span holds an estimate. The exact
+size is the provider's prompt_tokens of the request that followed (the compacted view is sent
+as is), so that is used; only when no request followed (the run ended with context_overflow,
+or every attempt failed) is the estimate used, and the two are counted apart
+(`tokens_after_source`). The size before a compaction is always an estimate: that prompt was
+never sent.
+
+Monitoring (not metrics of the experiment, checks on the harness): how the summaries compare
+with the size the plan expected (`summary_size`), attempts that changed nothing
+(`compaction_skipped` spans), and compactions made with an unusual estimator ratio.
 """
 
 from __future__ import annotations
@@ -69,6 +80,10 @@ class Task:
     compactions: list[dict[str, Any]] = field(default_factory=list)
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     messages: list[dict[str, Any]] = field(default_factory=list)
+    skipped: list[dict[str, Any]] = field(default_factory=list)
+    spans: list[dict[str, Any]] = field(
+        default_factory=list
+    )  # all of them, in file order
 
     @property
     def complete(self) -> bool:
@@ -87,6 +102,8 @@ def load_task(path: Path) -> Task:
         compactions=by_type.get("compaction", []),
         tool_calls=by_type.get("tool_call", []),
         messages=by_type.get("message", []),
+        skipped=by_type.get("compaction_skipped", []),
+        spans=spans,
     )
 
 
@@ -159,6 +176,51 @@ def summary_file_recall(t: Task) -> float | None:
     return mean(recalls)
 
 
+def sizes_after_compaction(t: Task) -> list[dict[str, Any]]:
+    """For each compaction: the prompt size after it, from the provider when a request
+    followed (the first successful agent call before any new message), else the estimate."""
+    out = []
+    for i, s in enumerate(t.spans):
+        if s["type"] != "compaction":
+            continue
+        provider = None
+        for nxt in t.spans[i + 1 :]:
+            if nxt["type"] in ("message", "compaction"):
+                break  # the history moved on: no request carried this view
+            if (
+                nxt["type"] == "llm_call"
+                and nxt.get("purpose", "agent") == "agent"
+                and nxt.get("outcome", "ok") == "ok"
+            ):
+                provider = nxt.get("prompt_tokens")
+                break
+        est = s.get("tokens_after")
+        if not provider and est is None:
+            continue
+        out.append(
+            {
+                "step": s["step"],
+                "tokens_after_est": est,
+                "tokens_after": provider or est,
+                "source": "provider" if provider else "estimate",
+            }
+        )
+    return out
+
+
+def summary_sizes(t: Task) -> list[dict[str, Any]]:
+    """Summaries next to the size the plan expected for them (spans that record it)."""
+    return [
+        {
+            "step": c["step"],
+            "expected": c["summary_expected_tokens"],
+            "actual": c["summary_tokens_out"],
+        }
+        for c in t.compactions
+        if c.get("summary") and c.get("summary_expected_tokens")
+    ]
+
+
 # ---- per task, per run --------------------------------------------------------------------------
 def task_metrics(t: Task) -> dict[str, Any] | None:
     e = t.run_end
@@ -186,6 +248,52 @@ def task_metrics(t: Task) -> dict[str, Any] | None:
         if boundary is None
         else repeat_rate(t, boundary),
         "summary_file_recall": summary_file_recall(t),
+        "sizes_after_compaction": sizes_after_compaction(t),
+        "summary_sizes": summary_sizes(t),
+        "compactions_skipped": [c["reason"] for c in t.skipped],
+        "ratio_unusual": sum(
+            bool(c.get("ratio_unusual")) for c in [*t.compactions, *t.skipped]
+        ),
+    }
+
+
+def _sizes_after(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    sizes = [x for r in rows for x in r["sizes_after_compaction"]]
+    exact = [x for x in sizes if x["source"] == "provider"]
+    return {
+        "provider_mean": mean([x["tokens_after"] for x in exact]),
+        # only the exact sizes go into the mean; the estimated ones are counted, not mixed in
+        "tokens_after_source": {
+            "provider": len(exact),
+            "estimate": len(sizes) - len(exact),
+        },
+        # how far the estimate in the compaction span was from the provider's count
+        "estimate_error_mean": mean(
+            [
+                x["tokens_after_est"] / x["tokens_after"] - 1
+                for x in exact
+                if x["tokens_after_est"] is not None
+            ]
+        ),
+    }
+
+
+def _monitoring(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    summaries = [x for r in rows for x in r["summary_sizes"]]
+    reasons: dict[str, int] = {}
+    for r in rows:
+        for reason in r["compactions_skipped"]:
+            reasons[reason] = reasons.get(reason, 0) + 1
+    return {
+        "summary_size": {
+            "n": len(summaries),
+            "over_expected": sum(x["actual"] > x["expected"] for x in summaries),
+            "actual_over_expected_max": max(
+                (x["actual"] / x["expected"] for x in summaries), default=None
+            ),
+        },
+        "compactions_skipped": reasons,
+        "ratio_unusual": sum(r["ratio_unusual"] for r in rows),
     }
 
 
@@ -246,7 +354,9 @@ def aggregate(
                 sum(r["compaction_cost_usd"] for r in compacted),
                 sum(r["cost_usd"] for r in compacted),
             ),
+            "tokens_after": _sizes_after(rows),
         },
+        "monitoring": _monitoring(rows),
     }
     if resolved is not None:
         k = sum(r["instance_id"] in resolved for r in rows)
