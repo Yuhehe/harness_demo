@@ -9,6 +9,11 @@ mini_swe_agent.md describes, with every limit read from the harness configuratio
 M0 and B0 cannot drift apart, then converts its output. `convert` alone is for a run that was
 interrupted or finished by hand.
 
+The same guards as run_agent.py, because the comparison with M0 rests on "the same config":
+`run` refuses a working tree with uncommitted changes (--allow-dirty is for development runs
+and is recorded), and a run_id belongs to one config: run_meta.json records the config hash
+(with the git commit) when the run starts, and `run` and `convert` both refuse a different one.
+
 The conversion turns mini-swe-agent's output (mini/preds.json and one *.traj.json per task)
 into the layout the rest of the pipeline reads: preds.jsonl for score.py, status.jsonl, and a
 trajectories/<id>.jsonl holding run_start and run_end only. That is enough for aggregate.py
@@ -41,7 +46,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[0] / "swebench"))
 sys.path.insert(0, str(HERE.parents[0] / "report"))
 
-from run_agent import should_ask
+from run_agent import ConfigMismatch, should_ask
 from score import check_dataset_revision
 from select_subset import (
     META_NAME,
@@ -185,6 +190,9 @@ def trajectory_end(traj: dict[str, Any], cfg: Any) -> dict[str, Any]:
 def convert(run_dir: Path, cfg: Any, run_id: str) -> list[str]:
     """Write preds.jsonl, status.jsonl, run_meta.json and trajectories/ from mini/ . Returns
     the instance ids converted. Safe to repeat."""
+    # before anything is written: a run started by `run` already has its meta (with the git
+    # commit) and another config must not overwrite its files
+    check_meta(run_dir, cfg)
     mini = run_dir / "mini"
     preds = json.loads((mini / "preds.json").read_text())
     traj_dir = run_dir / "trajectories"
@@ -218,10 +226,46 @@ def convert(run_dir: Path, cfg: Any, run_id: str) -> list[str]:
         (run_dir / name).write_text(
             "".join(json.dumps(r, sort_keys=True) + "\n" for r in rows)
         )
-    (run_dir / "run_meta.json").write_text(
-        json.dumps({"b0": True, "harness_config_hash": cfg.config_hash(), "overrides": overrides(cfg)}, indent=2, sort_keys=True)
-    )  # fmt: skip
     return sorted(preds)
+
+
+RUN_META = "run_meta.json"
+
+
+def check_meta(
+    run_dir: Path,
+    cfg: Any,
+    git: dict[str, Any] | None = None,
+    *,
+    allow_dirty: bool = False,
+) -> None:
+    """Create run_meta.json for this run, or refuse when the run_id holds another config. An
+    existing file is never rewritten: it records how the run was started."""
+    path = run_dir / RUN_META
+    cfg_hash = cfg.config_hash()
+    if path.exists():
+        old = json.loads(path.read_text()).get("harness_config_hash")
+        if old != cfg_hash:
+            raise ConfigMismatch(
+                f"{run_dir.name} was started with config {old}, this is {cfg_hash}: use a "
+                f"new --run-id (results of two configs must not be mixed)"
+            )
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "b0": True,
+                "harness_config_hash": cfg_hash,
+                "overrides": overrides(cfg),
+                **(git or {}),
+                "allow_dirty": allow_dirty,
+                "created": time.time(),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
 
 
 # ---- command line ---------------------------------------------------------------------------------
@@ -239,6 +283,11 @@ def build_parser() -> argparse.ArgumentParser:
             p.add_argument(
                 "--print-command", action="store_true", help="show the command and stop"
             )
+            p.add_argument(
+                "--allow-dirty",
+                action="store_true",
+                help="development run on an uncommitted tree",
+            )
     return ap
 
 
@@ -247,9 +296,11 @@ def main(
     *,
     run=subprocess.run,
     newest_revision=resolve_revision,
+    git_meta=None,
 ) -> int:
     from dotenv import load_dotenv
 
+    from harness.cli import _git_meta
     from harness.config import load_config
 
     load_dotenv(".env")
@@ -273,9 +324,14 @@ def main(
         meta, newest_revision(meta["dataset_id"], None)
     )  # mini loads the newest
     print(f"B0 {args.run_id}: {len(ids)} task(s), step_limit {cfg.limits.max_steps}, cost_limit ${cfg.limits.max_cost_per_task_usd}, worst case ${len(ids) * cfg.limits.max_cost_per_task_usd:.2f}")  # fmt: skip
+    git = (git_meta or _git_meta)()
+    if git["git_dirty"] and not args.allow_dirty:
+        raise SystemExit(
+            "the working tree has uncommitted changes: commit first, or pass --allow-dirty for a development run"
+        )
+    check_meta(run_dir, cfg, git, allow_dirty=args.allow_dirty)
     if should_ask(len(ids), args.yes) and input("go on? [y/N] ").strip().lower() != "y":
         return 2
-    run_dir.mkdir(parents=True, exist_ok=True)
     done = run(
         cmd, env=environment(dict(os.environ)), check=False
     )  # a fixed command we build

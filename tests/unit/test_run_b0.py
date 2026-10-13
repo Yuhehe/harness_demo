@@ -323,7 +323,9 @@ def test_run_checks_the_dataset_converts_even_after_a_failure_and_passes_the_env
         "--yes",
     ]
     meta = json.loads(Path("configs/subsets/subsets_meta.json").read_text())
-    code = b0.main(argv, run=fake_run, newest_revision=lambda *_: meta["revision"])
+    code = b0.main(
+        argv, run=fake_run, newest_revision=lambda *_: meta["revision"], git_meta=CLEAN
+    )
     assert code == 1 and calls[0][1]["LITELLM_MODEL_REGISTRY_PATH"].endswith(
         "litellm_registry.json"
     )
@@ -333,5 +335,87 @@ def test_run_checks_the_dataset_converts_even_after_a_failure_and_passes_the_env
 
     calls.clear()
     with pytest.raises(SystemExit, match="has changed"):
-        b0.main(argv, run=fake_run, newest_revision=lambda *_: "0" * 40)
+        b0.main(argv, run=fake_run, newest_revision=lambda *_: "0" * 40, git_meta=CLEAN)
     assert not calls  # a moved dataset: mini-swe-agent is not started
+
+
+# ---- the same guards as run_agent.py ------------------------------------------------------------
+def CLEAN():
+    return {"git_commit": "abc123", "git_dirty": False}
+
+
+def DIRTY():
+    return {"git_commit": "abc123", "git_dirty": True}
+
+
+def _run_argv(results_dir, *extra):
+    return [
+        "run", "--config", "configs/default.yaml", "--subset", "configs/subsets/dev_5.txt",
+        "--run-id", "B0", "--results-dir", str(results_dir), "--yes", *extra,
+    ]  # fmt: skip
+
+
+def _go(argv, calls, git):
+    meta = json.loads(Path("configs/subsets/subsets_meta.json").read_text())
+
+    def fake_run(cmd, env, check):
+        calls.append(cmd)
+        return SimpleNamespace(returncode=0)
+
+    return b0.main(
+        argv, run=fake_run, newest_revision=lambda *_: meta["revision"], git_meta=git
+    )
+
+
+def test_a_dirty_tree_is_refused_unless_allowed_and_then_recorded(mini_output):
+    run, _ = mini_output
+    calls = []
+    with pytest.raises(SystemExit, match="uncommitted changes"):
+        _go(_run_argv(run.parent), calls, DIRTY)
+    assert not calls and not (run / "run_meta.json").exists()
+    _go(_run_argv(run.parent, "--allow-dirty"), calls, DIRTY)
+    meta = json.loads((run / "run_meta.json").read_text())
+    assert calls and meta["allow_dirty"] is True and meta["git_dirty"] is True
+
+
+def test_a_run_id_belongs_to_one_config(mini_output, tmp_path):
+    run, _ = mini_output
+    calls = []
+    _go(_run_argv(run.parent), calls, CLEAN)
+    first = json.loads((run / "run_meta.json").read_text())
+    assert first["harness_config_hash"] == MAIN.config_hash()
+    assert first["git_commit"] == "abc123"
+
+    other = tmp_path / "other.yaml"
+    other.write_text(
+        "extends: "
+        + str(Path("configs/default.yaml").resolve())
+        + "\nlimits:\n  max_steps: 99\n"
+    )
+    calls.clear()
+    argv = _run_argv(run.parent)
+    argv[argv.index("configs/default.yaml")] = str(other)
+    with pytest.raises(b0.ConfigMismatch):
+        _go(argv, calls, CLEAN)
+    assert not calls  # mini-swe-agent is not started
+    b0.convert(run, MAIN, "B0")
+    (run / "preds.jsonl").unlink()
+    with pytest.raises(b0.ConfigMismatch):
+        b0.convert(run, b0_load(other), "B0")
+    assert not (run / "preds.jsonl").exists()  # refused before writing anything
+
+
+def test_converting_keeps_the_record_of_how_the_run_started(mini_output):
+    run, _ = mini_output
+    _go(_run_argv(run.parent), [], CLEAN)
+    before = (run / "run_meta.json").read_text()
+    b0.convert(run, MAIN, "B0")
+    assert (
+        run / "run_meta.json"
+    ).read_text() == before  # not rewritten, git commit kept
+
+
+def b0_load(path):
+    from harness.config import load_config
+
+    return load_config(path)
