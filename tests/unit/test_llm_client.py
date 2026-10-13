@@ -346,3 +346,17 @@ async def test_the_estimate_for_a_failed_attempt_counts_the_tools_with_the_token
     assert (
         estimate >= count_messages("deepseek/deepseek-flash", MSGS) + 400
     )  # the tools are in
+
+
+async def test_the_estimate_for_a_failed_attempt_counts_the_replayed_reasoning(make):
+    # the provider counts a replayed reasoning_content (docs/notes.md section 17), so a failed
+    # attempt wasted those tokens too
+    client, _, _, _ = make([Step()])
+    plain = [*MSGS, {"role": "assistant", "content": "ok"}]
+    thinking = [
+        *MSGS,
+        {"role": "assistant", "content": "ok", "reasoning_content": "step " * 500},
+    ]
+    with_r = await client._estimate_prompt_tokens(thinking, None)
+    without = await client._estimate_prompt_tokens(plain, None)
+    assert with_r - without > 400

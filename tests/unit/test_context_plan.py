@@ -2,7 +2,7 @@
 mark, the five levels, the head measurement, the minimum gain, and the retry hysteresis."""
 
 import pytest
-from ctx_helpers import add_turn, manager, new_state, prime, reply, turns
+from ctx_helpers import MODEL, add_turn, manager, new_state, prime, reply, turns
 from fakes import ScriptedLLM
 
 from harness.config import SUMMARY_TOKENS
@@ -309,10 +309,36 @@ async def test_a_minimal_summary_is_never_reserved_above_the_summary_cap():
     assert plan.room_tokens == m.cfg.low_target() - plan.head_tokens - least
 
 
-# ---- reasoning is not part of the prompt size ---------------------------------------------------------
-def test_replayed_reasoning_is_not_counted_because_the_provider_does_not_count_it():
+# ---- reasoning is part of the prompt size --------------------------------------------------------------
+def test_replayed_reasoning_is_counted_because_the_provider_counts_it():
+    # docs/notes.md section 17: 2064 characters of replayed reasoning add 492 prompt tokens
+    text = "think about the failing test " * 300
     plain = {"role": "assistant", "content": "ok"}
-    thinking = {**plain, "reasoning_content": "think " * 3000}
-    assert count_messages("deepseek/deepseek-flash", [thinking]) == count_messages(
-        "deepseek/deepseek-flash", [plain]
+    thinking = {**plain, "reasoning_content": text}
+    as_text = {**plain, "content": "ok\n" + text}
+    extra = count_messages(MODEL, [thinking]) - count_messages(MODEL, [plain])
+    assert extra > 1000
+    assert (
+        abs(count_messages(MODEL, [thinking]) - count_messages(MODEL, [as_text])) <= 5
     )
+
+
+async def test_an_estimate_after_a_summary_does_not_carry_the_reasoning_it_removed():
+    # The ratio learned on a history full of reasoning must not inflate a view without it.
+    est = TokenEstimator(MODEL, None)
+    reasoning = "step " * 2000
+    sent = [
+        {"role": "user", "content": "task"},
+        {"role": "assistant", "content": "", "reasoning_content": reasoning},
+    ]
+    # the provider counts the reasoning like any other text
+    provider = count_messages(
+        MODEL, [sent[0], {"role": "assistant", "content": reasoning}]
+    )
+    await est.calibrate(sent, provider)
+    assert 0.95 <= est.ratio <= 1.05
+    short = [
+        {"role": "user", "content": "task"},
+        {"role": "user", "content": "summary"},
+    ]
+    assert await est.estimate(short) <= await est.local(short) * 1.05

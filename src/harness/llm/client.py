@@ -33,7 +33,6 @@ from harness.llm.types import (
     Message,
     ToolCall,
     Usage,
-    strip_reasoning,
 )
 from harness.tracing.tracer import Tracer
 
@@ -227,7 +226,7 @@ class LiteLLMClient:
                 return int(
                     litellm.token_counter(
                         model=cost.normalize_model(self.model),
-                        messages=strip_reasoning(messages),
+                        messages=messages,
                         tools=tools,
                     )
                 )

@@ -75,8 +75,8 @@ def tool_message(tool_call_id: str, text: str) -> Message:
 def assistant_message(resp: LLMResponse, *, keep_tool_calls: bool = True) -> Message:
     """The assistant turn as it is stored in the history (and sent back next time).
 
-    reasoning_content is kept: it is free (not counted as prompt tokens) and avoids the
-    failure mode LiteLLM documents for thinking mode.
+    reasoning_content is kept: DeepSeek asks for it back in thinking mode with tools (docs/notes.md
+    11.1). It is not free: the provider counts it in prompt_tokens (docs/notes.md section 17).
     """
     msg: Message = {"role": "assistant", "content": resp.content}
     if resp.reasoning_content:
@@ -91,18 +91,6 @@ def assistant_message(resp: LLMResponse, *, keep_tool_calls: bool = True) -> Mes
             for tc in resp.tool_calls
         ]
     return msg
-
-
-def strip_reasoning(messages: list[Message]) -> list[Message]:
-    """The messages as the provider counts them. DeepSeek does not count a replayed
-    `reasoning_content` in `prompt_tokens` (docs/notes.md section 5), while a local token
-    counter does, so it is dropped before counting a prompt."""
-    return [
-        {k: v for k, v in m.items() if k != "reasoning_content"}
-        if "reasoning_content" in m
-        else m
-        for m in messages
-    ]
 
 
 # ---- errors ------------------------------------------------------------------------------

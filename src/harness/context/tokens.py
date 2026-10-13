@@ -14,8 +14,11 @@ provider/local ratio instead.
 
 How far off it is: against the provider's own prompt_tokens on 42 request pairs of real runs it
 was between -8.4% and +7.8% (docs/notes.md 11.3), so the water marks in ContextConfig leave a
-margin. A replayed reasoning_content is not counted, because the provider does not count it
-(llm.types.strip_reasoning).
+margin. A replayed reasoning_content is counted, because the provider counts it: the same
+history with and without 2064 characters of reasoning differs by 492 prompt tokens, with or
+without a user message after it (docs/notes.md section 17). Leaving it out made the ratio
+drift with the reasoning piling up (1.1 to the 2.0 clamp in one run), which is harmless while
+anchored but put an estimate after a compaction 16% under to 42% over the provider's count.
 """
 
 from __future__ import annotations
@@ -27,14 +30,13 @@ from typing import Any
 import litellm
 
 from harness.llm import cost
-from harness.llm.types import Message, strip_reasoning
+from harness.llm.types import Message
 
 _RATIO_MIN, _RATIO_MAX = 0.5, 2.0
 
 
 def count_messages(model: str, messages: list[Message]) -> int:
     """Local token count of messages. Never raises: an estimate must not break a run."""
-    messages = strip_reasoning(messages)
     try:
         return int(
             litellm.token_counter(model=cost.normalize_model(model), messages=messages)
