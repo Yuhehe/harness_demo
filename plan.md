@@ -177,9 +177,20 @@
 - [x] `eval/report/aggregate.py`：汇总每次运行的指标，包括 Wilson 置信区间（见 summarize 重做的阶段 4；B0 的轨迹格式不同，读不了，见下面 B0 一项）
 - [x] B0 对齐（2026-10-12）：新增 `eval/baselines/run_b0.py`（**不在 CLAUDE.md §4 的目录树里**，已登记待同步）：从 `configs/default.yaml` 生成 `mini-extra swebench` 命令，步数 / 成本 / 墙钟 / 命令超时 / 容器上限 / 思考 / `reasoning_effort` / `max_tokens` / 请求超时都来自那份配置，不再手写；`mini_swe_agent.md` 的占位符已清掉。**`model_kwargs` 是否生效已实测**：用 mini-swe-agent 自己的 `LitellmModel` 对着本机假服务器，请求体里确有 `thinking`、`reasoning_effort`（经 `extra_body`）、`max_tokens`，`timeout` 在 `litellm.completion` 的参数里。已核实 mini-swe-agent 的"一步"= 一次模型调用（`n_calls`）。`convert` 把 mini-swe-agent 的输出（`mini/preds.json` + `*.traj.json`）转成 `preds.jsonl`、`status.jsonl` 和只含 `run_start` / `run_end` 的轨迹，所以 `score.py`、`aggregate.py` 和花费统计都读得了 B0；B0 的成本按它记录的 token 用我们自己的标准价重算（mini-swe-agent 自己的数字另存为 `b0_reported_cost`）。已知差异：B0 的 `wall_seconds` 是第一次到最后一次响应的间隔，略短；B0 没有逐步 span，所以压缩指标不适用
 - [x] dev_5 冒烟（2026-10-12，**开发运行，不是实验结果，不进报告**；`--allow-dirty`，因为工作区有你的学习笔记没提交）：M0（`M0-dev`）、B0（`B0-dev`）各跑全部 5 题，都经 `score.py` 官方判分，**都是 5/5 解决**，没有基础设施故障 / 空补丁 / 出错。M0：$0.5453，平均 37.8 步，缓存命中率 97.9%，提示词峰值 6.8k 到 61.9k；B0：$0.2666（按 token 重建，与 mini-swe-agent 自己报的数 5 题都在 4 位小数内一致），平均 21 步。另做两次真实压缩冒烟：`smoke-compaction`（`configs/smoke/compaction.yaml`，预算 10k）5 题全解决，4 题共发生 30 次压缩，没有一次回退或摘要失败；`smoke-32k`（A6 配置）2 题，`django-15930` 压缩 5 次、全是 `normal` 级别的清理，没有摘要。完整状态块的真实样例来自探针（`django-15930` 第 70 步：44167 → 3665 token，$0.0177）。**这一步发现并改了一个配置**：`django-15930` 在 10k 预算下用了 109 步（M0 是 79 步），超过原来的 100 步上限，所以 `max_steps` 改为 150（依据见 `default.yaml` 注释）；预算表和 `MAX_TOTAL_COST_USD` 见下面的日志。没有发现需要修的 harness bug
+- [x] **摘要大小与提示词估计的修复**（2026-10-13 至 14，都在冻结前；实测与更正见 `docs/notes.md` §17）
+  - 摘要按档位实测的 token 数预留（full 1950 / minimal 1050），字数、预计 token、minimal 档状态块上限都做成配置键；从文件加载的配置要求摘要上限 ≥ full 档预计值（提交 `8af8fea`、`43ea787`）
+  - 回传的推理计入 `prompt_tokens`（真实对照：2064 字符多出 492 token），本地计数改为计入；压缩后的估计误差从 −16%~+42% 降到 −8%~+5%，有锚的平均绝对误差 1.42% → 0.79%（`2e8e26b`）
+  - 压缩流程：规划按预计值预留；先生成状态块，门槛用它的实际大小；hybrid 清理后重新判断是否超预算；跳过的尝试写 `compaction_skipped` span；`compaction` span 记录比例并标出异常（`43ea787`）
+  - 报告：压缩后的大小用下一次请求的服务端数字，带来源标记；`monitoring` 一节（`30f1920`）
+  - 新增 24k 压缩冒烟配置（`efbded7`）；跳过档位过渡区和 `tail_cap` 依据两项记入"后续 TODO"
+- [ ] **M0 基本符合预期**（2026-10-13 与你商定的验收标准，满足后才拉镜像、打 tag）
+  - [ ] 工作区干净，在候选冻结提交上重跑 dev_5 的 M0：5 题官方判分，没有 `env_error` / `format_error`，权限层的拦截逐条看过
+  - [ ] 压缩路径在真实运行里都走过：minimal（10k 冒烟）和 normal 带完整状态块（24k 冒烟），没有摘要失败或回退
+  - [x] 摘要预留与实际的差距可解释（§17.1）；压缩后大小的偏差已解释并修复，报告改用服务端数字（§17.2–17.4）
+  - [ ] `run_b0.py` 的两道保护（`docs/notes.md` §16.C1）：拒绝有未提交改动的工作区（开发运行可用 `--allow-dirty` 并记录），同一 `run_id` 的配置哈希必须一致；用同一份配置跑 B0-dev 能对上。（B0 运行中的花费进预算守卫是另一件事，按你的决定和并行化一起记入"后续 TODO"）
 - [ ] **打 tag `v0.1-frozen`**
-- [ ] 晚上：在 `verified_50` 上跑 M0，同时跑 B0（mini-swe-agent，同一模型、同一题目子集）；先打印预计花费并等你确认；WSL 只有 12GB，worker 数 × 单容器内存上限（现在 4g）加判分容器不能超，M0 和 B0 是否并行要先定
-- [ ] 拉剩余 50 个镜像（**你决定暂不做**；仍须在开跑 50 题前拉完）
+- [ ] 晚上：在 `verified_50` 上跑 M0，同时跑 B0（mini-swe-agent，同一模型、同一题目子集）；先打印预计花费并等你确认；本机实测 15.6GB 内存（不是原来写的 WSL 12GB），worker 数 × 单容器内存上限（现在 4g）加判分容器不能超，M0 和 B0 是否并行要先定
+- [ ] 拉剩余 45 个镜像（**你的决定**：M0 基本符合预期之前不拉；`verified_50` 与 `dev_5` 不重合，本地只有 5 个 dev 镜像；按 §7 的实测约需 90–100GB，现有 133GB 可用）
 
 **验收**：dev_5 全流程能生成判分结果；tag 已打；M0 和 B0 已开跑。
 
@@ -314,7 +325,10 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 | 待办 | CLI 交互确认（`ask`）实现后 | §5.6 删掉"尚未实现" | [ ] |
 | 待办 | 回放补写 `llm_call` span 后（第 4 天） | §5.8 删掉"待做" | [ ] |
 | 待办 | `score.py` 写好后：`resolved.json` 约定（现在只在 `docs/notes.md` §12.6） | §6 或 §7 | [ ] |
-| 待办 | 冻结前定下 `default.yaml` 的步数 / 成本 / 墙钟上限（现在是临时值） | 不进 CLAUDE.md，只记 plan.md | [ ] |
+| 待办 | 冻结前定下 `default.yaml` 的步数 / 成本 / 墙钟上限（现在是临时值） | 不进 CLAUDE.md，只记 plan.md | [x] 2026-10-12（150 步 / $2 / 1800 秒，依据在 `default.yaml` 注释） |
+| 2026-10-13 | 提示词估计的误差：有锚时约 ±8% 仍成立（实测更小），压缩过程中没有锚；回传的推理计入 `prompt_tokens`，本地计数也计入（`docs/notes.md` §17.2–17.3） | §5.3 不变量里"约 ±8% 的误差（§11.3）" | [ ] |
+| 2026-10-13 | 新 span 类型 `compaction_skipped`（什么都没做的压缩尝试，不计入压缩次数） | §5.7 span 类型列表 | [ ] |
+| 2026-10-13 | `compaction` span 里压缩前后的 token 数是估计值；报告里压缩后的大小用下一次请求的服务端 `prompt_tokens`（`aggregate.py`，`tokens_after_source`） | §5.7 `compaction` 一条 | [ ] |
 
 ---
 
@@ -388,7 +402,7 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - 验证脚本放在 scratchpad，没有进仓库
 
 **LiteLLM + DeepSeek 验证（步骤 4，同日稍后）**
-- `reasoning_content` 回传没有被强制：默认思考模式下去掉它、LiteLLM 注入空格占位、3 轮连续工具链，共 4 条链和 7 组两轮对话都没有报错；回传的内容不计 `prompt_tokens`
+- `reasoning_content` 回传没有被强制：默认思考模式下去掉它、LiteLLM 注入空格占位、3 轮连续工具链，共 4 条链和 7 组两轮对话都没有报错；回传的内容不计 `prompt_tokens`（**2026-10-13 已被推翻：计入，见 `docs/notes.md` §17.2**）
 - 默认思考模式并不总是思考（reasoning token 0–58 波动）；`thinking: disabled` 可用；默认模式下 `max_tokens=16` 得到 `finish_reason=length` 且内容为空
 - 两种模式的 `prompt_tokens` 不同（flash 308 / 284，v4-pro 371 / 293），推断缓存不能跨模式共享，一次运行内不要切换；`cached_tokens` 都是 128 的倍数
 - 对 `llm/client.py` 的影响：每次调用显式传 `thinking`（配置项）；保留 `reasoning_content` 但压缩时可以丢；`length` 且内容为空要识别成失败；`thinking` 默认开还是关等 dev_5 上的对比再定
