@@ -771,3 +771,134 @@ list(FailReason)               # [<FailReason.step_limit: 'step_limit'>, ...]
 - 值相同的别名成员不会出现在遍历里，只有第一个（规范成员）会出现。想包含别名要用 `FailReason.__members__`（有序映射，名字到成员）。
 - 遍历一个成员实例（如 `for x in FailReason.step_limit`）会抛 `TypeError`，因为成员本身不可迭代，除非它混入了 `str` 等类型。
 - 两者可以组合：`for i, m in enumerate(FailReason)`。
+
+## `@classmethod`：绑定到类的方法与替代构造器
+
+以 `src/harness/security/guard.py` 中的 `Guard.from_config` 为例：
+
+```python
+class Guard:
+    def __init__(self, policy: Policy | None, enabled: bool = True) -> None: ...
+
+    @classmethod
+    def from_config(cls, cfg: GuardConfig, workdir: str) -> Guard:
+        if not cfg.enabled:
+            return cls(None, enabled=False)
+        return cls(Policy.load(cfg.policy_path, workdir))
+```
+
+### 作用
+
+`@classmethod` 把方法绑定到**类**而不是实例上，第一个参数是类本身（惯例叫 `cls`），不是 `self`。调用时不需要先有实例：
+
+```python
+guard = Guard.from_config(cfg.guard, workdir)
+```
+
+### 典型用法：替代构造器（工厂方法）
+
+- `__init__` 要的是现成的 `Policy` 对象和 `enabled` 标志，保持简单，测试时可以直接传假的 `Policy`。
+- `from_config` 接受配置对象，负责"守卫关闭"的分支和加载策略文件，最后调用 `cls(...)` 造出实例。
+- 这样"从配置创建"的逻辑收拢在类内部，调用方只需一行。
+
+### 为什么写 `cls(...)` 而不是写死 `Guard(...)`
+
+`cls` 是调用它的那个类。若有子类 `class StrictGuard(Guard)`，`StrictGuard.from_config(...)` 返回的是 `StrictGuard` 实例；写死 `Guard(...)` 则子类拿到的仍是父类对象。
+
+### 与相邻装饰器的对比
+
+| 装饰器 | 第一个参数 | 能访问 | 典型用途 |
+|---|---|---|---|
+| 无（普通方法） | `self`（实例） | 实例和类 | 操作对象状态，如 `Guard.check` |
+| `@classmethod` | `cls`（类） | 类，不能访问实例状态 | 工厂方法、替代构造器 |
+| `@staticmethod` | 无 | 都不能（只是放在类里的普通函数） | 与类相关、但不需要类或实例的工具函数 |
+| `@property` | `self` | 实例 | 把方法当属性读，如 `Guard.policy_hash` |
+
+## `next(iterator, default)`：取第一个满足条件的元素
+
+以 `src/harness/security/policy.py` 中的 `Policy.first_hit` 为例：
+
+```python
+def first_hit(self, scope: str, text: str) -> Rule | None:
+    """The first matching rule; deny rules are listed before ask rules."""
+    return next((r for r in self.rules if r.hits(scope, text)), None)
+```
+
+### 作用
+
+`next(iterator, default)` 从迭代器里取**下一个**元素。这里配合生成器表达式，实现"找第一个满足条件的元素，找不到就返回 `None`"。
+
+- `(r for r in self.rules if r.hits(scope, text))` 是生成器表达式，惰性地逐个产出命中的规则。
+- 生成器一个都没产出（没有规则命中）时，`next` 返回默认值 `None`，对应返回类型 `Rule | None`。
+
+### 基本语法
+
+```python
+it = iter([10, 20, 30])
+next(it)          # 10
+next(it)          # 20
+next(it)          # 30
+next(it)          # StopIteration：迭代器耗尽，没给默认值就抛异常
+next(it, None)    # None：给了默认值就返回它，不抛异常
+```
+
+- `next` 作用于**迭代器**。列表、元组这类可迭代对象要先 `iter(...)`；生成器表达式本身就是迭代器，可以直接用。
+- 每调用一次消耗一个元素，迭代器是有状态的。
+
+### 与 for 循环、列表推导的对比
+
+等价的 for 写法：
+
+```python
+for r in self.rules:
+    if r.hits(scope, text):
+        return r
+return None
+```
+
+| 写法 | 行为 |
+|---|---|
+| `[r for r in rules if r.hits(...)][0]` | 先算出**所有**命中项再取第一个；没命中时抛 `IndexError` |
+| `next((r for r in rules if r.hits(...)), None)` | **短路**：找到第一个就停，后面的规则不再检查；没命中返回 `None` |
+
+短路在这里有语义意义：deny 规则排在 ask 规则前面，第一个命中的就是优先级最高的，取到它就够了。
+
+### 注意点
+
+- 生成器表达式作为函数的**唯一**参数时括号可以省略；这里还有第二个参数 `None`，生成器必须自己带括号：`next((... for ...), None)`，漏掉会得到语法错误。
+- 默认值不要省：没命中时会抛 `StopIteration`。在生成器函数内部，这个异常还会被转成 `RuntimeError`，更难排查。
+- 默认值是 `None` 时，调用方用 `if hit is not None` 判空，不要写 `if hit:`，除非确定 `Rule` 对象一定为真值。
+- 也常用来取"第一个元素"：`next(iter(d))` 取字典的第一个 key。
+
+## 链式比较：`a < b <= c`
+
+以 `src/harness/context/tokens.py` 中的条件为例：
+
+```python
+if anchor_len is not None and 0 < anchor_len <= len(messages):
+```
+
+### 作用
+
+Python 支持链式比较：`a < b <= c` 等价于 `a < b and b <= c`，但中间的 `b` 只求值一次。
+
+`0 < anchor_len <= len(messages)` 展开后是 `(0 < anchor_len) and (anchor_len <= len(messages))`，表示 `anchor_len` 落在 `(0, len(messages)]` 区间内：大于 0 且不超过消息条数。前面的 `anchor_len is not None` 先排除 `None`，否则 `0 < None` 会抛 `TypeError`。
+
+### 规则
+
+- 链可以任意长：`a < b < c < d` 等价于 `a < b and b < c and c < d`。
+- 可以混用不同运算符：`<`、`<=`、`==`、`!=`、`>`、`>=`、`is`、`in` 等都能进链。
+- **短路**：前一段为假，后面的部分不再求值。
+- **中间表达式只求值一次**：`0 < f() <= 10` 里 `f()` 只调用一次；手写 `0 < f() and f() <= 10` 会调用两次。`f()` 有副作用或开销大时有区别。
+
+### 容易踩的坑
+
+```python
+1 < 2 < 3        # True，和数学写法一致
+3 > 2 > 1        # True
+1 == 1 < 2       # True：(1 == 1) and (1 < 2)
+```
+
+- 不是先算 `0 < anchor_len` 得到布尔值，再拿布尔值去和 `len(messages)` 比较。C 语言里 `0 < x <= n` 是这样算的，结果往往不对；Python 不会。
+- `a < b > c` 合法，只表示 `a < b and b > c`，并不要求 a 与 c 之间有关系。
+- `x == y in z` 是 `x == y and y in z`，不是 `(x == y) in z`，混用 `in` 和 `==` 时容易误读。
