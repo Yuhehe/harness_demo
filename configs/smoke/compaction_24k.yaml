@@ -1,0 +1,16 @@
+# A smoke test, not an ablation (hence not in configs/ablations/, which a test enumerates).
+#
+# The 10k smoke (compaction.yaml) only ever takes the short path: at that budget the head and
+# the two newest turns leave no room for a full summary. This one is large enough for the
+# normal path, a full summary with the whole state block (patch text, saved-output index,
+# viewed files), and small enough that a long dev task (django-15930 peaks at about 62k under
+# M0) compacts several times. Trigger at 20.4k, target 12k.
+#
+# summary_max_ratio is raised because the default cap, 0.08 * 24000 = 1920 tokens, is below the
+# expected size of a full summary (1950) and the config would be rejected on load; at 0.1 the
+# cap is 2400. The state block cap stays at the default ratio: min(2500, 0.05 * 24000) = 1200.
+extends: ../default.yaml
+
+context:
+  budget_tokens: 24000
+  summary_max_ratio: 0.1
