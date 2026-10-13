@@ -13,9 +13,9 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-from harness.config import SUMMARY_TOKENS, SUMMARY_WORDS, ContextConfig
+from harness.config import ContextConfig
 from harness.context.restore import STATE_MARKER
-from harness.context.strategies.types import HEAD, Env, Report
+from harness.context.strategies.types import HEAD, Env, Report, Skip
 from harness.llm import cost
 from harness.llm.types import LLMError, Message, system_message, user_message
 
@@ -151,30 +151,24 @@ def _prompt(history_text: str, words: int) -> list[Message]:
     ]
 
 
-async def run(env: Env) -> Report | None:
-    """Returns None when there is nothing worth summarizing. Raises LLMError when the
+async def run(env: Env) -> Report | Skip:
+    """Returns a Skip when there is nothing worth summarizing. Raises LLMError when the
     summarizer fails and UnusableSummary (a ValueError) when it returns nothing usable; the
-    manager falls back."""
+    manager falls back.
+
+    Order: the state block is built first, then the minimum-gain check, then the call. The
+    block depends only on the stretch being replaced (fixed by the plan's cut), so its exact
+    size is known before the check; only the summary's size has to be expected."""
     assert env.summarizer is not None and env.summary_model is not None
     cfg = env.cfg
     cut = env.cut
     middle = env.original[HEAD:cut]
     # Nothing but an earlier summary: summarizing it again changes nothing and costs a call.
     if not middle or (len(middle) == 1 and is_summary(middle[0])):
-        return None
+        return Skip("nothing_to_summarize")
 
-    size = (
-        "minimal" if env.minimal else "full"
-    )  # two fixed sizes, not a function of the room
-    words = SUMMARY_WORDS[size]
-    if not env.over_budget:
-        # A summary that removes little costs a call and breaks the cached prefix. Over the
-        # budget it is the last chance, so it always runs.
-        sizes = await env.estimator.local_each(env.view[HEAD:cut])
-        removed = round(sum(sizes) * env.estimator.ratio)
-        kept = SUMMARY_TOKENS[size] + cfg.restore_tokens_cap()
-        if removed - kept < cfg.min_gain_ratio * cfg.budget_tokens:
-            return None
+    # two fixed sizes, picked by the plan, not a continuous function of the room
+    words = cfg.summary_words(env.minimal)
 
     block = None
     if env.make_block is not None:
@@ -184,6 +178,24 @@ async def run(env: Env) -> Report | None:
             block_error = f"{type(e).__name__}: {e}"[:200]
         else:
             block_error = None
+
+    if not env.over_budget:
+        # A summary that removes little costs a call and breaks the cached prefix. Over the
+        # budget it is the last chance, so it always runs.
+        sizes = await env.estimator.local_each(env.view[HEAD:cut])
+        removed = round(sum(sizes) * env.estimator.ratio)
+        block_tokens = block.tokens if block else cfg.restore_cap(env.minimal)
+        kept = cfg.summary_expected_tokens(env.minimal) + block_tokens
+        min_gain = cfg.min_gain_ratio * cfg.budget_tokens
+        if removed - kept < min_gain:
+            return Skip(
+                "no_gain",
+                {
+                    "removed_tokens": removed,
+                    "kept_tokens": kept,
+                    "min_gain_tokens": round(min_gain),
+                },
+            )
 
     full_chars = len(render(middle, reasoning=cfg.summary_include_reasoning))
     spent = Spent()
@@ -213,6 +225,9 @@ async def run(env: Env) -> Report | None:
             ["summarize"],
             {
                 "summarized_messages": len(middle),
+                # what was asked and expected, next to what came back (summary_tokens_out)
+                "summary_words": words,
+                "summary_expected_tokens": cfg.summary_expected_tokens(env.minimal),
                 "summary_chars": len(text),
                 "summary_latency_s": round(time.monotonic() - started, 3),
                 "summary_model": env.summary_model,

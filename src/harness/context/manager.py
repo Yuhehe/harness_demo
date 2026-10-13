@@ -13,7 +13,9 @@ Before every compaction the manager makes a plan from what is known at that mome
               first call (the provider reports it), a local estimate before.
     tail      the newest turns, kept as they are. At most keep_recent_ratio * budget, and
               less when the room left under the low water mark is smaller.
-    overhead  what a summary and its state block may add (their caps).
+    overhead  what a summary and its state block may add: the expected size of the summary
+              (measured, ContextConfig.summary_expected_tokens_*) plus the cap of the block
+              (the block is fitted to its cap by code, so the cap is a true upper bound).
 
     room = low water mark - head - overhead
 
@@ -38,13 +40,12 @@ from harness.context.strategies import hybrid, none, summarize, truncate
 from harness.context.strategies.summarize import spent_by
 from harness.context.strategies.types import (
     HEAD,
-    RESTORE_MIN_TOKENS,
-    SUMMARY_MIN_TOKENS,
     Env,
     Report,
+    Skip,
     protected_from,
 )
-from harness.context.tokens import TokenEstimator
+from harness.context.tokens import TokenEstimator, ratio_unusual
 from harness.llm.client import LLMClient
 from harness.llm.types import LLMError, Message
 from harness.sandbox.base import Sandbox
@@ -177,19 +178,19 @@ class ContextManager:
         band = high - self.cfg.low_target()
         return min(max(high, self._last_after + band), budget)
 
-    async def _plan(self, before: int) -> Plan:
+    async def _plan(self) -> Plan:
         cfg = self.cfg
         needs = cfg.strategy in NEEDS_SUMMARIZER
         ratio = self.estimator.ratio
         sizes = [round(n * ratio) for n in await self.estimator.local_each(self._view)]
         tools = round(await self.estimator.tools_tokens() * ratio)
         head = self._head_exact or sum(sizes[:HEAD]) + tools
-        full = cfg.summary_tokens_cap() + cfg.restore_tokens_cap() if needs else 0
+        full = (
+            cfg.summary_expected_tokens(False) + cfg.restore_cap(False) if needs else 0
+        )
         # the summary call's max_tokens is the cap, so no summary is longer than that
         least = (
-            min(SUMMARY_MIN_TOKENS, cfg.summary_tokens_cap()) + RESTORE_MIN_TOKENS
-            if needs
-            else 0
+            cfg.summary_expected_tokens(True) + cfg.restore_cap(True) if needs else 0
         )
         low, budget = cfg.low_target(), cfg.budget_tokens
         tail_cap = int(cfg.keep_recent_ratio * budget)
@@ -232,11 +233,33 @@ class ContextManager:
             minimal=minimal,
         )
 
+    def _skipped(self, state: AgentState, before: int, plan: Plan, skip: Skip) -> int:
+        """An attempt that changed nothing. Remember it so the next one waits for the prompt
+        to grow (_trigger), and trace it: otherwise a moved threshold has no visible cause."""
+        self._last_after = before
+        self.tracer.emit(
+            "compaction_skipped",
+            step=state.steps,
+            strategy=self.cfg.strategy,
+            reason=skip.reason,
+            tokens_before=before,
+            budget_tokens=self.cfg.budget_tokens,
+            plan_level=plan.level,
+            head_tokens=plan.head_tokens,
+            tail_tokens=plan.tail_tokens,
+            room_tokens=plan.room_tokens,
+            ratio=round(self.estimator.ratio, 4),
+            ratio_unusual=ratio_unusual(self.estimator.ratio),
+            next_trigger=self._trigger(),
+            **skip.details,
+        )
+        return before
+
     async def _compact(
         self, state: AgentState, before: int, deadline: float | None
     ) -> int:
         budget = self.cfg.budget_tokens
-        plan = await self._plan(before)
+        plan = await self._plan()
         if plan.level == "infeasible":
             if before > budget:
                 # No summary is paid for: the head and the newest turn alone do not fit.
@@ -244,8 +267,7 @@ class ContextManager:
                     f"the head ({plan.head_tokens} tokens) and the newest turn "
                     f"({plan.min_tail_tokens}) leave no room in a budget of {budget}"
                 )
-            self._last_after = before
-            return before
+            return self._skipped(state, before, plan, Skip("infeasible"))
         env = Env(
             cfg=self.cfg,
             view=self._view,
@@ -272,16 +294,19 @@ class ContextManager:
                 raise
             # The summarizer failed: clearing old outputs is the best we can still do.
             fallback = f"{type(e).__name__}: {e}"[:200]
-            report = await truncate.run(env) or Report(list(self._view))
+            cleared = await truncate.run(env)
+            report = (
+                cleared if isinstance(cleared, Report) else Report(list(self._view))
+            )
             spent = spent_by(e)  # a response that came back unusable still cost money
             report.cost_usd += spent.cost_usd
             report.tokens_in += spent.tokens_in
             report.tokens_out += spent.tokens_out
-        if report is None:
+        if not isinstance(report, Report):
             # Nothing worth compacting (everything is in the tail, or the gain is too small).
-            # Remember the attempt so the next one waits for the prompt to grow.
-            self._last_after = before
-            return before
+            return self._skipped(
+                state, before, plan, report or Skip("nothing_to_compact")
+            )
 
         if "summarize" in report.actions and self._pending_index is not None:
             self._index = self._pending_index
@@ -303,6 +328,8 @@ class ContextManager:
             tokens_before=before,
             tokens_after=after,
             budget_tokens=budget,
+            ratio=round(self.estimator.ratio, 4),
+            ratio_unusual=ratio_unusual(self.estimator.ratio),
             plan_level=plan.level,
             target_unreachable=plan.level == "unreachable",
             head_tokens=plan.head_tokens,

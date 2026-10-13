@@ -7,7 +7,6 @@ from pydantic import ValidationError
 
 from harness.config import (
     NEEDS_SUMMARIZER,
-    SUMMARY_TOKENS,
     AgentConfig,
     LLMConfig,
     config_diff,
@@ -88,14 +87,16 @@ EXPERIMENT_CONFIGS = sorted(
 def test_every_config_file_leaves_room_for_a_full_summary(path):
     cfg = load_config(path)  # raises if the summary cap is below a full summary
     if cfg.context.strategy in NEEDS_SUMMARIZER:
-        assert cfg.context.summary_tokens_cap() >= SUMMARY_TOKENS["full"]
+        assert (
+            cfg.context.summary_tokens_cap() >= cfg.context.summary_expected_tokens_full
+        )
 
 
 def test_a_summary_cap_below_a_full_summary_is_rejected_on_load(tmp_path):
     # 20k budget: the cap is 0.08 * 20000 = 1600, under the 1950 a full summary takes
     path = tmp_path / "c.yaml"
     path.write_text("context:\n  strategy: hybrid\n  budget_tokens: 20000\n")
-    with pytest.raises(ValueError, match="measured size of a full summary"):
+    with pytest.raises(ValueError, match="expected size of a full summary"):
         load_config(path)
     path.write_text("context:\n  strategy: none\n  budget_tokens: 20000\n")
     load_config(path)  # no summarizer, no cap to check

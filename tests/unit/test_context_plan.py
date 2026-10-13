@@ -3,11 +3,11 @@ mark, the five levels, the head measurement, the minimum gain, and the retry hys
 
 import pytest
 from ctx_helpers import MODEL, add_turn, manager, new_state, prime, reply, turns
-from fakes import ScriptedLLM
+from fakes import FakeSandbox, ScriptedLLM
 
-from harness.config import SUMMARY_TOKENS
+from harness.config import ContextConfig
 from harness.context.manager import ContextOverflow
-from harness.context.strategies.types import HEAD, RESTORE_MIN_TOKENS, protected_from
+from harness.context.strategies.types import HEAD, protected_from
 from harness.context.tokens import TokenEstimator, count_messages
 from harness.llm.types import tool_message
 from harness.tracing.tracer import MemoryTracer
@@ -75,7 +75,7 @@ async def test_before_the_first_call_the_head_is_a_local_estimate():
     s = turns(4)
     m = manager("truncate", budget_tokens=20000, high_water=0.3, low_water=0.2)
     prime(m, s)
-    plan = await m._plan(5000)
+    plan = await m._plan()
     assert (
         0 < plan.head_tokens < 400
     )  # system prompt + task + (no tools in this fixture's count)
@@ -88,7 +88,7 @@ BIG = {"budget_tokens": 20000}
 async def plan_for(strategy, n, *, chars=4000, llm=None, **kw):
     m = manager(strategy, llm=llm or ScriptedLLM([]), **kw)
     prime(m, turns(n, chars))
-    return m, await m._plan(10**6)
+    return m, await m._plan()
 
 
 async def test_level_normal_when_the_full_tail_fits_the_room():
@@ -183,7 +183,7 @@ async def test_a_larger_ratio_protects_more_turns():
             keep_recent_ratio=ratio,
         )  # fmt: skip
         prime(m, turns(20))
-        return (await m._plan(10**6)).tail_tokens
+        return (await m._plan()).tail_tokens
 
     small, large = await tail(0.01), await tail(0.25)
     assert small < 1900  # the two newest turns only
@@ -270,12 +270,17 @@ async def _gain_and_manager(min_gain_ratio):
     m = manager("summarize", llm=llm, min_gain_ratio=min_gain_ratio, **kw)
     s = turns(30)
     prime(m, s)
-    plan = await m._plan(0)
+    plan = await m._plan()
     assert not plan.minimal
     middle = await m.estimator.local_each(m._view[HEAD : plan.cut])
     removed = round(sum(middle) * m.estimator.ratio)
-    # what a full summary and its state block are expected to put back
-    gain = removed - (SUMMARY_TOKENS["full"] + m.cfg.restore_tokens_cap())
+    # what a full summary and its state block put back: the summary at its expected size, the
+    # block at its real size (it is built before the check)
+    block = await m._block(
+        s, m._original[HEAD : plan.cut], m._view[HEAD : plan.cut], False
+    )
+    assert 0 < block.tokens < m.cfg.restore_tokens_cap()  # not the cap: the real size
+    gain = removed - (m.cfg.summary_expected_tokens_full + block.tokens)
     return gain, m, llm, s
 
 
@@ -295,7 +300,7 @@ async def test_the_minimum_gain_counts_a_full_summary_at_its_measured_size(
 async def test_a_minimal_summary_is_reserved_at_its_measured_size():
     m, plan = await plan_for("hybrid", 12, **SHORT, keep_recent_min_turns=2)
     assert plan.level == "minimal"
-    least = SUMMARY_TOKENS["minimal"] + RESTORE_MIN_TOKENS
+    least = m.cfg.summary_expected_tokens_minimal + m.cfg.summary_restore_min_tokens
     assert plan.room_tokens == m.cfg.low_target() - plan.head_tokens - least
 
 
@@ -304,8 +309,9 @@ async def test_a_minimal_summary_is_never_reserved_above_the_summary_cap():
     m, plan = await plan_for(
         "hybrid", 12, budget_tokens=8000, high_water=0.6, low_water=0.3
     )
-    assert m.cfg.summary_tokens_cap() < SUMMARY_TOKENS["minimal"] and plan.minimal
-    least = m.cfg.summary_tokens_cap() + RESTORE_MIN_TOKENS
+    assert m.cfg.summary_tokens_cap() < m.cfg.summary_expected_tokens_minimal
+    assert plan.minimal
+    least = m.cfg.summary_tokens_cap() + m.cfg.summary_restore_min_tokens
     assert plan.room_tokens == m.cfg.low_target() - plan.head_tokens - least
 
 
@@ -342,3 +348,150 @@ async def test_an_estimate_after_a_summary_does_not_carry_the_reasoning_it_remov
         {"role": "user", "content": "summary"},
     ]
     assert await est.estimate(short) <= await est.local(short) * 1.05
+
+
+# ---- skipped attempts are traced ---------------------------------------------------------------
+async def test_a_summary_without_gain_is_traced_as_skipped_and_not_counted():
+    tracer = MemoryTracer()
+    llm = ScriptedLLM([])
+    m = manager("summarize", llm=llm, tracer=tracer, keep_recent_min_turns=11, **GAIN)
+    s = turns(14)
+    await m.build(s)
+    (span,) = tracer.of("compaction_skipped")
+    assert span["reason"] == "no_gain" and not tracer.of("compaction")
+    assert span["removed_tokens"] - span["kept_tokens"] < span["min_gain_tokens"]
+    assert span["next_trigger"] > m.cfg.high_target() and s.compactions == 0
+    assert not llm.calls
+
+
+async def test_nothing_to_clear_is_traced_as_skipped():
+    tracer = MemoryTracer()
+    # about 5400 tokens: over the trigger (4800), under the budget (6000); no output is long
+    # enough to clear
+    m = manager(
+        "truncate", tracer=tracer, budget_tokens=6000, high_water=0.8,
+        min_clear_chars=10**6,
+    )  # fmt: skip
+    await m.build(turns(6))
+    (span,) = tracer.of("compaction_skipped")
+    assert span["reason"] == "nothing_to_clear"
+
+
+async def test_an_infeasible_plan_under_the_budget_is_traced_as_skipped():
+    tracer = MemoryTracer()
+    # two protected turns of about 1800 tokens: over the high mark (1600) but under the budget
+    # (2000), and no summary fits next to them
+    m = manager(
+        "hybrid", llm=ScriptedLLM([]), tracer=tracer, budget_tokens=2000,
+        high_water=0.8, low_water=0.3, keep_recent_min_turns=2,
+        summary_max_ratio=0.1, summary_restore_ratio=0.1,
+    )  # fmt: skip
+    await m.build(turns(2))
+    (span,) = tracer.of("compaction_skipped")
+    assert span["reason"] == "infeasible" and span["plan_level"] == "infeasible"
+
+
+async def test_a_skipped_summary_does_not_commit_the_state_block_index():
+    m = manager("summarize", llm=ScriptedLLM([]), keep_recent_min_turns=11, **GAIN)
+    before = m._index
+    await m.build(turns(14))
+    assert m._index is before  # built for the check, dropped with the skip
+
+
+# ---- hybrid: over the budget is judged again after the clearing ------------------------------
+async def test_hybrid_does_not_summarize_at_a_loss_once_the_clearing_is_under_the_budget():
+    # Over the budget before the clearing (no minimum gain), under it after. The cleared middle
+    # is so small that a summary would put back more than it removes, so it must be skipped.
+    tracer, llm = MemoryTracer(), ScriptedLLM([])
+    m = manager(
+        "hybrid", llm=llm, tracer=tracer, budget_tokens=6000,
+        high_water=0.6, low_water=0.3, keep_recent_min_turns=4,
+    )  # fmt: skip
+    s = new_state()
+    for i in range(1, 10):
+        add_turn(s, i, chars=4500)
+    index = m._index
+    await m.build(s)
+    (span,) = tracer.of("compaction")
+    assert span["tokens_before"] > 6000 and span["actions"] == ["truncate"]
+    assert span["summary_skipped"] == "no_gain" and not llm.calls
+    assert (
+        m._index is index
+    )  # the block built for the check is dropped with the summary
+
+
+# ---- the plan reserves the expected summary, never above the cap -----------------------------
+async def test_a_full_summary_is_reserved_at_its_expected_size():
+    # a budget of 40000: the cap (3200) is above the expected size (1950)
+    m, plan = await plan_for(
+        "hybrid", 60, high_water=0.5, low_water=0.3, budget_tokens=40000
+    )
+    assert not plan.minimal
+    assert m.cfg.summary_expected_tokens_full < m.cfg.summary_tokens_cap()
+    full = m.cfg.summary_expected_tokens_full + m.cfg.restore_tokens_cap()
+    assert plan.room_tokens == m.cfg.low_target() - plan.head_tokens - full
+
+
+async def test_the_reserved_summary_is_capped_by_the_summary_cap():
+    m, plan = await plan_for(
+        "hybrid", 30, high_water=0.5, low_water=0.3, summary_max_ratio=0.05, **BIG
+    )
+    assert m.cfg.summary_tokens_cap() == 1000 < m.cfg.summary_expected_tokens_full
+    assert not plan.minimal
+    full = m.cfg.summary_tokens_cap() + m.cfg.restore_tokens_cap()
+    assert plan.room_tokens == m.cfg.low_target() - plan.head_tokens - full
+
+
+async def test_the_minimal_state_block_cap_is_configurable():
+    from harness.context.restore import RestoreIndex, build_block
+
+    cfg = ContextConfig(
+        strategy="hybrid", budget_tokens=20000, summary_restore_min_tokens=150
+    )
+    est = TokenEstimator(MODEL, None)
+    block = await build_block(
+        step=3, sandbox=FakeSandbox(), todo=None, index=RestoreIndex(),
+        cfg=cfg, estimator=est, minimal=True,
+    )  # fmt: skip
+    assert block.parts["cap_tokens"] == 150
+
+
+def test_the_minimal_size_must_not_exceed_the_full_size():
+    with pytest.raises(ValueError, match="minimal summary size"):
+        ContextConfig(summary_expected_tokens_minimal=3000)
+    with pytest.raises(ValueError, match="minimal summary size"):
+        ContextConfig(summary_words_minimal=800)
+
+
+# ---- the ratio is in the trace --------------------------------------------------------------
+async def test_a_compaction_records_the_ratio_and_flags_an_unusual_one():
+    from harness.context.tokens import ratio_unusual
+
+    tracer = MemoryTracer()
+    m = manager("truncate", tracer=tracer, budget_tokens=4000)
+    await m.build(turns(6))
+    (span,) = tracer.of("compaction")
+    assert span["ratio"] == pytest.approx(m.estimator.ratio, abs=1e-4)
+    assert span["ratio_unusual"] is False
+    assert ratio_unusual(2.0) and ratio_unusual(0.6) and not ratio_unusual(1.1)
+
+
+async def test_an_unusual_ratio_is_flagged_on_both_compacted_and_skipped_attempts():
+    tracer = MemoryTracer()
+    m = manager("truncate", tracer=tracer, budget_tokens=4000)
+    m.estimator.ratio = 1.8  # e.g. reasoning left out of the local count again
+    await m.build(turns(6))
+    (span,) = tracer.of("compaction")
+    assert span["ratio"] == 1.8 and span["ratio_unusual"] is True
+
+    tracer = MemoryTracer()
+    # nothing long enough to clear: skipped whatever the ratio; about 9700 tokens at 1.8,
+    # over the trigger (8400) and under the budget (12000)
+    m = manager(
+        "truncate", tracer=tracer, budget_tokens=12000, high_water=0.7,
+        min_clear_chars=10**6,
+    )  # fmt: skip
+    m.estimator.ratio = 1.8
+    await m.build(turns(6))
+    (span,) = tracer.of("compaction_skipped")
+    assert span["ratio"] == 1.8 and span["ratio_unusual"] is True

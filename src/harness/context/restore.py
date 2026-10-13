@@ -24,7 +24,6 @@ from typing import Any
 
 from harness.config import ContextConfig
 from harness.context.strategies.truncate import cleared_output
-from harness.context.strategies.types import RESTORE_MIN_TOKENS
 from harness.context.tokens import TokenEstimator
 from harness.llm.types import Message
 from harness.sandbox.base import Sandbox
@@ -226,7 +225,7 @@ async def build_block(
 ) -> Block:
     """The state block for a summary written at `step`, within its token cap. If the block
     does not fit, parts are dropped in a fixed order and the stat is kept."""
-    cap = RESTORE_MIN_TOKENS if minimal else cfg.restore_tokens_cap()
+    cap = cfg.restore_cap(minimal)
     try:
         diff = await sandbox.git_diff()
     except Exception as e:  # noqa: BLE001 - a sandbox that cannot diff must not stop a summary

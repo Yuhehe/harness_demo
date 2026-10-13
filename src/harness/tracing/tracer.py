@@ -16,13 +16,22 @@ llm_call        one per attempt: attempt, outcome (ok | retry | fail), purpose (
 tool_call       step, tool, args_hash, exit_code, truncated, format_error, duration_s
 guard_decision  tool, action, rule_id, level
 compaction      step, strategy, actions, tokens_before, tokens_after, budget_tokens, plan_level,
-                target_unreachable, head_tokens, tail_tokens, room_tokens, cost_usd,
-                summary_tokens_in, summary_tokens_out, duration_s; truncate adds cleared_outputs
-                and cleared_chars; a summary adds summarized_messages, summary (the
-                summarizer's own text only), summary_chars, summary_latency_s, summary_model,
-                summary_input_chars, summary_input_chars_full, summary_attempts,
-                summary_clipped, restored (what went into the state block), restored_error;
-                fallback or summary_failed when the summary did not work out
+                target_unreachable, head_tokens, tail_tokens, room_tokens, ratio, ratio_unusual,
+                cost_usd, summary_tokens_in, summary_tokens_out, duration_s; truncate adds
+                cleared_outputs and cleared_chars; a summary adds summarized_messages,
+                summary_words, summary_expected_tokens, summary (the summarizer's own text
+                only), summary_chars, summary_latency_s, summary_model, summary_input_chars,
+                summary_input_chars_full, summary_attempts, summary_clipped, restored (what
+                went into the state block), restored_error; fallback or summary_failed when the
+                summary did not work out; in hybrid, summary_skipped (and summary_removed_tokens,
+                summary_kept_tokens, summary_min_gain_tokens) when the clearing stood alone.
+                tokens_before and tokens_after are estimates: the provider's count of the
+                compacted prompt is the prompt_tokens of the next llm_call
+compaction_skipped  an attempt that changed nothing (it still moves the retry threshold):
+                step, strategy, reason (infeasible | nothing_to_clear | nothing_to_summarize |
+                no_gain | strategy_none), tokens_before, budget_tokens, plan_level, head_tokens,
+                tail_tokens, room_tokens, ratio, ratio_unusual, next_trigger; no_gain adds
+                removed_tokens, kept_tokens, min_gain_tokens
 message         step, and the message itself (role, content, tool_calls, tool_call_id,
                 reasoning_content)
 truncation      step, content_chars, tool_calls, consecutive

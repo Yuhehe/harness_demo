@@ -18,17 +18,13 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from harness.config import SUMMARY_TOKENS, ContextConfig
+from harness.config import ContextConfig
 from harness.context.tokens import TokenEstimator
 from harness.llm.client import LLMClient
 from harness.llm.types import Message
 from harness.sandbox.base import Sandbox
 
 HEAD = 2  # view[0] is the system prompt, view[1] the task; neither is ever compacted
-# The smallest a summary and its state block can be made (a minimal summary as measured, the
-# diff stat alone). Used to tell "tight" from "impossible".
-SUMMARY_MIN_TOKENS = SUMMARY_TOKENS["minimal"]
-RESTORE_MIN_TOKENS = 200
 
 
 @dataclass
@@ -61,6 +57,18 @@ class Env:
     @property
     def low(self) -> int:
         return int(self.cfg.low_water * self.cfg.budget_tokens)
+
+
+@dataclass
+class Skip:
+    """A strategy looked and did nothing. The reason goes into a `compaction_skipped` span, so
+    an attempt that only moved the retry threshold (manager._trigger) is still visible.
+
+    reason: nothing_to_clear | nothing_to_summarize | no_gain (the summary would remove less
+    than min_gain_ratio * budget)"""
+
+    reason: str
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

@@ -24,14 +24,6 @@ _THINKING_DEFAULTS = {
 }
 
 
-# The two sizes of a summary: the word count the summarizer is asked for, and how many tokens
-# such a summary actually came out at (the largest seen, times 1.25, rounded up to 50). Tokens
-# are measured directly, not derived from words: a summary is dense with paths and names, and
-# per requested word the full size ran 1.9-2.2 tokens, the minimal 2.6-4.0 (docs/notes.md
-# section 17; minimal n=6, all from one trajectory, full n=3, one probe per task). Words are
-# what the prompt can ask for; tokens are what the planner reserves.
-SUMMARY_WORDS = {"full": 700, "minimal": 200}
-SUMMARY_TOKENS = {"full": 1950, "minimal": 1050}  # max seen 1544 / 806
 NEEDS_SUMMARIZER = ("summarize", "hybrid")
 
 
@@ -106,6 +98,21 @@ class ContextConfig(_Strict):
     summary_diff_chars: int = (
         6000  # patch text in the state block (the stat is always there)
     )
+    # The two sizes of a summary (the plan picks one): the word count the summarizer is asked
+    # for, and how many tokens such a summary is expected to take. The tokens are measured, not
+    # derived from words: a summary is dense with paths and names, and per requested word the
+    # full size ran 1.9-2.2 tokens, the minimal 2.6-4.0. Defaults: the largest seen times 1.25,
+    # rounded up to 50 (max 1544 / 806; full n=3, one probe per task; minimal n=6, all from one
+    # trajectory; docs/notes.md section 17). Re-measure when the summary model or prompt changes.
+    # The hard limit is still the cap above (max_tokens of the call); these are what the plan
+    # and the minimum-gain check expect.
+    summary_words_full: int = 700
+    summary_words_minimal: int = 200
+    summary_expected_tokens_full: int = 1950
+    summary_expected_tokens_minimal: int = 1050
+    # Cap of the state block of a minimal summary (a design value: room for the diff stat and a
+    # short plan; 78-172 tokens seen). The block is fitted to its cap by code, so it never exceeds it.
+    summary_restore_min_tokens: int = 200
     summary_index_entries: int = 20  # saved-output index lines
     summary_viewed_files: int = 30  # viewed-file paths
     # What the summarizer is shown: the agent's history as the agent saw it, in full, including
@@ -127,6 +134,17 @@ class ContextConfig(_Strict):
             raise ValueError("need summary_retries >= 0 and summary_clip_chars >= 200")
         if self.keep_recent_min_turns < 1:
             raise ValueError("need keep_recent_min_turns >= 1")
+        if not (
+            0 < self.summary_words_minimal <= self.summary_words_full
+            and 0
+            < self.summary_expected_tokens_minimal
+            <= self.summary_expected_tokens_full
+            and self.summary_restore_min_tokens > 0
+        ):
+            raise ValueError(
+                "need 0 < the minimal summary size <= the full one (words and expected "
+                "tokens) and summary_restore_min_tokens > 0"
+            )
         for name in (
             "keep_recent_ratio",
             "min_gain_ratio",
@@ -154,6 +172,23 @@ class ContextConfig(_Strict):
             self.summary_restore_tokens,
             int(self.summary_restore_ratio * self.budget_tokens),
         )
+
+    def summary_words(self, minimal: bool) -> int:
+        return self.summary_words_minimal if minimal else self.summary_words_full
+
+    def summary_expected_tokens(self, minimal: bool) -> int:
+        """Expected size of a summary of this size, never above the cap: the cap is the
+        summary call's max_tokens, so no summary comes back longer."""
+        expected = (
+            self.summary_expected_tokens_minimal
+            if minimal
+            else self.summary_expected_tokens_full
+        )
+        return min(expected, self.summary_tokens_cap())
+
+    def restore_cap(self, minimal: bool) -> int:
+        """Cap of the state block for a summary of this size."""
+        return self.summary_restore_min_tokens if minimal else self.restore_tokens_cap()
 
     def high_target(self) -> int:
         return int(self.high_water * self.budget_tokens)
@@ -245,14 +280,12 @@ def check_summary_cap(ctx: ContextConfig) -> None:
     ends with finish_reason=length and is thrown away. Checked on every config loaded from a
     file (the experiment configs), not in the model itself: unit tests use budgets of a few
     thousand tokens with a fake summarizer, where no real summary could fit anyway."""
-    if (
-        ctx.strategy in NEEDS_SUMMARIZER
-        and ctx.summary_tokens_cap() < SUMMARY_TOKENS["full"]
-    ):
+    expected = ctx.summary_expected_tokens_full
+    if ctx.strategy in NEEDS_SUMMARIZER and ctx.summary_tokens_cap() < expected:
         raise ValueError(
             f"the summary cap min(summary_max_tokens, summary_max_ratio * budget_tokens) "
-            f"= {ctx.summary_tokens_cap()} is below the measured size of a full summary "
-            f"({SUMMARY_TOKENS['full']} tokens); raise summary_max_ratio"
+            f"= {ctx.summary_tokens_cap()} is below the expected size of a full summary "
+            f"(summary_expected_tokens_full = {expected}); raise summary_max_ratio"
         )
 
 

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from harness.context.strategies.types import Env, Report
+from harness.context.strategies.types import Env, Report, Skip
 
 
-async def run(env: Env) -> Report | None:
-    return None
+async def run(env: Env) -> Report | Skip:
+    return Skip("strategy_none")

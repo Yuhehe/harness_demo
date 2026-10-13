@@ -15,6 +15,7 @@ from harness.context.strategies.summarize import (
     is_summary,
 )
 from harness.context.strategies.truncate import STUB_PREFIX
+from harness.context.tokens import TokenEstimator
 from harness.llm import cost
 from harness.llm.types import (
     LLMError,
@@ -129,7 +130,7 @@ async def test_the_summary_input_is_the_full_text_not_a_clipped_version():
 async def test_in_hybrid_the_summarizer_reads_the_outputs_not_their_stubs():
     # the regression behind phase 1: hybrid cleared the outputs and then summarized the stubs
     llm, tracer = ScriptedLLM([reply()]), MemoryTracer()
-    s = history(9, size=4500)
+    s = history(60, size=4500)  # enough that the cleared middle is worth a summary
     m = mgr("hybrid", llm, tracer, keep_recent_min_turns=4)
     view = await m.build(s)
 
@@ -250,7 +251,9 @@ def test_the_new_settings_are_validated():
 async def test_an_unusable_summary_is_charged_to_the_task(strategy):
     cut_off = reply(text="partial", finish="length", prompt=3000, completion=4096)
     llm, tracer = ScriptedLLM([cut_off]), MemoryTracer()
-    s = history(9, size=4500)
+    s = history(
+        60, size=4500
+    )  # in hybrid: enough that the cleared middle is worth a summary
     m = mgr(strategy, llm, tracer, keep_recent_min_turns=4)
     await m.build(s)
     paid = cost.cost_usd(MODEL, cut_off.usage)
@@ -292,3 +295,25 @@ async def test_summarize_replaces_the_same_stretch_in_both_lists_through_several
             add_turn(s, i, f"OUT{i} " + "word " * 800)
     await m.build(s)  # picks up the turns added after the last build
     assert m._original[-1] is s.messages[-1] and m._view[-1] is s.messages[-1]
+
+
+@pytest.mark.parametrize("minimal", [False, True])
+async def test_the_word_count_asked_for_comes_from_the_config(minimal):
+    from harness.context.strategies import summarize
+    from harness.context.strategies.types import Env
+
+    cfg = ccfg("summarize", summary_words_full=333, summary_words_minimal=111)
+    s = history(6, size=4000)
+    llm = ScriptedLLM([reply()])
+    env = Env(
+        cfg=cfg, view=list(s.messages), original=list(s.messages), est=10**6,
+        estimator=TokenEstimator(MODEL, None), sandbox=FakeSandbox(), summarizer=llm,
+        summary_model=MODEL, next_path=lambda: "/tmp/harness/ctx_1.txt",
+        cut=len(s.messages) - 2, over_budget=True, minimal=minimal,
+    )  # fmt: skip
+    report = await summarize.run(env)
+    assert f"at most {111 if minimal else 333} words" in prompt_text(llm)
+    assert report.details["summary_words"] == (111 if minimal else 333)
+    assert report.details["summary_expected_tokens"] == cfg.summary_expected_tokens(
+        minimal
+    )

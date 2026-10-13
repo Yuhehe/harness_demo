@@ -10,13 +10,13 @@ from dataclasses import replace
 
 from harness.context.strategies import summarize, truncate
 from harness.context.strategies.summarize import spent_by
-from harness.context.strategies.types import Env, Report
+from harness.context.strategies.types import Env, Report, Skip
 from harness.llm.types import LLMError
 
 
-async def run(env: Env) -> Report | None:
+async def run(env: Env) -> Report | Skip:
     first = await truncate.run(env)
-    if first is None:
+    if isinstance(first, Skip):
         return await summarize.run(env)
     # What the cleared view would cost, by the same estimate the trigger used.
     est = await env.estimator.estimate(first.view)
@@ -24,7 +24,16 @@ async def run(env: Env) -> Report | None:
         return first
     try:
         # `view` is the cleared one (its tail is what survives); `original` is untouched.
-        second = await summarize.run(replace(env, view=first.view, est=est))
+        # Over the budget is judged again: if the clearing got back under it, the summary is
+        # no longer a last chance and the minimum-gain check applies.
+        second = await summarize.run(
+            replace(
+                env,
+                view=first.view,
+                est=est,
+                over_budget=est > env.cfg.budget_tokens,
+            )
+        )
     except (LLMError, ValueError) as e:  # the clearing already done still stands
         first.details["summary_failed"] = f"{type(e).__name__}: {e}"[:200]
         spent = spent_by(e)  # an unusable response was still paid for
@@ -32,7 +41,9 @@ async def run(env: Env) -> Report | None:
         first.tokens_in += spent.tokens_in
         first.tokens_out += spent.tokens_out
         return first
-    if second is None:
+    if isinstance(second, Skip):
+        first.details["summary_skipped"] = second.reason
+        first.details.update({f"summary_{k}": v for k, v in second.details.items()})
         return first
     return Report(
         second.view,

@@ -286,7 +286,7 @@ def tight(tokens, **kw):
 
 
 # (below ~90 tokens not even the header and the stat fit; real caps are never that small:
-# the smallest one used is RESTORE_MIN_TOKENS = 200)
+# the smallest one used is summary_restore_min_tokens = 200)
 @pytest.mark.parametrize("cap", [400, 250, 150, 90])
 async def test_a_block_that_does_not_fit_is_cut_down_in_a_fixed_order(cap):
     b = await block(tight(cap), index=index_of(30, 30), diff=DIFF + "+x\n" * 400)

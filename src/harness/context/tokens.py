@@ -33,6 +33,14 @@ from harness.llm import cost
 from harness.llm.types import Message
 
 _RATIO_MIN, _RATIO_MAX = 0.5, 2.0
+# Where the provider/local ratio is expected to stay (cl100k_base locally vs DeepSeek's own
+# tokenizer, reasoning counted): 1.04-1.21 on every request of 9 real runs (docs/notes.md
+# section 17). Outside it the estimates are suspect; compaction spans flag it.
+RATIO_EXPECTED = (0.9, 1.4)
+
+
+def ratio_unusual(ratio: float) -> bool:
+    return not RATIO_EXPECTED[0] <= ratio <= RATIO_EXPECTED[1]
 
 
 def count_messages(model: str, messages: list[Message]) -> int:

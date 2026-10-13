@@ -348,7 +348,9 @@ async def test_hybrid_only_clears_when_that_is_enough():
 
 async def test_hybrid_summarizes_when_clearing_is_not_enough():
     llm, tracer = ScriptedLLM([summary_reply()]), MemoryTracer()
-    # small outputs the stub cannot shrink much, so clearing alone stays above the high mark
+    # small outputs the stub cannot shrink much, so clearing alone stays above the high mark;
+    # enough turns that the cleared middle is still worth a summary once the clearing has got
+    # the prompt back under the budget (with 9 turns it was not, and is now skipped: no_gain)
     mgr = manager(
         "hybrid",
         llm=llm,
@@ -359,7 +361,7 @@ async def test_hybrid_summarizes_when_clearing_is_not_enough():
         keep_recent_min_turns=4,
     )
     s = state_for()
-    for i in range(1, 10):
+    for i in range(1, 30):
         add_turn(s, i, size=4500)
     view = await mgr.build(s)
     paired(view)
@@ -376,7 +378,7 @@ async def test_hybrid_keeps_the_clearing_when_the_summarizer_fails():
         budget_tokens=6000, high_water=0.6, low_water=0.3, keep_recent_min_turns=4,
     )  # fmt: skip
     s = state_for()
-    for i in range(1, 10):
+    for i in range(1, 30):  # a summary worth making (see the test above)
         add_turn(s, i, size=4500)
     try:
         await mgr.build(s)

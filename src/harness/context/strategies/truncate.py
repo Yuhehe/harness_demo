@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 
-from harness.context.strategies.types import HEAD, Env, Report
+from harness.context.strategies.types import HEAD, Env, Report, Skip
 from harness.llm.types import Message
 from harness.tools.base import OUT_DIR, saved_path
 
@@ -44,7 +44,7 @@ def is_cleared(m: Message) -> bool:
     return str(m.get("content", "")).startswith(STUB_PREFIX)
 
 
-async def run(env: Env, *, target: int | None = None) -> Report | None:
+async def run(env: Env, *, target: int | None = None) -> Report | Skip:
     """Clear the oldest eligible outputs until the estimate reaches `target` (default: the
     low water mark), or until nothing eligible is left."""
     target = env.low if target is None else target
@@ -59,7 +59,7 @@ async def run(env: Env, *, target: int | None = None) -> Report | None:
         and len(str(view[i].get("content", ""))) >= cfg.min_clear_chars
     ]
     if not eligible:
-        return None
+        return Skip("nothing_to_clear")
 
     sizes = await env.estimator.local_each([view[i] for i in eligible])
     ratio = env.estimator.ratio
