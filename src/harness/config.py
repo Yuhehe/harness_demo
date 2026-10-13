@@ -24,6 +24,17 @@ _THINKING_DEFAULTS = {
 }
 
 
+# The two sizes of a summary: the word count the summarizer is asked for, and how many tokens
+# such a summary actually came out at (the largest seen, times 1.25, rounded up to 50). Tokens
+# are measured directly, not derived from words: a summary is dense with paths and names, and
+# per requested word the full size ran 1.9-2.2 tokens, the minimal 2.6-4.0 (docs/notes.md
+# section 17; minimal n=6, all from one trajectory, full n=3, one probe per task). Words are
+# what the prompt can ask for; tokens are what the planner reserves.
+SUMMARY_WORDS = {"full": 700, "minimal": 200}
+SUMMARY_TOKENS = {"full": 1950, "minimal": 1050}  # max seen 1544 / 806
+NEEDS_SUMMARIZER = ("summarize", "hybrid")
+
+
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -229,10 +240,28 @@ def _load_yaml(path: Path) -> dict:
     return data
 
 
+def check_summary_cap(ctx: ContextConfig) -> None:
+    """The summary call's max_tokens is `summary_tokens_cap()`; a full summary that hits it
+    ends with finish_reason=length and is thrown away. Checked on every config loaded from a
+    file (the experiment configs), not in the model itself: unit tests use budgets of a few
+    thousand tokens with a fake summarizer, where no real summary could fit anyway."""
+    if (
+        ctx.strategy in NEEDS_SUMMARIZER
+        and ctx.summary_tokens_cap() < SUMMARY_TOKENS["full"]
+    ):
+        raise ValueError(
+            f"the summary cap min(summary_max_tokens, summary_max_ratio * budget_tokens) "
+            f"= {ctx.summary_tokens_cap()} is below the measured size of a full summary "
+            f"({SUMMARY_TOKENS['full']} tokens); raise summary_max_ratio"
+        )
+
+
 def load_config(path: str | Path | None) -> AgentConfig:
     if path is None:
         return AgentConfig()
-    return AgentConfig.model_validate(_load_yaml(Path(path)))
+    cfg = AgentConfig.model_validate(_load_yaml(Path(path)))
+    check_summary_cap(cfg.context)
+    return cfg
 
 
 def config_diff(

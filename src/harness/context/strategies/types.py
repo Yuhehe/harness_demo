@@ -18,16 +18,16 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from harness.config import ContextConfig
+from harness.config import SUMMARY_TOKENS, ContextConfig
 from harness.context.tokens import TokenEstimator
 from harness.llm.client import LLMClient
 from harness.llm.types import Message
 from harness.sandbox.base import Sandbox
 
 HEAD = 2  # view[0] is the system prompt, view[1] the task; neither is ever compacted
-# The smallest a summary and its state block can be made (a summary of about 200 words, the
+# The smallest a summary and its state block can be made (a minimal summary as measured, the
 # diff stat alone). Used to tell "tight" from "impossible".
-SUMMARY_MIN_TOKENS = 300
+SUMMARY_MIN_TOKENS = SUMMARY_TOKENS["minimal"]
 RESTORE_MIN_TOKENS = 200
 
 

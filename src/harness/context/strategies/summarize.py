@@ -13,7 +13,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-from harness.config import ContextConfig
+from harness.config import SUMMARY_TOKENS, SUMMARY_WORDS, ContextConfig
 from harness.context.restore import STATE_MARKER
 from harness.context.strategies.types import HEAD, Env, Report
 from harness.llm import cost
@@ -21,11 +21,6 @@ from harness.llm.types import LLMError, Message, system_message, user_message
 
 SUMMARY_PREFIX = "[Summary of the earlier steps"
 MIN_CLIP_CHARS = 200
-WORDS_FULL, WORDS_MINIMAL = (
-    700,
-    200,
-)  # two fixed sizes, not a continuous function of the room
-TOKENS_PER_WORD = 1.5
 RETRY_KINDS = (
     "context_overflow",
     "timeout",
@@ -168,13 +163,16 @@ async def run(env: Env) -> Report | None:
     if not middle or (len(middle) == 1 and is_summary(middle[0])):
         return None
 
-    words = WORDS_MINIMAL if env.minimal else WORDS_FULL
+    size = (
+        "minimal" if env.minimal else "full"
+    )  # two fixed sizes, not a function of the room
+    words = SUMMARY_WORDS[size]
     if not env.over_budget:
         # A summary that removes little costs a call and breaks the cached prefix. Over the
         # budget it is the last chance, so it always runs.
         sizes = await env.estimator.local_each(env.view[HEAD:cut])
         removed = round(sum(sizes) * env.estimator.ratio)
-        kept = int(words * TOKENS_PER_WORD) + cfg.restore_tokens_cap()
+        kept = SUMMARY_TOKENS[size] + cfg.restore_tokens_cap()
         if removed - kept < cfg.min_gain_ratio * cfg.budget_tokens:
             return None
 

@@ -32,7 +32,7 @@ from functools import partial
 from typing import Any
 
 from harness.agent.state import AgentState
-from harness.config import ContextConfig
+from harness.config import NEEDS_SUMMARIZER, ContextConfig
 from harness.context.restore import Block, RestoreIndex, build_block
 from harness.context.strategies import hybrid, none, summarize, truncate
 from harness.context.strategies.summarize import spent_by
@@ -56,7 +56,6 @@ _STRATEGIES = {
     "summarize": summarize,
     "hybrid": hybrid,
 }
-NEEDS_SUMMARIZER = ("summarize", "hybrid")
 
 
 class ContextOverflow(Exception):
@@ -186,7 +185,12 @@ class ContextManager:
         tools = round(await self.estimator.tools_tokens() * ratio)
         head = self._head_exact or sum(sizes[:HEAD]) + tools
         full = cfg.summary_tokens_cap() + cfg.restore_tokens_cap() if needs else 0
-        least = SUMMARY_MIN_TOKENS + RESTORE_MIN_TOKENS if needs else 0
+        # the summary call's max_tokens is the cap, so no summary is longer than that
+        least = (
+            min(SUMMARY_MIN_TOKENS, cfg.summary_tokens_cap()) + RESTORE_MIN_TOKENS
+            if needs
+            else 0
+        )
         low, budget = cfg.low_target(), cfg.budget_tokens
         tail_cap = int(cfg.keep_recent_ratio * budget)
         turns = cfg.keep_recent_min_turns

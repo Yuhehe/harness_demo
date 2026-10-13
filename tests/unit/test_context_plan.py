@@ -5,8 +5,9 @@ import pytest
 from ctx_helpers import add_turn, manager, new_state, prime, reply, turns
 from fakes import ScriptedLLM
 
+from harness.config import SUMMARY_TOKENS
 from harness.context.manager import ContextOverflow
-from harness.context.strategies.types import HEAD, protected_from
+from harness.context.strategies.types import HEAD, RESTORE_MIN_TOKENS, protected_from
 from harness.context.tokens import TokenEstimator, count_messages
 from harness.llm.types import tool_message
 from harness.tracing.tracer import MemoryTracer
@@ -104,13 +105,21 @@ async def test_level_tail_shrunk_when_the_room_is_smaller_than_the_tail_cap():
     )  # at most one turn over, never more
 
 
+# low mark 3500; full reservation 2500 + 500, minimal 1050 + 200; a turn is about 900 tokens,
+# so two protected turns leave room for a minimal summary only and three for neither
+SHORT = {
+    "budget_tokens": 10000,
+    "high_water": 0.6,
+    "low_water": 0.35,
+    "summary_max_ratio": 0.25,
+}
+
+
 async def test_level_minimal_when_only_a_short_summary_fits():
     _, plan = await plan_for(
         "hybrid",
         12,
-        budget_tokens=8000,
-        high_water=0.6,
-        low_water=0.3,
+        **SHORT,
         keep_recent_min_turns=2,
     )
     assert plan.level == "minimal" and plan.minimal
@@ -120,9 +129,7 @@ async def test_level_unreachable_when_even_the_shortest_summary_cannot_reach_the
     _, plan = await plan_for(
         "hybrid",
         12,
-        budget_tokens=8000,
-        high_water=0.6,
-        low_water=0.3,
+        **SHORT,
         keep_recent_min_turns=3,
     )
     assert plan.level == "unreachable" and plan.minimal
@@ -253,6 +260,53 @@ async def test_over_the_budget_the_minimum_gain_does_not_apply():
     view = await m.build(s)
     assert len(llm.calls) == 1
     assert view[2]["content"].startswith("[Summary of the earlier steps")
+
+
+async def _gain_and_manager(min_gain_ratio):
+    """A summarize manager over 30 turns (over the trigger, under the budget, a full-size
+    summary planned)."""
+    kw = {"budget_tokens": 40000, "high_water": 0.5, "low_water": 0.3}
+    llm = ScriptedLLM([reply()])
+    m = manager("summarize", llm=llm, min_gain_ratio=min_gain_ratio, **kw)
+    s = turns(30)
+    prime(m, s)
+    plan = await m._plan(0)
+    assert not plan.minimal
+    middle = await m.estimator.local_each(m._view[HEAD : plan.cut])
+    removed = round(sum(middle) * m.estimator.ratio)
+    # what a full summary and its state block are expected to put back
+    gain = removed - (SUMMARY_TOKENS["full"] + m.cfg.restore_tokens_cap())
+    return gain, m, llm, s
+
+
+@pytest.mark.parametrize("margin, called", [(50, False), (-50, True)])
+async def test_the_minimum_gain_counts_a_full_summary_at_its_measured_size(
+    margin, called
+):
+    gain, m, _, _ = await _gain_and_manager(0.1)
+    ratio = (
+        gain + margin
+    ) / m.cfg.budget_tokens  # the threshold just above / below the gain
+    _, m, llm, s = await _gain_and_manager(ratio)
+    await m.build(s)
+    assert bool(llm.calls) is called
+
+
+async def test_a_minimal_summary_is_reserved_at_its_measured_size():
+    m, plan = await plan_for("hybrid", 12, **SHORT, keep_recent_min_turns=2)
+    assert plan.level == "minimal"
+    least = SUMMARY_TOKENS["minimal"] + RESTORE_MIN_TOKENS
+    assert plan.room_tokens == m.cfg.low_target() - plan.head_tokens - least
+
+
+async def test_a_minimal_summary_is_never_reserved_above_the_summary_cap():
+    # a budget of 8000 caps the summary at 640 tokens, below the measured minimal size
+    m, plan = await plan_for(
+        "hybrid", 12, budget_tokens=8000, high_water=0.6, low_water=0.3
+    )
+    assert m.cfg.summary_tokens_cap() < SUMMARY_TOKENS["minimal"] and plan.minimal
+    least = m.cfg.summary_tokens_cap() + RESTORE_MIN_TOKENS
+    assert plan.room_tokens == m.cfg.low_target() - plan.head_tokens - least
 
 
 # ---- reasoning is not part of the prompt size ---------------------------------------------------------
