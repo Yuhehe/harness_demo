@@ -148,7 +148,7 @@ async def run_task(task: Task, cfg: AgentConfig, sandbox: Sandbox, llm: LLMClien
 - `summarize`：保留 system、任务描述和受保护的尾部，中间部分让 LLM 生成结构化摘要。摘要模型读的是 **agent 当时看到的完整历史，不预先裁剪**，所以 `hybrid` 里的摘要读到的是清理前的原文，不是占位符。摘要消息末尾由**代码**拼一个状态块（当前补丁、todo 等），与摘要正文分开，下一次摘要不读它。细节见 `context/strategies/summarize.py` 和 `context/restore.py` 的模块说明。
 - `hybrid`：先 `truncate`，仍然高于高水位线再 `summarize`。
 - 所有策略都要记录压缩前后的 token 数、压缩次数和压缩自身的成本。
-- **不变量**：管理器持有 `view`（发给模型的）和 `original`（agent 当时看到的）两个等长列表，`state.messages` 永不修改。每次压缩前先做规划（head、受保护的尾部、余量，见 `context/manager.py` 的模块说明）；head 加最新一轮就放不下预算时不调用摘要，提示词已超预算则以 `context_overflow` 终止。提示词大小的估计有约 ±8% 的误差（`docs/notes.md` §11.3），水位线要留余量。
+- **不变量**：管理器持有 `view`（发给模型的）和 `original`（agent 当时看到的）两个等长列表，`state.messages` 永不修改。每次压缩前先做规划（head、受保护的尾部、余量，见 `context/manager.py` 的模块说明）；head 加最新一轮就放不下预算时不调用摘要，提示词已超预算则以 `context_overflow` 终止。提示词大小的估计：有锚时（上一次请求的服务端数字加新增部分）误差在约 ±8% 以内，压缩过程中没有锚，实测约 ±10%（`docs/notes.md` §11.3、§17）；回传的 `reasoning_content` 计入服务端的 `prompt_tokens`，本地计数也必须计入。水位线要留余量。
 
 **可恢复截断**：工具输出超长时，完整内容写到沙箱里的 `/tmp/harness/out_<n>.txt`，返回给模型的截断结果里注明这个路径，模型需要时可以再去读。
 
@@ -176,12 +176,12 @@ async def run_task(task: Task, cfg: AgentConfig, sandbox: Sandbox, llm: LLMClien
 
 ### 5.7 追踪（`tracing/tracer.py`）
 
-每次运行写到 `results/runs/<run_id>/trajectories/<instance_id>.jsonl`，一行一个 span，写完立即落盘，进程崩溃后仍留得下完整轨迹。span 类型：`run_start`、`llm_call`、`tool_call`、`guard_decision`、`compaction`、`message`、`truncation`、`run_end`。**字段以各发射处和 `tracing/tracer.py` 的模块说明为准**；必须满足的约定：
+每次运行写到 `results/runs/<run_id>/trajectories/<instance_id>.jsonl`，一行一个 span，写完立即落盘，进程崩溃后仍留得下完整轨迹。span 类型：`run_start`、`llm_call`、`tool_call`、`guard_decision`、`compaction`、`compaction_skipped`、`message`、`truncation`、`run_end`。**字段以各发射处和 `tracing/tracer.py` 的模块说明为准**；必须满足的约定：
 
 - `run_start` 要记录足够复现这次运行的信息：config 的哈希、git commit 与是否有未提交改动（`git_dirty`）、模型名、随机种子、价格表的哈希、思考和输出上限设置、权限策略的哈希。
 - `llm_call` 记录输入、输出和缓存命中的 token 数、成本、延迟、重试次数和原因；失败的尝试也写（`usage` 为空）；摘要调用与 agent 调用用 `purpose` 区分。
 - `message`：每条追加进历史的消息各写一个 span，供崩溃后还原对话和人工分析失败轨迹；`message` 和 `tool_call` 都带 `step`，`aggregate.py` 靠它划分压缩前后。
-- `compaction`：压缩前后的 token 数、动作、成本；摘要正文与代码生成的状态块分开存放。
+- `compaction`：压缩前后的 token 数、动作、成本；摘要正文与代码生成的状态块分开存放。span 里的 token 数是估计值，报告里压缩后的大小用紧接着那次请求的服务端 `prompt_tokens`（`aggregate.py`）。什么都没做的尝试写 `compaction_skipped`（带原因），不计入压缩次数。
 - `run_end`：FailReason 或 submitted，总成本，总步数。
 
 ### 5.8 回放模型（`llm/replay.py`）
