@@ -75,6 +75,13 @@ class ContextConfig(_Strict):
     # between compactions (CLAUDE.md 5.2).
     high_water: float = 0.85
     low_water: float = 0.5
+    # How far the next compaction may be put off after one that got below the high water mark
+    # but not to the low one (manager._trigger): it waits for the prompt to grow by a water band,
+    # but never past high + hysteresis_cap * (budget - high). The margin between the high mark
+    # and the budget absorbs estimate error and a large turn; 0.5 gives half of it to spacing
+    # out compactions (the KV cache) and keeps half (a design value, not measured;
+    # docs/notes.md section 18). 0 retries at the high mark, 1 may wait until the budget.
+    hysteresis_cap: float = 0.5
     # The newest turns are never cleared or summarized. How many: at least
     # `keep_recent_min_turns` (the latest turn is what the model must answer), and more up to
     # `keep_recent_ratio * budget_tokens` if the room left after the head and the summary allows
@@ -128,6 +135,8 @@ class ContextConfig(_Strict):
     def _check_water_marks(self) -> ContextConfig:
         if not 0 < self.low_water < self.high_water <= 1:
             raise ValueError("need 0 < low_water < high_water <= 1")
+        if not 0 <= self.hysteresis_cap <= 1:
+            raise ValueError("need 0 <= hysteresis_cap <= 1")
         if not 0 < self.summary_clip_scale < 1:
             raise ValueError("need 0 < summary_clip_scale < 1")
         if self.summary_retries < 0 or self.summary_clip_chars < 200:

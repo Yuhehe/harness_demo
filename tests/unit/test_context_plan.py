@@ -495,3 +495,49 @@ async def test_an_unusual_ratio_is_flagged_on_both_compacted_and_skipped_attempt
     await m.build(turns(6))
     (span,) = tracer.of("compaction_skipped")
     assert span["ratio"] == 1.8 and span["ratio_unusual"] is True
+
+
+# ---- when the next compaction runs (manager._trigger) ------------------------------------------
+# budget 24000: high 20400, low 12000, band 8400; safety line at cap 0.5: 20400 + 1800 = 22200
+HYST = {"budget_tokens": 24000, "high_water": 0.85, "low_water": 0.5}
+
+
+def _trigger_after(last, **kw):
+    m = manager("hybrid", llm=ScriptedLLM([]), **{**HYST, **kw})
+    m._last_after = last
+    return m._trigger()
+
+
+def test_before_any_compaction_and_after_one_that_reached_the_low_mark_it_is_the_high_mark():
+    assert _trigger_after(None) == 20400
+    assert _trigger_after(12000) == 20400 and _trigger_after(9000) == 20400
+
+
+def test_between_the_marks_it_waits_for_a_band_but_stops_at_the_safety_line():
+    assert _trigger_after(12500) == 20900  # a band of growth, under the safety line
+    assert _trigger_after(18503) == 22200  # the 24k smoke: was 24000, the budget itself
+    assert _trigger_after(20400) == 22200  # right at the high mark: still some spacing
+    assert _trigger_after(18503) < HYST["budget_tokens"]
+
+
+def test_the_safety_line_is_configurable():
+    assert _trigger_after(18503, hysteresis_cap=0.0) == 20400  # retry at the high mark
+    assert (
+        _trigger_after(18503, hysteresis_cap=1.0) == 24000
+    )  # may wait until the budget
+    assert _trigger_after(18503, hysteresis_cap=0.25) == 20400 + 900
+
+
+def test_above_the_high_mark_it_waits_for_a_band_up_to_the_budget_never_below_the_prompt():
+    assert _trigger_after(21000) == 24000  # 29400 capped by the budget
+    # high 12000, low 9600, band 2400, safety line 18000; the prompt was left at 19000, above
+    # the safety line: capping by it would put the trigger under the prompt
+    last = 19000
+    assert _trigger_after(last, high_water=0.5, low_water=0.4) == last + 2400
+
+
+def test_hysteresis_cap_must_be_a_share_of_the_margin():
+    with pytest.raises(ValueError, match="hysteresis_cap"):
+        ContextConfig(hysteresis_cap=1.5)
+    with pytest.raises(ValueError, match="hysteresis_cap"):
+        ContextConfig(hysteresis_cap=-0.1)

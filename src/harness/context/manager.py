@@ -165,18 +165,30 @@ class ContextManager:
         return list(self._view)
 
     def _trigger(self) -> int:
-        """When the next compaction attempt runs. Normally the high water mark. If the last
-        attempt could not get below it (the protected tail alone is large) or found nothing
-        to do, trying again on every turn would call the summarizer and invalidate the cached
-        prefix each time, so the next attempt waits until the prompt has grown by a full water
-        band. The budget caps it: a prompt over the budget always gets an attempt before the
-        run overflows."""
-        budget = self.cfg.budget_tokens
-        high = self.cfg.high_target()
-        if self._last_after is None:
+        """When the next compaction attempt runs, from where the last one left the prompt
+        (`_last_after`; for an attempt that changed nothing, the size it started at).
+
+        - at or below the low water mark (it did its job): the high water mark. The prompt has
+          to grow by a full water band first, so the cached prefix lives that long.
+        - between the two marks (cleared, but the summary was not worth it): wait for a water
+          band of growth, by which time older turns have left the protected tail and a summary
+          is likely worth it, but no later than the safety line high + hysteresis_cap *
+          (budget - high), so the margin under the budget is not used up.
+        - above the high water mark (it could not get lower: the tail alone is large) or
+          nothing was done: wait for a water band of growth, at most until the budget. A
+          lower cap would put the trigger under the prompt and retry on every turn.
+
+        Docs/notes.md section 18 has the reasoning and the cases this replaces."""
+        cfg = self.cfg
+        budget, high, low = cfg.budget_tokens, cfg.high_target(), cfg.low_target()
+        last = self._last_after
+        if last is None or last <= low:
             return high
-        band = high - self.cfg.low_target()
-        return min(max(high, self._last_after + band), budget)
+        band = high - low
+        if last <= high:
+            safety = high + int(cfg.hysteresis_cap * (budget - high))
+            return min(last + band, safety)
+        return min(last + band, budget)
 
     async def _plan(self) -> Plan:
         cfg = self.cfg
