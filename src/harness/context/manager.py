@@ -170,10 +170,11 @@ class ContextManager:
 
         - at or below the low water mark (it did its job): the high water mark. The prompt has
           to grow by a full water band first, so the cached prefix lives that long.
-        - between the two marks (cleared, but the summary was not worth it): wait for a water
-          band of growth, by which time older turns have left the protected tail and a summary
-          is likely worth it, but no later than the safety line high + hysteresis_cap *
-          (budget - high), so the margin under the budget is not used up.
+        - between the two marks (in hybrid mostly: the clearing got below the high mark, so no
+          summary was tried; or a summary was not worth it): wait for a water band of growth,
+          but no later than the safety line high + hysteresis_cap * (budget - high), so the
+          margin under the budget is not used up. By then more outputs have left the protected
+          tail; if clearing them is not enough, the summary is tried.
         - above the high water mark (it could not get lower: the tail alone is large) or
           nothing was done: wait for a water band of growth, at most until the budget. A
           lower cap would put the trigger under the prompt and retry on every turn.
