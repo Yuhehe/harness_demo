@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 from typing import Literal
@@ -105,18 +106,24 @@ class ContextConfig(_Strict):
     summary_diff_chars: int = (
         6000  # patch text in the state block (the stat is always there)
     )
-    # The two sizes of a summary (the plan picks one): the word count the summarizer is asked
-    # for, and how many tokens such a summary is expected to take. The tokens are measured, not
-    # derived from words: a summary is dense with paths and names, and per requested word the
-    # full size ran 1.9-2.2 tokens, the minimal 2.6-4.0. Defaults: the largest seen times 1.25,
-    # rounded up to 50 (max 1544 / 806; full n=3, one probe per task; minimal n=6, all from one
-    # trajectory; docs/notes.md section 17). Re-measure when the summary model or prompt changes.
-    # The hard limit is still the cap above (max_tokens of the call); these are what the plan
-    # and the minimum-gain check expect.
+    # The two sizes of a summary (the plan picks one): the word count the summarizer is asked for.
     summary_words_full: int = 700
     summary_words_minimal: int = 200
-    summary_expected_tokens_full: int = 1950
-    summary_expected_tokens_minimal: int = 1050
+    # How many tokens a summary of N words is expected to take (the plan and the minimum-gain
+    # check reserve this): (base + per_word * N) * margin, never above the cap above, which is
+    # the hard limit (max_tokens of the summary call). Not a fixed tokens-per-word: a summary
+    # has a fixed part (seven section headings) and a short one overshoots its word count more.
+    # Fitted (docs/notes.md section 19) on 24 summaries at 200, 450 and 700 words: probes on
+    # three M0-dev trajectories plus the summaries of the real smoke runs (the 200-word ones all
+    # from one task); every level within 6% of the line; margin = largest actual / fitted,
+    # rounded up to 0.05. Valid for the summary model, prompt and word range below: a run
+    # refuses to start otherwise (recalibrate: `summary_probe.py calibrate`).
+    summary_tokens_base: float = 225.0
+    summary_tokens_per_word: float = 1.757
+    summary_tokens_margin: float = 1.4
+    summary_calibration_model: str = "deepseek/deepseek-flash"
+    summary_calibration_prompt: str = "ff0ad18124c9"  # summarize.PROMPT_SHA
+    summary_calibration_words: tuple[int, int] = (200, 700)
     # Cap of the state block of a minimal summary (a design value: room for the diff stat and a
     # short plan; 78-172 tokens seen). The block is fitted to its cap by code, so it never exceeds it.
     summary_restore_min_tokens: int = 200
@@ -145,14 +152,20 @@ class ContextConfig(_Strict):
             raise ValueError("need keep_recent_min_turns >= 1")
         if not (
             0 < self.summary_words_minimal <= self.summary_words_full
-            and 0
-            < self.summary_expected_tokens_minimal
-            <= self.summary_expected_tokens_full
             and self.summary_restore_min_tokens > 0
         ):
             raise ValueError(
-                "need 0 < the minimal summary size <= the full one (words and expected "
-                "tokens) and summary_restore_min_tokens > 0"
+                "need 0 < the minimal summary size <= the full one (summary_words_*) and "
+                "summary_restore_min_tokens > 0"
+            )
+        if not (
+            self.summary_tokens_base >= 0
+            and self.summary_tokens_per_word > 0
+            and self.summary_tokens_margin >= 1
+        ):
+            raise ValueError(
+                "need summary_tokens_base >= 0, summary_tokens_per_word > 0 and "
+                "summary_tokens_margin >= 1"
             )
         for name in (
             "keep_recent_ratio",
@@ -185,15 +198,20 @@ class ContextConfig(_Strict):
     def summary_words(self, minimal: bool) -> int:
         return self.summary_words_minimal if minimal else self.summary_words_full
 
+    def summary_tokens_for(self, words: int) -> int:
+        """Expected size of a summary asked for `words` words, before the cap."""
+        return math.ceil(
+            (self.summary_tokens_base + self.summary_tokens_per_word * words)
+            * self.summary_tokens_margin
+        )
+
     def summary_expected_tokens(self, minimal: bool) -> int:
         """Expected size of a summary of this size, never above the cap: the cap is the
         summary call's max_tokens, so no summary comes back longer."""
-        expected = (
-            self.summary_expected_tokens_minimal
-            if minimal
-            else self.summary_expected_tokens_full
+        return min(
+            self.summary_tokens_for(self.summary_words(minimal)),
+            self.summary_tokens_cap(),
         )
-        return min(expected, self.summary_tokens_cap())
 
     def restore_cap(self, minimal: bool) -> int:
         """Cap of the state block for a summary of this size."""
@@ -284,17 +302,29 @@ def _load_yaml(path: Path) -> dict:
     return data
 
 
-def check_summary_cap(ctx: ContextConfig) -> None:
-    """The summary call's max_tokens is `summary_tokens_cap()`; a full summary that hits it
-    ends with finish_reason=length and is thrown away. Checked on every config loaded from a
-    file (the experiment configs), not in the model itself: unit tests use budgets of a few
-    thousand tokens with a fake summarizer, where no real summary could fit anyway."""
-    expected = ctx.summary_expected_tokens_full
-    if ctx.strategy in NEEDS_SUMMARIZER and ctx.summary_tokens_cap() < expected:
+def check_summary_sizes(ctx: ContextConfig) -> None:
+    """Checked on every config loaded from a file (the experiment configs), not in the model
+    itself: unit tests use budgets of a few thousand tokens with a fake summarizer.
+
+    - the word counts must lie in the range the expected size was calibrated on: outside it
+      the line is an extrapolation
+    - the summary cap (the summary call's max_tokens) must hold a full summary, or it ends
+      with finish_reason=length and is thrown away"""
+    if ctx.strategy not in NEEDS_SUMMARIZER:
+        return
+    lo, hi = ctx.summary_calibration_words
+    for name in ("summary_words_minimal", "summary_words_full"):
+        if not lo <= getattr(ctx, name) <= hi:
+            raise ValueError(
+                f"{name} = {getattr(ctx, name)} is outside the calibrated range {lo}-{hi} "
+                f"of the expected summary size: recalibrate (summary_probe.py calibrate)"
+            )
+    expected = ctx.summary_tokens_for(ctx.summary_words_full)
+    if ctx.summary_tokens_cap() < expected:
         raise ValueError(
             f"the summary cap min(summary_max_tokens, summary_max_ratio * budget_tokens) "
             f"= {ctx.summary_tokens_cap()} is below the expected size of a full summary "
-            f"(summary_expected_tokens_full = {expected}); raise summary_max_ratio"
+            f"({expected} tokens for {ctx.summary_words_full} words); raise summary_max_ratio"
         )
 
 
@@ -302,7 +332,7 @@ def load_config(path: str | Path | None) -> AgentConfig:
     if path is None:
         return AgentConfig()
     cfg = AgentConfig.model_validate(_load_yaml(Path(path)))
-    check_summary_cap(cfg.context)
+    check_summary_sizes(cfg.context)
     return cfg
 
 

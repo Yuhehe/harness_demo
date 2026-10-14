@@ -14,7 +14,7 @@ Before every compaction the manager makes a plan from what is known at that mome
     tail      the newest turns, kept as they are. At most keep_recent_ratio * budget, and
               less when the room left under the low water mark is smaller.
     overhead  what a summary and its state block may add: the expected size of the summary
-              (measured, ContextConfig.summary_expected_tokens_*) plus the cap of the block
+              (calibrated on its word count, ContextConfig.summary_tokens_*) plus the cap of the block
               (the block is fitted to its cap by code, so the cap is a true upper bound).
 
     room = low water mark - head - overhead

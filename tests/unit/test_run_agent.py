@@ -320,3 +320,15 @@ def test_a_dirty_tree_is_refused_unless_you_say_it_is_a_development_run(
     )
     with pytest.raises(SystemExit, match="uncommitted changes"):
         ra.main([*ARGS, "--results-dir", str(tmp_path)])
+
+
+def test_a_summarizer_the_size_was_not_calibrated_for_stops_the_batch_before_any_task(
+    fake_docker, tmp_path, monkeypatch
+):
+    # checked once up front: inside the batch the error would make every task an env_error
+    monkeypatch.setenv(
+        "MODEL_CHEAP", "deepseek/deepseek-v4-pro"
+    )  # .env does not override it
+    with pytest.raises(ValueError, match="calibrated with"):
+        ra.main([*ARGS, "--results-dir", str(tmp_path)])
+    assert not (tmp_path / ARGS[ARGS.index("--run-id") + 1]).exists()  # nothing started

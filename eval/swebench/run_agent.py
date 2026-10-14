@@ -338,11 +338,12 @@ async def _main(args: argparse.Namespace) -> int:
     import docker
     from dotenv import load_dotenv
 
-    from harness.cli import _git_meta, describe_config, run_one
+    from harness.cli import _git_meta, check_summarizer, describe_config, run_one
     from harness.config import load_config
 
     load_dotenv(".env")
     cfg = load_config(args.config)
+    check_summarizer(cfg)
     ids = read_ids(args.subset)
     run_dir = args.results_dir / args.run_id
     client = docker.from_env()

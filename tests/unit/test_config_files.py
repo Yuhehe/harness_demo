@@ -87,13 +87,14 @@ EXPERIMENT_CONFIGS = sorted(
 def test_every_config_file_leaves_room_for_a_full_summary(path):
     cfg = load_config(path)  # raises if the summary cap is below a full summary
     if cfg.context.strategy in NEEDS_SUMMARIZER:
-        assert (
-            cfg.context.summary_tokens_cap() >= cfg.context.summary_expected_tokens_full
+        ctx = cfg.context
+        assert ctx.summary_tokens_cap() >= ctx.summary_tokens_for(
+            ctx.summary_words_full
         )
 
 
 def test_a_summary_cap_below_a_full_summary_is_rejected_on_load(tmp_path):
-    # 20k budget: the cap is 0.08 * 20000 = 1600, under the 1950 a full summary takes
+    # 20k budget: the cap is 0.08 * 20000 = 1600, under the ~2040 a full summary is expected at
     path = tmp_path / "c.yaml"
     path.write_text("context:\n  strategy: hybrid\n  budget_tokens: 20000\n")
     with pytest.raises(ValueError, match="expected size of a full summary"):
@@ -102,7 +103,7 @@ def test_a_summary_cap_below_a_full_summary_is_rejected_on_load(tmp_path):
     load_config(path)  # no summarizer, no cap to check
     path.write_text(
         "context:\n  strategy: hybrid\n  budget_tokens: 20000\n"
-        "  summary_max_ratio: 0.1\n"
+        "  summary_max_ratio: 0.11\n"
     )
     load_config(path)
 
@@ -173,3 +174,38 @@ def test_water_marks_must_be_ordered():
     ):
         with pytest.raises(ValidationError):
             AgentConfig.model_validate({"context": kw})
+
+
+def test_word_counts_outside_the_calibrated_range_are_rejected_on_load(tmp_path):
+    path = tmp_path / "c.yaml"
+    path.write_text("context:\n  strategy: hybrid\n  summary_words_full: 900\n")
+    with pytest.raises(ValueError, match="outside the calibrated range"):
+        load_config(path)
+    path.write_text("context:\n  strategy: hybrid\n  summary_words_minimal: 150\n")
+    with pytest.raises(ValueError, match="outside the calibrated range"):
+        load_config(path)
+    path.write_text("context:\n  strategy: none\n  summary_words_full: 900\n")
+    load_config(path)  # no summarizer: nothing to check
+
+
+def test_a_run_refuses_a_summarizer_it_was_not_calibrated_for(monkeypatch):
+    from harness.cli import check_summarizer
+    from harness.context.strategies.summarize import PROMPT_SHA
+
+    main = load_config(CONFIGS / "default.yaml")
+    monkeypatch.setenv("MODEL_CHEAP", "deepseek/deepseek-flash")
+    check_summarizer(main)  # the calibrated model and prompt: fine
+    assert main.context.summary_calibration_prompt == PROMPT_SHA
+
+    monkeypatch.setenv("MODEL_CHEAP", "deepseek/deepseek-v4-pro")
+    with pytest.raises(ValueError, match="calibrated with"):
+        check_summarizer(main)
+
+    monkeypatch.setenv("MODEL_CHEAP", "deepseek/deepseek-flash")
+    ctx = main.context.model_copy(update={"summary_calibration_prompt": "0" * 12})
+    with pytest.raises(ValueError, match="summary prompt changed"):
+        check_summarizer(main.model_copy(update={"context": ctx}))
+
+    monkeypatch.setenv("MODEL_CHEAP", "deepseek/deepseek-v4-pro")
+    off = main.context.model_copy(update={"strategy": "none"})
+    check_summarizer(main.model_copy(update={"context": off}))  # no summarizer

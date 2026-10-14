@@ -2,6 +2,7 @@
 
 import json
 
+import pytest
 from ctx_helpers import add_turn, new_state, reply
 from fakes import ScriptedLLM
 from summary_probe import PatchSandbox, load_messages, probe
@@ -93,3 +94,40 @@ async def test_the_probe_sandbox_serves_the_patch_and_nothing_else():
     assert await sb.git_diff() == PATCH
     await sb.write_file("/tmp/x", "y")
     assert await sb.read_file("/tmp/x") == "y"
+
+
+# ---- calibration fit ------------------------------------------------------------------------------
+def test_the_fit_recovers_a_known_line_and_covers_every_point():
+    from summary_probe import fit_calibration
+
+    exact = [(w, 240 + 1.87 * w) for w in (200, 450, 700) for _ in range(3)]
+    fit = fit_calibration(exact)
+    assert fit["base"] == pytest.approx(240, abs=0.5)
+    assert fit["per_word"] == pytest.approx(1.87, abs=1e-3)
+    assert fit["margin"] == 1.0 and fit["words_range"] == [200, 700]
+
+    # one summary 31% over the line: the margin is rounded up to 0.05 and covers it
+    noisy = [*exact, (200, 1.31 * (240 + 1.87 * 200))]
+    fit = fit_calibration(noisy)
+    worst = max(t / (fit["base"] + fit["per_word"] * w) for w, t in noisy)
+    assert fit["margin"] >= worst and fit["margin"] - worst < 0.05
+    assert round(fit["margin"] * 20) == fit["margin"] * 20  # a multiple of 0.05
+
+
+def test_the_fit_reports_how_far_each_word_count_is_off_the_line():
+    from summary_probe import fit_calibration
+
+    bent = [
+        (200, 600),
+        (450, 1500),
+        (700, 1600),
+    ]  # the middle level is far above the line
+    lv = fit_calibration(bent)["levels"]
+    assert lv[450]["mean_off_line"] > 0.2 and lv[200]["n"] == 1
+
+
+def test_one_word_count_cannot_calibrate():
+    from summary_probe import fit_calibration
+
+    with pytest.raises(ValueError, match="two different word counts"):
+        fit_calibration([(700, 1500), (700, 1600)])

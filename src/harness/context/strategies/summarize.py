@@ -10,6 +10,7 @@ call fails for size (context overflow, timeout) and then retried with smaller it
 
 from __future__ import annotations
 
+import hashlib
 import time
 from dataclasses import dataclass
 
@@ -51,6 +52,32 @@ Which tests or scripts were run, with the result, and which still fail.
 Every file changed so far with a one-line description of the change ("none" if none).
 ## Useful facts
 Paths, commands, test names and other findings worth keeping."""
+
+# Identifies the summary prompt. The expected size of a summary was calibrated with one prompt
+# (ContextConfig.summary_calibration_prompt); a changed prompt writes differently, so a run
+# refuses to start until the size is calibrated again (cli.check_summary_calibration).
+PROMPT_SHA = hashlib.sha256((_SYSTEM + _INSTRUCTIONS).encode()).hexdigest()[:12]
+
+
+def check_calibration(cfg: ContextConfig, summary_model: str) -> None:
+    """Refuse to run with a summarizer the expected summary size was not calibrated for (a
+    different model or prompt writes summaries of a different size). Called once before a run
+    starts (harness run, run_agent.py), not per task: in a batch a per-task error would turn
+    every task into an env_error."""
+    from harness.llm.cost import normalize_model
+
+    if normalize_model(summary_model) != normalize_model(cfg.summary_calibration_model):
+        raise ValueError(
+            f"the summary model is {summary_model}, but the expected summary size was "
+            f"calibrated with {cfg.summary_calibration_model}: recalibrate "
+            f"(eval/report/summary_probe.py calibrate) and update summary_tokens_*"
+        )
+    if PROMPT_SHA != cfg.summary_calibration_prompt:
+        raise ValueError(
+            f"the summary prompt changed ({PROMPT_SHA}, calibrated with "
+            f"{cfg.summary_calibration_prompt}): recalibrate (eval/report/summary_probe.py "
+            f"calibrate) and update summary_tokens_* and summary_calibration_prompt"
+        )
 
 
 @dataclass

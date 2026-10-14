@@ -49,6 +49,15 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def check_summarizer(cfg: Any) -> None:
+    """Before a run: the summarizer must be the one the summary size was calibrated for."""
+    from harness.config import NEEDS_SUMMARIZER, summary_llm_config
+    from harness.context.strategies.summarize import check_calibration
+
+    if cfg.context.strategy in NEEDS_SUMMARIZER:
+        check_calibration(cfg.context, summary_llm_config(cfg).resolved_model())
+
+
 def describe_config(cfg: Any, path: Path | None) -> list[str]:
     """Lines printed at startup: which config, and how it differs from the main one (M0)."""
     from harness.config import config_diff, load_config
@@ -230,6 +239,7 @@ async def _run(args: argparse.Namespace) -> int:
 
     load_dotenv(".env")
     cfg = load_config(args.config)
+    check_summarizer(cfg)
     print("\n".join(describe_config(cfg, args.config)))
     run_id = args.run_id or time.strftime("%Y%m%d-%H%M%S")
 

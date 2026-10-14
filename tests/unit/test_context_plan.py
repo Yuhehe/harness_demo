@@ -280,7 +280,7 @@ async def _gain_and_manager(min_gain_ratio):
         s, m._original[HEAD : plan.cut], m._view[HEAD : plan.cut], False
     )
     assert 0 < block.tokens < m.cfg.restore_tokens_cap()  # not the cap: the real size
-    gain = removed - (m.cfg.summary_expected_tokens_full + block.tokens)
+    gain = removed - (m.cfg.summary_expected_tokens(False) + block.tokens)
     return gain, m, llm, s
 
 
@@ -300,7 +300,7 @@ async def test_the_minimum_gain_counts_a_full_summary_at_its_measured_size(
 async def test_a_minimal_summary_is_reserved_at_its_measured_size():
     m, plan = await plan_for("hybrid", 12, **SHORT, keep_recent_min_turns=2)
     assert plan.level == "minimal"
-    least = m.cfg.summary_expected_tokens_minimal + m.cfg.summary_restore_min_tokens
+    least = m.cfg.summary_expected_tokens(True) + m.cfg.summary_restore_min_tokens
     assert plan.room_tokens == m.cfg.low_target() - plan.head_tokens - least
 
 
@@ -309,7 +309,9 @@ async def test_a_minimal_summary_is_never_reserved_above_the_summary_cap():
     m, plan = await plan_for(
         "hybrid", 12, budget_tokens=8000, high_water=0.6, low_water=0.3
     )
-    assert m.cfg.summary_tokens_cap() < m.cfg.summary_expected_tokens_minimal
+    assert m.cfg.summary_tokens_cap() < m.cfg.summary_tokens_for(
+        m.cfg.summary_words_minimal
+    )
     assert plan.minimal
     least = m.cfg.summary_tokens_cap() + m.cfg.summary_restore_min_tokens
     assert plan.room_tokens == m.cfg.low_target() - plan.head_tokens - least
@@ -427,8 +429,10 @@ async def test_a_full_summary_is_reserved_at_its_expected_size():
         "hybrid", 60, high_water=0.5, low_water=0.3, budget_tokens=40000
     )
     assert not plan.minimal
-    assert m.cfg.summary_expected_tokens_full < m.cfg.summary_tokens_cap()
-    full = m.cfg.summary_expected_tokens_full + m.cfg.restore_tokens_cap()
+    assert (
+        m.cfg.summary_tokens_for(m.cfg.summary_words_full) < m.cfg.summary_tokens_cap()
+    )
+    full = m.cfg.summary_expected_tokens(False) + m.cfg.restore_tokens_cap()
     assert plan.room_tokens == m.cfg.low_target() - plan.head_tokens - full
 
 
@@ -436,7 +440,8 @@ async def test_the_reserved_summary_is_capped_by_the_summary_cap():
     m, plan = await plan_for(
         "hybrid", 30, high_water=0.5, low_water=0.3, summary_max_ratio=0.05, **BIG
     )
-    assert m.cfg.summary_tokens_cap() == 1000 < m.cfg.summary_expected_tokens_full
+    assert m.cfg.summary_tokens_cap() == 1000
+    assert m.cfg.summary_tokens_for(m.cfg.summary_words_full) > 1000
     assert not plan.minimal
     full = m.cfg.summary_tokens_cap() + m.cfg.restore_tokens_cap()
     assert plan.room_tokens == m.cfg.low_target() - plan.head_tokens - full
@@ -458,9 +463,30 @@ async def test_the_minimal_state_block_cap_is_configurable():
 
 def test_the_minimal_size_must_not_exceed_the_full_size():
     with pytest.raises(ValueError, match="minimal summary size"):
-        ContextConfig(summary_expected_tokens_minimal=3000)
-    with pytest.raises(ValueError, match="minimal summary size"):
         ContextConfig(summary_words_minimal=800)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"summary_tokens_base": -1},
+        {"summary_tokens_per_word": 0},
+        {"summary_tokens_margin": 0.9},
+    ],
+)
+def test_the_size_coefficients_must_make_sense(bad):
+    with pytest.raises(ValueError, match="summary_tokens_"):
+        ContextConfig(**bad)
+
+
+def test_the_expected_size_follows_the_word_count():
+    cfg = ContextConfig(
+        summary_tokens_base=200, summary_tokens_per_word=2.0, summary_tokens_margin=1.5
+    )
+    assert cfg.summary_tokens_for(100) == 600  # (200 + 2 * 100) * 1.5
+    assert cfg.summary_tokens_for(450) == 1650
+    at_450 = ContextConfig(summary_words_full=450)
+    assert at_450.summary_expected_tokens(False) == at_450.summary_tokens_for(450)
 
 
 # ---- the ratio is in the trace --------------------------------------------------------------
