@@ -645,3 +645,5 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - notes §20.1 换成读源码核实的详细版本（Codex、OpenHands、Aider、Claude Code 官方文档、SWE-agent、mini-swe-agent），更正了"OpenHands 摘要调用不设 `max_tokens`"
 - 新子集 `verified_25`（`select_subset.py derive`，从 `verified_50` 按仓库分层，种子 42：django 9、sympy 7、scikit-learn 5、sphinx 4），镜像 25/25 拉完并核对
 - 待你决定：摘要空间用"硬上限"还是"按字数估计"（notes §20），定了之后在新的候选提交上重跑 A3 再冻结
+- **你的决定（2026-10-15）**：给摘要留空间采用**方案 A**（现状：两档摘要 + 按字数的估计值做规划 + 两档共用宽松的输出上限），不改代码。notes §20.2–20.4 已按 A / B / C 分开重写，更正了"方案 B 和主流思路一致"的错误说法。`ed6625a` 之后 `src/` 和实验配置都没有改动，A3 的结论对当前提交仍然有效
+- 方案 A 仍需你确认：① 标定的覆盖面（200 词那档的 13 个样本里有 10 个来自同一道题）；② 余量 1.4（正好盖住已见过的最大值，没有额外余地）；③ 冻结后，正式实验里摘要实际超出预计时怎么处理
