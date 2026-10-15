@@ -201,7 +201,7 @@
 ## 第 3 天：分析主实验，跑消融，完善安全层
 
 - [ ] 给 M0 和 B0 判分，用 `failure_taxonomy.py` 生成失败分类
-- [ ] 人工看 5 条失败轨迹，写进 `docs/failure_analysis.md`：是什么现象、根因、是 harness 的问题还是模型的问题
+- [x] 人工看失败轨迹，写进 `docs/failure_analysis.md`（2026-10-16：verified_25 上 M0 和 B0 都只失败 3 题且是同样 3 题，全部看了；都不是 harness 的问题：2 题是题目或测试的问题，1 题是模型对需求理解不完整。原文：人工看 5 条失败轨迹，写进 `docs/failure_analysis.md`：是什么现象、根因、是 harness 的问题还是模型的问题）
 - [ ] 如果发现 harness 的 bug：修复 → 打 `v0.2-frozen` → 在 `results/CHANGELOG.md` 记录 → **重跑 M0**
 - [ ] 按 P0、P1 的顺序跑消融实验 A1–A6（可以通宵并行）
 - [-] 完善安全层：**移除**，原因：已在第 2 天定稿（你选 (a)，见第 2 天 `security/` 一项）；第 3 天只做注入用例和蜜罐，不再改 `policy.yaml`，改了要换 tag 并重跑 M0
@@ -654,3 +654,7 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
   - 没解决的 3 题：django-11087（89 步）、scikit-learn-14983（35 步）、sphinx-9602（106 步），都没有压缩，留到第 3 天做失败分析
 - **B0 在 verified_25 上完成**（2026-10-15，run-id `B0`，在冻结版本的 worktree 里跑，提交 `ff11f3b`，配置哈希 `6ea20eaecc69`，与 M0 相同；数字出自 `results/runs/B0/metrics.json`、`score.json`）：官方判分 22/25，**没解决的与 M0 是同样 3 题**；花费 $3.16（mini-swe-agent 自报的数与我们按 token 重算的一致）。逐题配对：M0 有 20 题更贵、21 题步数更多，花费中位数比 1.34、步数中位数比 1.42；只有 25 题，置信区间很宽，只描述不下结论
 - 累计花费：运行器统计约 $7.43（不含 B0），加上 B0 的 $3.43（dev 时的 $0.27 和这次的 $3.16），合计约 $10.9，占 $40 的约 27%
+
+### 2026-10-16
+
+- 失败分析（`docs/failure_analysis.md`）：M0 与 B0 在 verified_25 上失败的是同样 3 题，两边都是"目标测试失败、没有回归"。scikit-learn-14983：题目给的期望输出与隐藏测试冲突（参数顺序）；sphinx-9602：功能正确，但测试检查节点类型这一实现细节；django-11087：两边都没想到要保留被 `to_field` 引用的字段（M0 更接近参考补丁）。都不是 harness 的问题，不需要修 harness、不需要打 v0.2
