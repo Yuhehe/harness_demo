@@ -652,3 +652,5 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - **M0 在 verified_25 上完成**（2026-10-15，run-id `M0`，提交 `ff11f3b`，配置哈希 `6ea20eaecc69`；数字出自 `results/runs/M0/metrics.json` 和 `score.json`）：官方判分 22/25；25 题都提交了补丁；没有格式错误、输出截断、失败重试，也没有溢出；128k 下一次压缩都没发生（提示词峰值最高 108111，离触发线 108800 很近）；花费 $4.36（每题平均是 dev 的约 1.75 倍）
   - 权限层拦截 2 次，都是 `deny.test_edit_bash`：agent 在 `tests/` 下**新建**临时复现文件（sphinx-8269、sphinx-8621，两题最后都解决了），不是改已有的断言，人工复核判为**误拦**。`policy.yaml` 与 M0 一起冻结，不改；以后报误拦率时如实计入
   - 没解决的 3 题：django-11087（89 步）、scikit-learn-14983（35 步）、sphinx-9602（106 步），都没有压缩，留到第 3 天做失败分析
+- **B0 在 verified_25 上完成**（2026-10-15，run-id `B0`，在冻结版本的 worktree 里跑，提交 `ff11f3b`，配置哈希 `6ea20eaecc69`，与 M0 相同；数字出自 `results/runs/B0/metrics.json`、`score.json`）：官方判分 22/25，**没解决的与 M0 是同样 3 题**；花费 $3.16（mini-swe-agent 自报的数与我们按 token 重算的一致）。逐题配对：M0 有 20 题更贵、21 题步数更多，花费中位数比 1.34、步数中位数比 1.42；只有 25 题，置信区间很宽，只描述不下结论
+- 累计花费：运行器统计约 $7.43（不含 B0），加上 B0 的 $3.43（dev 时的 $0.27 和这次的 $3.16），合计约 $10.9，占 $40 的约 27%
