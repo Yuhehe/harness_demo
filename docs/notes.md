@@ -817,16 +817,61 @@ A−B = C−D = 492：**回传的推理全部计入**，不管后面有没有新
 
 ## 20. 给摘要留多少空间：主流做法，以及"硬上限"和"按字数估计"两个方案（2026-10-15，**待决定**）
 
-### 20.1 主流实现怎么做（源码已读的标"已读"）
+### 20.1 主流实现怎么做（2026-10-15 读源码核实；Claude Code 闭源，只用官方文档）
 
-| 实现 | 触发 | 压到多大 | 给摘要留空间 |
-|---|---|---|---|
-| Codex CLI（`compact.rs`，已读） | 默认上下文窗口的 90%（`model_auto_compact_token_limit`，最多 90%；来自镜像仓库的提交和第三方文章，上游未核实） | 前缀 + 最近的用户消息（≤20000 token）+ 摘要 | 不预估、不预留，摘要多长用多长；压缩请求超出上下文就从头部删条目重试 |
-| OpenHands（`llm_summarizing_condenser.py`，已读） | 事件数超过 `max_size`，或 token 超过 `max_tokens` | 按 token 触发时压到 `max_tokens // 2` | 不预估、不预留，摘要调用不设 `max_tokens`；靠压到一半留出的余量吸收；`minimum_progress=0.1` |
-| Aider（`history.py`，已读） | 超过 `max_tokens` | 尾部约 `max_tokens // 2` | 不预估、不预留；摘要后实测，还超就递归再摘要（最多 3 层） |
-| Claude Code（闭源） | 上下文窗口减去一个固定缓冲区 | — | 第三方说法是固定常数（13k + 20k 的摘要输出，或 33k–45k），互相矛盾，**未核实** |
+版本：Codex `bb64b89`（2026-10-15）、OpenHands SDK `8efff8d`（2026-10-15）、Aider `5dc9490`（2026-05-22）、SWE-agent `3ea751c`、mini-swe-agent `04d809c`。下面只记它们自己的行为。
 
-共同点：余量很大（约 90% 触发、压到约 50%）；用固定值或 `max_tokens` 兜底；压缩后实测，不够再处理。没有一家建"字数 → token"的模型。
+**Codex CLI**（`codex-rs/core/src/compact.rs`、`session/context_window.rs`、`session/turn.rs`、`protocol/src/openai_models.rs`）
+- 触发：`auto_compact_token_limit() = min(配置的 model_auto_compact_token_limit, 窗口 × 9/10)`，不配置时就是窗口的 90%；另有"可用窗口" = 窗口 × `effective_context_window_percent`（默认 95），到了就强制压缩。在一轮对话开始前、进行中、结束后都会检查；计量用服务端报的用量。
+- 执行：OpenAI 服务商走服务端的"远端压缩"（V2），其他服务商在本地执行。本地压缩把完整历史加压缩提示发给当前模型。
+- 摘要要求（`prompts/templates/compact/prompt.md`）：给另一个 LLM 的交接摘要（进展和决定、上下文和约束、剩余工作、关键数据），"Be concise, structured"，**没有字数限制**；请求结构里**没有输出上限字段**，本地压缩不单独设。
+- 压缩后的历史：窗口前缀 + 从新到旧选出的用户消息（≤ `COMPACT_USER_MESSAGE_MAX_TOKENS` = 20000，放不下的截断）+ 上下文更新 + 摘要（`SUMMARY_PREFIX` + 正文）。工具调用、输出和模型的中间回复都被替换。
+- 给摘要留空间：**不预估、不预留**。
+- 出错：请求超出窗口 → 从历史头部删一条再试（为了保住前缀缓存和最近的消息），只剩一条还不行就报错；摘要响应不完整（例如被截断）→ 记录用量（照样计费），**直接报错**，不重试、不换模型；其他错误按配置的次数退避重试；压缩最终失败 → 这一轮对话以错误结束，报给用户。
+- 压缩后**不核对大小**。源码注释："只要压缩能把用量压到远低于上限，我们就不必担心陷入无限循环。"
+
+**OpenHands**（`context/condenser/llm_summarizing_condenser.py`、`base.py`、`prompts/summarizing_system.j2`、`llm/llm.py`、`agent/agent.py`）
+- 触发，任一满足即可：EVENTS，事件数 > `max_size`（类默认 240，`default_condenser` 用 80、`keep_first=4`），**软性**，压不了就先不压；TOKENS，总 token > min(压缩器的 `max_tokens`, agent 模型的有效输入上限)，**硬性**；REQUEST，收到压缩请求（例如 agent 的调用报"超出上下文窗口"），**硬性**。
+- 压到多大：每个原因各自算要保留的尾部，取最严格的。EVENTS 保留 `max_size // 2 − keep_first − 1`；REQUEST 保留 `len(view) // 2 − keep_first − 1`；TOKENS 让总量降到约 `max_tokens // 2`。开头 `keep_first` 个事件和系统提示不压缩。
+- 摘要要求：分节（USER_CONTEXT、TASK_TRACKING、COMPLETED、PENDING、CURRENT_STATE，代码任务再加 CODE_STATE、TESTS、CHANGES、DEPS、VERSION_CONTROL_STATUS），"concise"，**没有字数限制**；被摘要的事件以全文 `str(event)` 传入。
+- 输出上限：摘要调用本身不传；但 SDK 的 LLM 类会**自动注入** `max_tokens` = 模型最大输出，某些路由下封顶 `DEFAULT_MAX_OUTPUT_TOKENS_CAP` = 16384；对"输入输出共用窗口"的服务商（如 Bedrock 上的 Anthropic）降到"窗口剩余 − 256"，最低 1024。这是通用的宽松上限，不是专为摘要设的。
+- 给摘要留空间：**不预估、不预留**，靠压到约一半吸收。`minimum_progress=0.1`：遗忘的事件太少就判定"无法压缩"。
+- 出错：软性需求压不了 → 这次不压；硬性需求压不了 → "硬重置"：摘要除系统提示外的全部事件，失败就把每个事件截到当前最长事件的长度，此后每次 ×0.8，最多 5 次，全失败就抛错；摘要调用出错 → 按"无法压缩"处理。
+- 压缩后**不核对大小**，下一次请求前再判断。
+
+**Aider**（`aider/history.py`、`coders/base_coder.py`、`models.py`、`prompts.py`）
+- 只压缩已完成的对话历史（`done_messages`），代码文件和仓库地图不走这个机制。
+- 触发：历史超过 `max_chat_history_tokens`，默认 `min(max(模型最大输入 / 16, 1024), 8192)`，最多 8k；每轮结束时检查，摘要在**后台线程**里做，下一轮开始前等它完成。
+- 压到多大：从新往旧保留，尾部到预算的一半（`max_tokens // 2`），切点落在 assistant 消息之后；头部 ≤ 4 条或递归深度 > 3 时全部一起摘要。
+- 摘要要求："\*Briefly\* summarize"，旧的少写、新的多写，必须带函数名、库、文件名，不要代码块，第一人称、以 "I asked you..." 开头；**没有字数限制**，没有单独的输出上限。
+- 给摘要留空间：**不预估、不预留**；只限制摘要的输入（头部最多到"模型最大输入 − 512"）。
+- **摘要后实测**："摘要 + 尾部"小于预算就完成，否则把它整个再摘要，**递归**，最多 3 层。
+- 出错：依次尝试配置的各个模型，全部失败只给警告，历史保持原样。
+
+**Claude Code**（官方文档：model-config、context-window、costs）
+- 触发：默认在对话达到模型上下文上限时压缩，有例外：原生 1M 窗口的模型默认约 **967K**；Sonnet 4.6、Opus 4.6 没开扩展上下文时在 200K；云端会话在接近上限时。用户可设"自动压缩窗口"（`/autocompact`、`autoCompactWindow`、`--autocompact`、`CLAUDE_CODE_AUTO_COMPACT_WINDOW`，100K–1M，不超过模型窗口）；对不认识的模型 ID，可设为等 API 报"提示过长"再压缩。
+- 压缩后：对话换成结构化摘要（请求和意图、关键技术概念、看过或改过的文件及重要片段、错误和修复、待办、当前工作），完整的工具输出和中间推理丢掉；系统提示、CLAUDE.md、记忆、MCP 工具重新加载；**重新读取最近修改的至多 5 个文件**，重新注入用过的 skill。
+- 出错：备用模型链也用于压缩，但**不回退到窗口更小的模型**；都更小就显示原错误，可重试。
+- 摘要大小、输出上限、预留缓冲：**文档没有写**；第三方说法（13k + 20k、33k–45k）互相矛盾，**未核实**。
+
+**不做摘要的对照**
+- SWE-agent：用历史处理器，例如 `LastNObservations` 只保留最近 n 条环境输出（论文用 5），更早的换成 "Old environment output: (n lines omitted)"；超出上下文窗口时以 `exit_context` 结束这道题，并自动提交当时的补丁。
+- mini-swe-agent：不处理；LiteLLM 的"超出上下文窗口"在不重试的错误列表里，这道题直接结束。
+
+**汇总**
+
+| | Codex | OpenHands | Aider | Claude Code |
+|---|---|---|---|---|
+| 触发 | 窗口 90%（可配），95% 强制 | 事件 80（软）或超出 token 上限（硬） | 历史超过 ≤8k 的预算 | 窗口上限或约 967K，可设 |
+| 压到多大 | 用户消息 ≤20k + 摘要 | 约一半 | 尾部约为预算一半 | 文档未写 |
+| 字数限制 | 无 | 无 | 无 | 文档未写 |
+| 摘要输出上限 | 本地压缩不单独设 | 自动注入模型最大输出（部分路由 ≤16384） | 未单独设 | 文档未写 |
+| 预估或预留摘要大小 | 否 | 否 | 否 | 文档未写 |
+| 压缩后核对大小 | 否 | 否 | 是，递归再摘要（≤3 层） | 文档未写 |
+| 摘要被截断 | 报错，本轮结束 | 无专门处理 | 无专门处理 | 文档未写 |
+| 摘要请求超出窗口 | 从头部删条目重试 | 事件逐次缩短（×0.8，≤5 次） | 调用前限制输入 | 不回退到更小窗口的模型 |
+
+共同点：余量大；摘要没有字数限制，只要求简洁；没有一家预估摘要的大小；只有 Aider 在压缩后实测并再处理。
 
 ### 20.2 两个方案的核心区别
 
