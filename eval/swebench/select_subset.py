@@ -7,6 +7,15 @@ byte-identical. Existing files are never overwritten without --force: once the
 experiments start, these files are frozen (CLAUDE.md §2.4).
 
     uv run python eval/swebench/select_subset.py
+
+A smaller subset can be derived from a frozen one, stratified by repo with the same seed
+(e.g. to pull and run half of verified_50 first). It is a pure function of the parent file,
+the quotas and the seed, never touches the parent or subsets_meta.json, and records its own
+conditions in <name>.meta.json:
+
+    uv run python eval/swebench/select_subset.py derive --name verified_25 \
+        --parent configs/subsets/verified_50.txt --quota django/django=9 \
+        --quota sympy/sympy=7 --quota scikit-learn/scikit-learn=5 --quota sphinx-doc/sphinx=4
 """
 
 from __future__ import annotations
@@ -167,6 +176,72 @@ def write_outputs(
     return list(paths.values())
 
 
+def repo_of(instance_id: str) -> str:
+    """'scikit-learn__scikit-learn-13779' -> 'scikit-learn/scikit-learn'."""
+    return instance_id.rsplit("-", 1)[0].replace("__", "/")
+
+
+def derive_subset(parent: list[str], quotas: dict[str, int], seed: int) -> list[str]:
+    """`quotas[repo]` ids of each repo of `parent`, drawn with one RNG over repos in sorted
+    order and ids in sorted order (the order of `parent` does not matter); sorted result."""
+    by_repo: dict[str, list[str]] = defaultdict(list)
+    for iid in sorted(set(parent)):
+        by_repo[repo_of(iid)].append(iid)
+    unknown = sorted(set(quotas) - set(by_repo))
+    if unknown:
+        raise ValueError(f"quota for repos not in the parent subset: {unknown}")
+    rng = random.Random(seed)
+    chosen = []
+    for repo in sorted(quotas):
+        if quotas[repo] > len(by_repo[repo]):
+            raise ValueError(
+                f"{repo}: quota {quotas[repo]} > {len(by_repo[repo])} in the parent subset"
+            )
+        chosen += rng.sample(by_repo[repo], quotas[repo])
+    return sorted(chosen)
+
+
+def write_derived(
+    out_dir: Path, name: str, ids: list[str], meta: dict, force: bool = False
+) -> list[Path]:
+    paths = [out_dir / f"{name}.txt", out_dir / f"{name}.meta.json"]
+    existing = [p for p in paths if p.exists()]
+    if existing and not force:
+        raise FileExistsError(
+            f"refusing to overwrite (use --force): {[str(p) for p in existing]}"
+        )
+    paths[0].write_text("".join(f"{i}\n" for i in ids))
+    paths[1].write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n")
+    return paths
+
+
+def _derive_main(argv: list[str]) -> int:
+    p = argparse.ArgumentParser(description="derive a stratified subset of a subset")
+    p.add_argument("--name", required=True)
+    p.add_argument("--parent", type=Path, required=True)
+    p.add_argument("--quota", action="append", metavar="REPO=N", required=True)
+    p.add_argument("--seed", type=int, default=SEED)
+    p.add_argument("--out-dir", type=Path, default=SUBSET_DIR)
+    p.add_argument("--force", action="store_true")
+    args = p.parse_args(argv)
+    quotas = parse_quotas(args.quota)
+    parent = read_ids(args.parent)
+    ids = derive_subset(parent, quotas, args.seed)
+    meta = {
+        "parent": str(args.parent),
+        "parent_count": len(parent),
+        "seed": args.seed,
+        "quotas": quotas,
+        "algorithm": "v1: per repo (sorted) rng.sample over id-sorted ids of the parent",
+        "count": len(ids),
+        "repos": dict(sorted(Counter(repo_of(i) for i in ids).items())),
+    }
+    paths = write_derived(args.out_dir, args.name, ids, meta, force=args.force)
+    print(f"{args.name}: {meta['repos']} from {args.parent} (seed {args.seed})")
+    print("wrote " + ", ".join(str(x) for x in paths))
+    return 0
+
+
 def parse_quotas(items: list[str] | None) -> dict[str, int]:
     if not items:
         return dict(DEFAULT_QUOTAS)
@@ -178,6 +253,9 @@ def parse_quotas(items: list[str] | None) -> dict[str, int]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["derive"]:
+        return _derive_main(argv[1:])
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--seed", type=int, default=SEED)
     p.add_argument(

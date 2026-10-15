@@ -130,3 +130,63 @@ def test_meta_records_revision_and_counts():
 def test_parse_quotas():
     assert ss.parse_quotas(None) == ss.DEFAULT_QUOTAS
     assert ss.parse_quotas(["a/a=3", "b/b=4"]) == {"a/a": 3, "b/b": 4}
+
+
+# ---- a subset derived from a frozen one --------------------------------------------------------
+PARENT = (
+    [f"django__django-{i}" for i in range(100, 118)]
+    + [f"sympy__sympy-{i}" for i in range(200, 214)]
+    + [f"scikit-learn__scikit-learn-{i}" for i in range(300, 309)]
+)
+HALF = {"django/django": 9, "sympy/sympy": 7, "scikit-learn/scikit-learn": 5}
+
+
+def test_a_derived_subset_meets_the_quotas_and_stays_inside_the_parent():
+    from select_subset import derive_subset, repo_of
+
+    ids = derive_subset(PARENT, HALF, 42)
+    assert set(ids) <= set(PARENT) and ids == sorted(ids) and len(set(ids)) == 21
+    counts = {r: sum(repo_of(i) == r for i in ids) for r in HALF}
+    assert counts == HALF
+
+
+def test_a_derived_subset_is_reproducible_and_independent_of_the_parent_order():
+    from select_subset import derive_subset
+
+    assert derive_subset(PARENT, HALF, 42) == derive_subset(
+        list(reversed(PARENT)), HALF, 42
+    )
+    assert derive_subset(PARENT, HALF, 42) != derive_subset(PARENT, HALF, 7)
+
+
+def test_a_derived_subset_refuses_impossible_quotas():
+    from select_subset import derive_subset
+
+    with pytest.raises(ValueError, match="quota 30"):
+        derive_subset(PARENT, {"django/django": 30}, 42)
+    with pytest.raises(ValueError, match="not in the parent"):
+        derive_subset(PARENT, {"astropy/astropy": 1}, 42)
+
+
+def test_the_repo_of_an_instance_id():
+    from select_subset import repo_of
+
+    assert repo_of("scikit-learn__scikit-learn-13779") == "scikit-learn/scikit-learn"
+    assert repo_of("sphinx-doc__sphinx-7889") == "sphinx-doc/sphinx"
+
+
+def test_deriving_writes_the_list_and_its_own_meta_and_never_overwrites(tmp_path):
+    from select_subset import main
+
+    parent = tmp_path / "p.txt"
+    parent.write_text("".join(f"{i}\n" for i in PARENT))
+    argv = ["derive", "--name", "half", "--parent", str(parent), "--out-dir", str(tmp_path),
+            "--quota", "django/django=9", "--quota", "sympy/sympy=7",
+            "--quota", "scikit-learn/scikit-learn=5"]  # fmt: skip
+    assert main(argv) == 0
+    meta = json.loads((tmp_path / "half.meta.json").read_text())
+    assert meta["count"] == 21 and meta["seed"] == 42 and meta["parent_count"] == 41
+    first = (tmp_path / "half.txt").read_text()
+    with pytest.raises(FileExistsError):
+        main(argv)
+    assert (tmp_path / "half.txt").read_text() == first

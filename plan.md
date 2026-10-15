@@ -323,6 +323,7 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 | 2026-10-12 | 新文件 `eval/baselines/run_b0.py`（B0 命令生成与输出转换）；B0 的命令示例 | §4 目录树、§7 | [x] 2026-10-12 |
 | 2026-10-12 | 新目录 `configs/smoke/`（冒烟配置，不是消融）；`aggregate.py` 的 `--baseline` 用法已验证 | §4 目录树 | [x] 2026-10-12 |
 | 2026-10-12 | **瘦身**：CLAUDE.md 只留规则、不变量和指标名字；实现细节搬到代码的模块说明（`tracer.py` 的 span 字段目录、`tokens.py` 的估计误差、`docker_sandbox.py` 的约定）；默认数值改为指向 `config.py`；§8 加了"往本文件加内容之前先问"的标准 | §5.1、§5.3、§5.4、§5.5、§5.6、§5.7、§6、§7、§8 | [x] 2026-10-12（26 973 → 24 761 字节，约 8.2%，比预期小：文件的大头本来就是规则；理由和取舍见 `docs/notes.md` §15） |
+| 2026-10-15 | 新子集 `verified_25.txt` + `verified_25.meta.json`（从 `verified_50` 按仓库分层派生，种子 42，`select_subset.py derive`） | §4 目录树的 `subsets/` | [ ] |
 | 待办 | CLI 交互确认（`ask`）实现后 | §5.6 删掉"尚未实现" | [ ] |
 | 待办 | 回放补写 `llm_call` span 后（第 4 天） | §5.8 删掉"待做" | [ ] |
 | 待办 | `score.py` 写好后：`resolved.json` 约定（现在只在 `docs/notes.md` §12.6） | §6 或 §7 | [ ] |
