@@ -190,7 +190,7 @@
   - [x] `run_b0.py` 的两道保护（`docs/notes.md` §16.C1；2026-10-14，`4d9011a`）：拒绝有未提交改动的工作区（开发运行可用 `--allow-dirty` 并记录），同一 `run_id` 的配置哈希必须一致；用同一份配置跑 B0-dev 能对上。（B0 运行中的花费进预算守卫是另一件事，按你的决定和并行化一起记入"后续 TODO"）
 - [ ] **打 tag `v0.1-frozen`**
 - [ ] 晚上：在 `verified_50` 上跑 M0，同时跑 B0（mini-swe-agent，同一模型、同一题目子集）；先打印预计花费并等你确认；本机实测 15.6GB 内存（不是原来写的 WSL 12GB），worker 数 × 单容器内存上限（现在 4g）加判分容器不能超，M0 和 B0 是否并行要先定
-- [ ] 拉剩余 45 个镜像（**你的决定**：M0 基本符合预期之前不拉；`verified_50` 与 `dev_5` 不重合，本地只有 5 个 dev 镜像；按 §7 的实测约需 90–100GB，现有 133GB 可用）
+- [~] 拉 `verified_50` 的镜像（2026-10-15 你的决定：先拉按仓库分层抽出的一半 `verified_25`）：**25/25 完成**，每个都在断网容器里核对过 `/testbed` 在基准提交、工作区干净；约 9 分钟，没有被限流；可用空间 141.6 → 113.4 GB（约 28GB，比按 §7 估的 45–50GB 少，同仓库共享的层更多）。剩下 25 个待定。原记录：拉剩余 45 个镜像（**你的决定**：M0 基本符合预期之前不拉；`verified_50` 与 `dev_5` 不重合，本地只有 5 个 dev 镜像；按 §7 的实测约需 90–100GB，现有 133GB 可用）
 
 **验收**：dev_5 全流程能生成判分结果；tag 已打；M0 和 B0 已开跑。
 
@@ -639,3 +639,9 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 **明天先做**
 1. 等你确认后：拉剩余 45 个镜像（约 90–100GB），打 `v0.1-frozen`（候选提交 `ed6625a` 之后只有文档改动）
 2. 定 M0 和 B0 在 verified_50 上先后跑还是同时跑，打印预计花费后等你确认
+
+### 2026-10-15
+
+- notes §20.1 换成读源码核实的详细版本（Codex、OpenHands、Aider、Claude Code 官方文档、SWE-agent、mini-swe-agent），更正了"OpenHands 摘要调用不设 `max_tokens`"
+- 新子集 `verified_25`（`select_subset.py derive`，从 `verified_50` 按仓库分层，种子 42：django 9、sympy 7、scikit-learn 5、sphinx 4），镜像 25/25 拉完并核对
+- 待你决定：摘要空间用"硬上限"还是"按字数估计"（notes §20），定了之后在新的候选提交上重跑 A3 再冻结
