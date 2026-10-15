@@ -649,3 +649,6 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - 方案 A 仍需你确认：① 标定的覆盖面（200 词那档的 13 个样本里有 10 个来自同一道题）；② 余量 1.4（正好盖住已见过的最大值，没有额外余地）；③ 冻结后，正式实验里摘要实际超出预计时怎么处理
 - **你的决定（2026-10-15）**：方案 A 的三项都按建议：① 标定接受现状，靠 `monitoring.summary_size` 发现估低；② 余量保持 1.4；③ 冻结后正式实验中摘要超出预计时不中途改参数，如实报告，频繁的话下一个版本重新标定并按规则重跑、记入 `results/CHANGELOG.md`。CLAUDE.md §4 已同步 `verified_25`。打 `v0.1-frozen`；先在 `verified_25` 上跑 M0 和 B0 看结果
 - **你的决定（2026-10-15）**：冻结后的实验在 worktree `/home/yuhe/code/labs/harness_demo-frozen`（固定在 `v0.1-frozen`）里跑，结果用 `--results-dir` 写回主目录的 `results/runs/`；master 上照常写文档。做法和核对结果见 `docs/notes.md` §21。`M0`（verified_25）在主目录启动，当时主目录正好在 tag 的提交上、工作区干净，等价于在 tag 上跑。B0 先不跑，看完 M0 的结果再定
+- **M0 在 verified_25 上完成**（2026-10-15，run-id `M0`，提交 `ff11f3b`，配置哈希 `6ea20eaecc69`；数字出自 `results/runs/M0/metrics.json` 和 `score.json`）：官方判分 22/25；25 题都提交了补丁；没有格式错误、输出截断、失败重试，也没有溢出；128k 下一次压缩都没发生（提示词峰值最高 108111，离触发线 108800 很近）；花费 $4.36（每题平均是 dev 的约 1.75 倍）
+  - 权限层拦截 2 次，都是 `deny.test_edit_bash`：agent 在 `tests/` 下**新建**临时复现文件（sphinx-8269、sphinx-8621，两题最后都解决了），不是改已有的断言，人工复核判为**误拦**。`policy.yaml` 与 M0 一起冻结，不改；以后报误拦率时如实计入
+  - 没解决的 3 题：django-11087（89 步）、scikit-learn-14983（35 步）、sphinx-9602（106 步），都没有压缩，留到第 3 天做失败分析
