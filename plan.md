@@ -323,7 +323,7 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 | 2026-10-12 | 新文件 `eval/baselines/run_b0.py`（B0 命令生成与输出转换）；B0 的命令示例 | §4 目录树、§7 | [x] 2026-10-12 |
 | 2026-10-12 | 新目录 `configs/smoke/`（冒烟配置，不是消融）；`aggregate.py` 的 `--baseline` 用法已验证 | §4 目录树 | [x] 2026-10-12 |
 | 2026-10-12 | **瘦身**：CLAUDE.md 只留规则、不变量和指标名字；实现细节搬到代码的模块说明（`tracer.py` 的 span 字段目录、`tokens.py` 的估计误差、`docker_sandbox.py` 的约定）；默认数值改为指向 `config.py`；§8 加了"往本文件加内容之前先问"的标准 | §5.1、§5.3、§5.4、§5.5、§5.6、§5.7、§6、§7、§8 | [x] 2026-10-12（26 973 → 24 761 字节，约 8.2%，比预期小：文件的大头本来就是规则；理由和取舍见 `docs/notes.md` §15） |
-| 2026-10-15 | 新子集 `verified_25.txt` + `verified_25.meta.json`（从 `verified_50` 按仓库分层派生，种子 42，`select_subset.py derive`） | §4 目录树的 `subsets/` | [ ] |
+| 2026-10-15 | 新子集 `verified_25.txt` + `verified_25.meta.json`（从 `verified_50` 按仓库分层派生，种子 42，`select_subset.py derive`） | §4 目录树的 `subsets/` | [x] 2026-10-15 |
 | 待办 | CLI 交互确认（`ask`）实现后 | §5.6 删掉"尚未实现" | [ ] |
 | 待办 | 回放补写 `llm_call` span 后（第 4 天） | §5.8 删掉"待做" | [ ] |
 | 待办 | `score.py` 写好后：`resolved.json` 约定（现在只在 `docs/notes.md` §12.6） | §6 或 §7 | [ ] |
@@ -647,3 +647,4 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - 待你决定：摘要空间用"硬上限"还是"按字数估计"（notes §20），定了之后在新的候选提交上重跑 A3 再冻结
 - **你的决定（2026-10-15）**：给摘要留空间采用**方案 A**（现状：两档摘要 + 按字数的估计值做规划 + 两档共用宽松的输出上限），不改代码。notes §20.2–20.4 已按 A / B / C 分开重写，更正了"方案 B 和主流思路一致"的错误说法。`ed6625a` 之后 `src/` 和实验配置都没有改动，A3 的结论对当前提交仍然有效
 - 方案 A 仍需你确认：① 标定的覆盖面（200 词那档的 13 个样本里有 10 个来自同一道题）；② 余量 1.4（正好盖住已见过的最大值，没有额外余地）；③ 冻结后，正式实验里摘要实际超出预计时怎么处理
+- **你的决定（2026-10-15）**：方案 A 的三项都按建议：① 标定接受现状，靠 `monitoring.summary_size` 发现估低；② 余量保持 1.4；③ 冻结后正式实验中摘要超出预计时不中途改参数，如实报告，频繁的话下一个版本重新标定并按规则重跑、记入 `results/CHANGELOG.md`。CLAUDE.md §4 已同步 `verified_25`。打 `v0.1-frozen`；先在 `verified_25` 上跑 M0 和 B0 看结果

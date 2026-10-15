@@ -64,7 +64,7 @@ harness-lab/
 │   ├── ablations/              # 每个文件只改一个因素
 │   ├── smoke/                  # 冒烟用配置（不是消融，不被消融测试枚举）
 │   ├── policy.yaml             # 权限层规则
-│   └── subsets/{dev_5.txt, verified_50.txt}
+│   └── subsets/{dev_5.txt, verified_50.txt, verified_25.txt, verified_25.meta.json}
 ├── src/harness/
 │   ├── config.py               # pydantic 配置模型 + YAML 加载
 │   ├── agent/{loop.py, state.py, prompts.py, limits.py}
