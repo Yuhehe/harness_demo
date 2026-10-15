@@ -917,3 +917,14 @@ A−B = C−D = 492：**回传的推理全部计入**，不管后面有没有新
 **决定（用户）**：采用方案 A，不改代码。`ed6625a`（A3 验收所用的提交）之后 `src/` 和实验配置没有改动，A3 的结论对当前提交仍然有效。
 
 方案 A 本身仍需确认的事见 `plan.md` 当天的日志（标定的覆盖面、余量 1.4、冻结后摘要超出预计时怎么处理）。
+
+## 21. 冻结后的实验在哪里跑（2026-10-15，用户决定：方案 1）
+
+**规则**：所有对比配置都在同一个 tag 上跑（CLAUDE.md §2.4），运行器拒绝有未提交改动的工作区。冻结后 master 上还要继续写文档，所以：
+
+- **实验一律在单独的 git worktree 里跑**：`/home/yuhe/code/labs/harness_demo-frozen`，`git worktree add --detach … v0.1-frozen` 建立，处于分离的 HEAD（不在任何分支上），里面复制了一份 `.env`（被 gitignore，权限 600），用 `uv sync --frozen` 装依赖。建好后核对过：全套测试 544 通过 1 跳过；`default.yaml` 的配置哈希 `6ea20eaecc69`、记录的提交 `ff11f3b`、工作区干净。
+- **结果写回主目录**：所有脚本都用 `--results-dir /home/yuhe/code/labs/harness_demo/results/runs`（`run_agent.py`、`score.py`、`run_b0.py`、`aggregate.py` 都支持），这样 80% 预算守卫统计的是同一份花费，续跑也读同一份记录。
+- master 上照常写文档、改计划；只要不打新 tag，实验代码就不变。如果冻结后修了 harness 的 bug：在 master 上改、打新 tag、新建（或移动）worktree，受影响的配置全部重跑，记入 `results/CHANGELOG.md`。
+- 例外：`M0` 在 verified_25 上的第一次运行是在主目录里启动的，当时主目录正好就在 tag 的提交 `ff11f3b` 上、工作区干净（`run_meta.json` 有记录），等价于在 tag 上跑。
+
+**B0 的续跑（2026-10-15 核实，mini-swe-agent 2.4.6，`minisweagent/run/benchmarks/swebench.py` 第 212–232 行）**：默认会跳过 `preds.json` 里已经有结果的题（加 `--redo-existing` 才重做）。所以 B0 可以用同一个 run-id 先跑 verified_25、以后再用 verified_50 补齐另外 25 题；`run_b0.py convert` 每次读完整的 `preds.json`，不受影响。M0 的续跑由 `run_agent.py` 按 `instance_id` 跳过已完成的题。

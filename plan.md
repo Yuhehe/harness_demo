@@ -648,3 +648,4 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - **你的决定（2026-10-15）**：给摘要留空间采用**方案 A**（现状：两档摘要 + 按字数的估计值做规划 + 两档共用宽松的输出上限），不改代码。notes §20.2–20.4 已按 A / B / C 分开重写，更正了"方案 B 和主流思路一致"的错误说法。`ed6625a` 之后 `src/` 和实验配置都没有改动，A3 的结论对当前提交仍然有效
 - 方案 A 仍需你确认：① 标定的覆盖面（200 词那档的 13 个样本里有 10 个来自同一道题）；② 余量 1.4（正好盖住已见过的最大值，没有额外余地）；③ 冻结后，正式实验里摘要实际超出预计时怎么处理
 - **你的决定（2026-10-15）**：方案 A 的三项都按建议：① 标定接受现状，靠 `monitoring.summary_size` 发现估低；② 余量保持 1.4；③ 冻结后正式实验中摘要超出预计时不中途改参数，如实报告，频繁的话下一个版本重新标定并按规则重跑、记入 `results/CHANGELOG.md`。CLAUDE.md §4 已同步 `verified_25`。打 `v0.1-frozen`；先在 `verified_25` 上跑 M0 和 B0 看结果
+- **你的决定（2026-10-15）**：冻结后的实验在 worktree `/home/yuhe/code/labs/harness_demo-frozen`（固定在 `v0.1-frozen`）里跑，结果用 `--results-dir` 写回主目录的 `results/runs/`；master 上照常写文档。做法和核对结果见 `docs/notes.md` §21。`M0`（verified_25）在主目录启动，当时主目录正好在 tag 的提交上、工作区干净，等价于在 tag 上跑。B0 先不跑，看完 M0 的结果再定
