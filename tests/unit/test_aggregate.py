@@ -392,3 +392,165 @@ def test_monitoring_counts_oversized_summaries_skips_and_unusual_ratios(tmp_path
     assert (
         out["compaction"]["compactions_total"] == 3
     )  # skipped attempts are not compactions
+
+
+# ---- quality: from what the runs already have (notes 22.7) ----------------------------------------
+PATCH = """diff --git a/pkg/mod.py b/pkg/mod.py
+index 1..2 100644
+--- a/pkg/mod.py
++++ b/pkg/mod.py
+@@ -1,2 +1,2 @@
+-old
++new
++more
+diff --git a/tests/test_tmp.py b/tests/test_tmp.py
+new file mode 100644
+--- /dev/null
++++ b/tests/test_tmp.py
+@@ -0,0 +1 @@
++x = 1
+diff --git a/repro.py b/repro.py
+new file mode 100644
+--- /dev/null
++++ b/repro.py
+@@ -0,0 +1 @@
++print(1)
+"""
+
+
+def test_patch_stats_counts_files_lines_tests_and_new_files():
+    from aggregate import patch_stats
+
+    s = patch_stats(PATCH)
+    assert s == {"files": 3, "test_files": ["tests/test_tmp.py"], "new_files": ["repro.py", "tests/test_tmp.py"],
+                 "lines_added": 4, "lines_removed": 1}  # fmt: skip
+    assert patch_stats("")["files"] == 0
+
+
+def test_test_paths_are_recognised_but_not_every_file_with_test_in_its_name():
+    from aggregate import patch_stats
+
+    def is_test(path):
+        return bool(patch_stats(f"diff --git a/{path} b/{path}\n")["test_files"])
+
+    assert is_test("sklearn/model_selection/tests/test_split.py")
+    assert (
+        is_test("conftest.py") and is_test("pkg/test_x.py") and is_test("pkg/x_test.py")
+    )
+    assert not is_test("sphinx/testing/util.py") and not is_test("django/test/utils.py")
+
+
+def test_mini_tool_calls_count_tool_calls_or_parsed_actions():
+    from aggregate import mini_tool_calls
+
+    traj = {"messages": [
+        {"role": "assistant", "tool_calls": [{"function": {"name": "bash"}}, {"function": {"name": "bash"}}]},
+        {"role": "tool", "content": "x"},
+        {"role": "assistant", "content": "...", "extra": {"actions": [{"command": "ls"}]}},
+        {"role": "user", "content": "y"},
+    ]}  # fmt: skip
+    assert mini_tool_calls(traj) == {"bash": 3}
+
+
+def test_time_split_adds_model_and_tool_time_and_leaves_the_rest():
+    from aggregate import time_split
+
+    t = task([run_end(3, wall=100.0)])
+    t.spans = [
+        {"type": "llm_call", "latency_s": 30.0},
+        {"type": "llm_call", "latency_s": 20.0},
+    ]
+    t.tool_calls = [{"tool": "bash", "duration_s": 15.0, "step": 1, "args_hash": "h"}]
+    assert time_split(t) == {"wall": 100.0, "model": 50.0, "tools": 15.0, "other": 35.0}
+    assert time_split(task([run_end(3)])) is None  # no per-step spans (B0)
+
+
+def test_quality_counts_regressions_partial_fixes_and_cost_per_resolved(tmp_path):
+    spans = {
+        "a__a-1": run_end(5, cost=0.2),
+        "b__b-2": run_end(5, cost=0.4),
+        "c__c-3": run_end(5, cost=0.6),
+    }
+    for iid, end in spans.items():
+        write(tmp_path, "R", iid, [end])
+    score = {"tests": {
+        "a__a-1": {"f2p_pass": 1, "f2p_total": 1, "p2p_fail": 0, "p2p_total": 3},
+        "b__b-2": {"f2p_pass": 1, "f2p_total": 2, "p2p_fail": 2, "p2p_total": 3},
+        "c__c-3": {"f2p_pass": 0, "f2p_total": 1, "p2p_fail": 0, "p2p_total": 3},
+    }}  # fmt: skip
+    q = aggregate(
+        load_run(tmp_path / "R"),
+        {"a__a-1"},
+        score,
+        {"a__a-1": "easy", "b__b-2": "hard"},
+    )["quality"]
+    assert q["cost_per_resolved"] == pytest.approx(1.2)
+    assert q["tests"] == {
+        "judged": 3,
+        "regressions": 1,
+        "regression_rate": pytest.approx(1 / 3),
+        "partial_fix": 1,
+    }
+    assert q["by_repo"]["a/a"] == {
+        "n": 1,
+        "resolved": 1,
+        "cost_mean": pytest.approx(0.2),
+        "steps_mean": 5,
+    }
+    assert set(q["by_difficulty"]) == {
+        "easy",
+        "hard",
+    }  # an id without a label is left out
+
+
+def test_sign_test_matches_the_exact_binomial():
+    from aggregate import sign_test
+
+    assert sign_test(0, 6) == pytest.approx(0.03125)
+    assert sign_test(5, 0) == pytest.approx(0.0625)
+    assert sign_test(3, 3) == 1.0 and sign_test(0, 0) == 1.0
+    assert sign_test(1, 9) == pytest.approx(2 * 11 / 1024)
+
+
+def test_paired_compares_task_by_task_with_a_reproducible_interval():
+    from aggregate import paired
+
+    base = [
+        {"instance_id": f"t{i}", "cost_usd": 1.0, "steps": 10, "wall_seconds": 10.0}
+        for i in range(8)
+    ]
+    other = [{"instance_id": f"t{i}", "cost_usd": 2.0 if i < 6 else 0.5, "steps": 10, "wall_seconds": 10.0}
+             for i in range(8)]  # fmt: skip
+    out = paired(base, other, {"t0", "t1"}, {"t0", "t2", "t3"}, rounds=2000)
+    assert out["tasks"] == 8
+    assert out["resolved"] == {
+        "both": 1,
+        "only_base": 1,
+        "only_other": 2,
+        "sign_test_p": 1.0,
+    }
+    assert (
+        out["cost_usd"]["median_ratio"] == 2.0 and out["cost_usd"]["other_higher"] == 6
+    )
+    lo, hi = out["cost_usd"]["ci95"]
+    assert lo <= 2.0 <= hi
+    assert paired(base, other, None, None, rounds=2000) == {
+        k: v for k, v in out.items() if k != "resolved"
+    }
+    assert out["steps"]["median_ratio"] == 1.0
+
+
+def test_the_bootstrap_interval_is_the_same_on_every_run_and_moves_with_the_seed():
+    from aggregate import paired
+
+    base = [
+        {"instance_id": f"t{i}", "cost_usd": 1.0, "steps": 1, "wall_seconds": 1.0}
+        for i in range(30)
+    ]
+    other = [{"instance_id": f"t{i}", "cost_usd": 0.5 + (i * 37 % 29) / 10, "steps": 1, "wall_seconds": 1.0}
+             for i in range(30)]  # fmt: skip
+    first = paired(base, other, None, None, rounds=300)["cost_usd"]["ci95"]
+    assert paired(base, other, None, None, rounds=300)["cost_usd"]["ci95"] == first
+    assert (
+        paired(base, other, None, None, rounds=300, seed=1)["cost_usd"]["ci95"] != first
+    )

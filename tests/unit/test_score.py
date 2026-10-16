@@ -191,3 +191,43 @@ def test_scoring_needs_predictions(tmp_path):
 def test_aggregate_with_a_score_but_no_resolved_set_keeps_the_old_behaviour(tmp_path):
     make_run(tmp_path)
     assert aggregate(load_run(tmp_path / "R"))["fail_taxonomy"] == {"submitted": 3}
+
+
+# ---- per-test outcomes, and reading a report again ----------------------------------------------
+def _instance_report(run, run_id, iid, f2p_ok, f2p_bad, p2p_ok, p2p_bad):
+    d = run / "logs" / "run_evaluation" / run_id / "m__x" / iid
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "report.json").write_text(json.dumps({iid: {"tests_status": {
+        "FAIL_TO_PASS": {"success": f2p_ok, "failure": f2p_bad},
+        "PASS_TO_PASS": {"success": p2p_ok, "failure": p2p_bad},
+    }}}))  # fmt: skip
+
+
+def test_the_per_test_outcome_is_read_from_each_instance_report(tmp_path):
+    run = make_run(tmp_path)
+    _instance_report(run, "R", "a__a-1", ["t1"], [], ["p1", "p2"], [])
+    _instance_report(
+        run, "R", "b__b-2", ["t1"], ["t2"], ["p1"], ["p2"]
+    )  # partial, broke p2
+    (run / "logs" / "run_evaluation" / "R" / "m__x" / "c__c-3").mkdir(parents=True)
+    tests = sc.read_tests(run, "R")
+    assert tests == {
+        "a__a-1": {"f2p_pass": 1, "f2p_total": 1, "p2p_fail": 0, "p2p_total": 2},
+        "b__b-2": {"f2p_pass": 1, "f2p_total": 2, "p2p_fail": 1, "p2p_total": 2},
+    }  # c__c-3 has no report: left out
+
+
+def test_reuse_report_reads_again_without_scoring(tmp_path):
+    run = make_run(tmp_path)
+    (run / "m__x.R.json").write_text(
+        json.dumps({"resolved_ids": ["a__a-1"], "unresolved_ids": ["b__b-2"]})
+    )
+    _instance_report(run, "R", "b__b-2", [], ["t1"], ["p1"], ["p2"])
+    scorer = FakeScorer({})
+    assert sc.main(["--run-id", "R", "--results-dir", str(tmp_path), "--reuse-report"],
+                   run=scorer, newest_revision=lambda *_: "moved") == 0  # fmt: skip
+    assert not scorer.calls  # nothing scored, the dataset revision not even checked
+    score = json.loads((run / "score.json").read_text())
+    assert score["tests"]["b__b-2"]["p2p_fail"] == 1
+    metrics = json.loads((run / "metrics.json").read_text())
+    assert metrics["quality"]["tests"]["regressions"] == 1

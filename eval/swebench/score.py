@@ -13,6 +13,12 @@ score.json (every id by what the scorer said about it) and an updated metrics.js
   apart from "judged and not fixed": a broken scoring environment is not the model's failure.
 * swebench writes logs/ into the current directory, so it is run inside the run directory
   (results/runs/ is gitignored).
+* Per instance, score.json also keeps how the tests went (`tests`): of the FAIL_TO_PASS tests
+  (the ones the fix must make pass) how many passed, and of the PASS_TO_PASS tests (the ones
+  that passed before) how many now fail, i.e. regressions. Read from the per-instance
+  report.json under logs/run_evaluation/.
+* --reuse-report reads an existing report again without scoring (to refresh score.json and
+  metrics.json after this script learned to read more from it).
 """
 
 from __future__ import annotations
@@ -52,13 +58,16 @@ NOT_JUDGED = (
 @dataclass
 class Score:
     ids: dict[str, list[str]] = field(default_factory=dict)
+    tests: dict[str, dict[str, int]] = field(default_factory=dict)
 
     @property
     def resolved(self) -> set[str]:
         return set(self.ids.get("resolved", []))
 
     def to_json(self) -> dict[str, Any]:
-        return {name: sorted(self.ids.get(name, [])) for name in GROUPS}
+        out: dict[str, Any] = {name: sorted(self.ids.get(name, [])) for name in GROUPS}
+        out["tests"] = dict(sorted(self.tests.items()))
+        return out
 
 
 def check_dataset_revision(meta: dict[str, Any], newest: str) -> None:
@@ -102,6 +111,27 @@ def read_report(path: Path) -> Score:
     return Score({name: list(data.get(key, [])) for name, key in GROUPS.items()})
 
 
+def read_tests(run_dir: Path, run_id: str) -> dict[str, dict[str, int]]:
+    """Per instance: FAIL_TO_PASS passed / total, PASS_TO_PASS failed / total. Instances whose
+    report has no test status (the patch did not apply, the run broke) are left out."""
+    out: dict[str, dict[str, int]] = {}
+    for path in sorted(
+        (run_dir / "logs" / "run_evaluation" / run_id).glob("*/*/report.json")
+    ):
+        for iid, rep in json.loads(path.read_text()).items():
+            status = rep.get("tests_status")
+            if not status:
+                continue
+            f2p, p2p = status["FAIL_TO_PASS"], status["PASS_TO_PASS"]
+            out[iid] = {
+                "f2p_pass": len(f2p["success"]),
+                "f2p_total": len(f2p["success"]) + len(f2p["failure"]),
+                "p2p_fail": len(p2p["failure"]),
+                "p2p_total": len(p2p["success"]) + len(p2p["failure"]),
+            }
+    return out
+
+
 def write_score(run_dir: Path, score: Score) -> None:
     (run_dir / "resolved.json").write_text(json.dumps(sorted(score.resolved)))
     (run_dir / "score.json").write_text(
@@ -117,6 +147,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--workers", type=int, default=1, help="instances scored in parallel"
     )
     ap.add_argument("--timeout", type=int, default=1800, help="seconds per instance")
+    ap.add_argument(
+        "--reuse-report",
+        action="store_true",
+        help="read the existing report again instead of scoring",
+    )
     return ap
 
 
@@ -139,21 +174,23 @@ def main(
         if x.strip()
     ]
 
-    meta = json.loads((SUBSET_DIR / META_NAME).read_text())
-    check_dataset_revision(meta, newest_revision(meta["dataset_id"], None))
+    if not args.reuse_report:
+        meta = json.loads((SUBSET_DIR / META_NAME).read_text())
+        check_dataset_revision(meta, newest_revision(meta["dataset_id"], None))
 
-    cmd = swebench_command(
-        Path(sys.executable).with_name("swebench"), preds, args.run_id, ids,
-        workers=args.workers, timeout=args.timeout,
-    )  # fmt: skip
-    print(f"scoring {len(ids)} prediction(s) with swebench ...")
-    done = run(
-        cmd, cwd=run_dir, check=False
-    )  # a fixed command we build, not model output
-    if done.returncode != 0:
-        raise SystemExit(f"swebench exited with {done.returncode}")
+        cmd = swebench_command(
+            Path(sys.executable).with_name("swebench"), preds, args.run_id, ids,
+            workers=args.workers, timeout=args.timeout,
+        )  # fmt: skip
+        print(f"scoring {len(ids)} prediction(s) with swebench ...")
+        done = run(
+            cmd, cwd=run_dir, check=False
+        )  # a fixed command we build, not model output
+        if done.returncode != 0:
+            raise SystemExit(f"swebench exited with {done.returncode}")
 
     score = read_report(find_report(run_dir, args.run_id))
+    score.tests = read_tests(run_dir, args.run_id)
     write_score(run_dir, score)
     metrics = aggregate(load_run(run_dir), score.resolved, score.to_json())
     (run_dir / "metrics.json").write_text(json.dumps(metrics, indent=2, sort_keys=True))

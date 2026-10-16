@@ -30,6 +30,15 @@ or every attempt failed) is the estimate used, and the two are counted apart
 (`tokens_after_source`). The size before a compaction is always an estimate: that prompt was
 never sent.
 
+Also, from data the runs already have (docs/notes.md section 22.7; no trace field is added):
+the scorer's per-test outcome (`score.json` -> `tests`: regressions, partial fixes), the patch
+in preds.jsonl (files and lines changed, test files touched, new files), tool calls by type
+(B0: counted from mini-swe-agent's own trajectory), where M0's wall time went (model calls,
+tool runs, the rest), cost per resolved task, and the same numbers by repo and by difficulty.
+`--paired RUN` compares two runs task by task: an exact sign test on the tasks only one of them
+resolved, and the median of the per-task ratio of cost, steps and wall time with a bootstrap
+95% interval (seeded, so a rerun gives the same interval).
+
 Monitoring (not metrics of the experiment, checks on the harness): how the summaries compare
 with the size the plan expected (`summary_size`), attempts that changed nothing
 (`compaction_skipped` spans), and compactions made with an unusual estimator ratio.
@@ -40,6 +49,8 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import random
+import re
 import statistics
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -84,6 +95,10 @@ class Task:
     spans: list[dict[str, Any]] = field(
         default_factory=list
     )  # all of them, in file order
+    patch: str | None = None  # the submitted patch (preds.jsonl)
+    external_tools: dict[str, int] | None = (
+        None  # B0: tool calls from mini's trajectory
+    )
 
     @property
     def complete(self) -> bool:
@@ -108,8 +123,101 @@ def load_task(path: Path) -> Task:
 
 
 def load_run(run_dir: Path) -> dict[str, Task]:
-    return {
+    tasks = {
         p.stem: load_task(p) for p in sorted((run_dir / "trajectories").glob("*.jsonl"))
+    }
+    preds = run_dir / "preds.jsonl"
+    if preds.exists():
+        for line in preds.read_text().splitlines():
+            if line.strip():
+                row = json.loads(line)
+                if row["instance_id"] in tasks:
+                    tasks[row["instance_id"]].patch = row.get("model_patch") or ""
+    for iid, t in tasks.items():
+        traj = run_dir / "mini" / iid / f"{iid}.traj.json"
+        if traj.exists():  # B0: mini-swe-agent's own trajectory has the tool calls
+            t.external_tools = mini_tool_calls(json.loads(traj.read_text()))
+    return tasks
+
+
+def mini_tool_calls(traj: dict[str, Any]) -> dict[str, int]:
+    """Tool calls in a mini-swe-agent trajectory, by tool name (it only has bash)."""
+    counts: dict[str, int] = {}
+    for m in traj.get("messages", []):
+        if m.get("role") != "assistant":
+            continue
+        calls = m.get("tool_calls") or []
+        names = [c.get("function", {}).get("name", "bash") for c in calls]
+        if not calls:
+            names = ["bash"] * len((m.get("extra") or {}).get("actions") or [])
+        for name in names:
+            counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
+# ---- what the runs already have: patch, tools, time, tests --------------------------------------
+# test files: under a tests/ directory (django/test/ is Django's test framework, not tests),
+# test_*.py, *_test.py, conftest.py
+_TEST_PATH = re.compile(
+    r"(^|/)tests/|(^|/)test_[^/]*\.py$|_tests?\.py$|(^|/)conftest\.py$"
+)
+
+
+def repo_of(instance_id: str) -> str:
+    return instance_id.rsplit("-", 1)[0].replace("__", "/")
+
+
+def patch_stats(patch: str) -> dict[str, Any]:
+    """Files and lines a unified diff changes; which of them are tests and which are new."""
+    files: list[str] = []
+    new: list[str] = []
+    added = removed = 0
+    current = None
+    for line in patch.splitlines():
+        if line.startswith("diff --git "):
+            current = line.split(" b/", 1)[-1]
+            files.append(current)
+        elif line.startswith("new file mode") and current:
+            new.append(current)
+        elif line.startswith("+") and not line.startswith("+++"):
+            added += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            removed += 1
+    return {
+        "files": len(files),
+        "test_files": sorted(f for f in files if _TEST_PATH.search(f)),
+        "new_files": sorted(new),
+        "lines_added": added,
+        "lines_removed": removed,
+    }
+
+
+def tool_counts(t: Task) -> dict[str, int]:
+    """Tool calls by tool: the run's tool_call spans, or for B0 mini-swe-agent's trajectory."""
+    if t.external_tools is not None:
+        return dict(t.external_tools)
+    counts: dict[str, int] = {}
+    for c in t.tool_calls:
+        counts[c["tool"]] = counts.get(c["tool"], 0) + 1
+    return counts
+
+
+def time_split(t: Task) -> dict[str, float] | None:
+    """Wall time split into model calls (every attempt, agent and summary), tool runs and the
+    rest (context building, retry waits, the loop itself). None without per-step spans (B0).
+    Not in the wall at all: starting and removing the sandbox (a trace field for a later
+    version, docs/notes.md section 22)."""
+    llm = [s for s in t.spans if s["type"] == "llm_call"]
+    if not llm or t.run_end is None:
+        return None
+    model = sum(s.get("latency_s") or 0.0 for s in llm)
+    tools = sum(c.get("duration_s") or 0.0 for c in t.tool_calls)
+    wall = t.run_end["wall_seconds"]
+    return {
+        "wall": wall,
+        "model": model,
+        "tools": tools,
+        "other": max(wall - model - tools, 0.0),
     }
 
 
@@ -251,6 +359,10 @@ def task_metrics(t: Task) -> dict[str, Any] | None:
         "sizes_after_compaction": sizes_after_compaction(t),
         "summary_sizes": summary_sizes(t),
         "compactions_skipped": [c["reason"] for c in t.skipped],
+        "repo": repo_of(t.instance_id),
+        "tool_calls": tool_counts(t),
+        "time_split": time_split(t),
+        "patch": None if t.patch is None else patch_stats(t.patch),
         "ratio_unusual": sum(
             bool(c.get("ratio_unusual")) for c in [*t.compactions, *t.skipped]
         ),
@@ -297,10 +409,143 @@ def _monitoring(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _quality(
+    rows: list[dict[str, Any]],
+    resolved: set[str] | None,
+    score: dict[str, Any] | None,
+    difficulty: dict[str, str] | None,
+) -> dict[str, Any]:
+    """docs/notes.md section 22.7, from what the runs already have."""
+    tests = (score or {}).get("tests") or {}
+    judged = [tests[r["instance_id"]] for r in rows if r["instance_id"] in tests]
+    patches = [r["patch"] for r in rows if r["patch"] is not None]
+    splits = [r["time_split"] for r in rows if r["time_split"]]
+    tools: dict[str, int] = {}
+    for r in rows:
+        for name, k in r["tool_calls"].items():
+            tools[name] = tools.get(name, 0) + k
+    total_cost = sum(r["cost_usd"] for r in rows)
+    k = (
+        sum(r["instance_id"] in resolved for r in rows)
+        if resolved is not None
+        else None
+    )
+
+    def strata(key) -> dict[str, Any]:
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for r in rows:
+            label = key(r)
+            if label is not None:
+                groups.setdefault(label, []).append(r)
+        return {
+            label: {
+                "n": len(g),
+                "resolved": sum(x["instance_id"] in resolved for x in g)
+                if resolved is not None
+                else None,
+                "cost_mean": mean([x["cost_usd"] for x in g]),
+                "steps_mean": mean([x["steps"] for x in g]),
+            }
+            for label, g in sorted(groups.items())
+        }
+
+    return {
+        "cost_per_resolved": total_cost / k if k else None,
+        "tests": {
+            "judged": len(judged),
+            # a PASS_TO_PASS test that fails now: the patch broke something that worked
+            "regressions": sum(t["p2p_fail"] > 0 for t in judged),
+            "regression_rate": _share(
+                sum(t["p2p_fail"] > 0 for t in judged), len(judged)
+            ),
+            # some FAIL_TO_PASS tests pass, not all: partly fixed
+            "partial_fix": sum(0 < t["f2p_pass"] < t["f2p_total"] for t in judged),
+        },
+        "patch": {
+            "n": len(patches),
+            "touch_test_files": sum(bool(x["test_files"]) for x in patches),
+            "add_new_files": sum(bool(x["new_files"]) for x in patches),
+            "files_mean": mean([x["files"] for x in patches]),
+            "lines_changed_median": percentile(
+                [x["lines_added"] + x["lines_removed"] for x in patches], 0.5
+            ),
+        },
+        "tool_calls": {
+            "mean": mean([sum(r["tool_calls"].values()) for r in rows]),
+            "by_tool": dict(sorted(tools.items())),
+        },
+        "time_split": None
+        if not splits
+        else {
+            part: _share(sum(s[part] for s in splits), sum(s["wall"] for s in splits))
+            for part in ("model", "tools", "other")
+        },
+        "by_repo": strata(lambda r: r["repo"]),
+        "by_difficulty": strata(lambda r: (difficulty or {}).get(r["instance_id"]))
+        if difficulty
+        else None,
+    }
+
+
+# ---- two runs task by task ------------------------------------------------------------------------
+def sign_test(a: int, b: int) -> float:
+    """Two-sided exact sign test: a and b are the tasks only one or only the other resolved."""
+    n = a + b
+    if n == 0:
+        return 1.0
+    tail = sum(math.comb(n, i) for i in range(min(a, b) + 1)) / 2**n
+    return min(1.0, 2 * tail)
+
+
+def paired(
+    base_rows: list[dict[str, Any]],
+    other_rows: list[dict[str, Any]],
+    base_resolved: set[str] | None,
+    other_resolved: set[str] | None,
+    *,
+    seed: int = 0,
+    rounds: int = 10_000,
+) -> dict[str, Any]:
+    """`other` against `base` on the tasks both completed (docs/notes.md section 22.1)."""
+    base = {r["instance_id"]: r for r in base_rows}
+    other = {r["instance_id"]: r for r in other_rows}
+    common = sorted(set(base) & set(other))
+    out: dict[str, Any] = {"tasks": len(common)}
+    if base_resolved is not None and other_resolved is not None:
+        only_base = sum(i in base_resolved and i not in other_resolved for i in common)
+        only_other = sum(i in other_resolved and i not in base_resolved for i in common)
+        out["resolved"] = {
+            "both": sum(i in base_resolved and i in other_resolved for i in common),
+            "only_base": only_base,
+            "only_other": only_other,
+            "sign_test_p": sign_test(only_base, only_other),
+        }
+    rng = random.Random(seed)
+    for key in ("cost_usd", "steps", "wall_seconds"):
+        ratios = [
+            other[i][key] / base[i][key]
+            for i in common
+            if base[i][key] and other[i][key]
+        ]
+        if not ratios:
+            continue
+        medians = sorted(
+            statistics.median(rng.choices(ratios, k=len(ratios))) for _ in range(rounds)
+        )
+        out[key] = {
+            "median_ratio": statistics.median(ratios),
+            "ci95": [medians[int(0.025 * rounds)], medians[int(0.975 * rounds) - 1]],
+            "other_higher": sum(r > 1 for r in ratios),
+            "n": len(ratios),
+        }
+    return out
+
+
 def aggregate(
     tasks: dict[str, Task],
     resolved: set[str] | None = None,
-    score: dict[str, list[str]] | None = None,
+    score: dict[str, Any] | None = None,
+    difficulty: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     rows = [m for t in tasks.values() if (m := task_metrics(t))]
     n = len(rows)
@@ -357,6 +602,7 @@ def aggregate(
             "tokens_after": _sizes_after(rows),
         },
         "monitoring": _monitoring(rows),
+        "quality": _quality(rows, resolved, score, difficulty),
     }
     if resolved is not None:
         k = sum(r["instance_id"] in resolved for r in rows)
@@ -455,6 +701,22 @@ def _resolved(run_dir: Path, explicit: Path | None) -> set[str] | None:
     return set(json.loads(path.read_text())) if path.exists() else None
 
 
+def load_difficulty(ids: list[str]) -> dict[str, str]:
+    """The dataset's difficulty label for each id, at the revision the subsets were drawn from
+    (configs/subsets/subsets_meta.json; read from the local Hugging Face cache)."""
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "swebench"))
+    from select_subset import META_NAME, SUBSET_DIR, load_rows
+
+    meta = json.loads((SUBSET_DIR / META_NAME).read_text())
+    rows, _ = load_rows(meta["dataset_id"], meta["split"], meta["revision"])
+    wanted = set(ids)
+    return {
+        r["instance_id"]: r["difficulty"] for r in rows if r["instance_id"] in wanted
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--run-id", required=True)
@@ -463,6 +725,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--results-dir", type=Path, default=Path("results/runs"))
     ap.add_argument("--resolved", type=Path, help="JSON list of resolved instance ids")
+    ap.add_argument(
+        "--paired", help="a second run id to compare with task by task (all tasks)"
+    )
+    ap.add_argument(
+        "--difficulty",
+        action="store_true",
+        help="also group by the dataset's difficulty label (dataset at the frozen revision)",
+    )
     args = ap.parse_args(argv)
 
     run_dir = args.results_dir / args.run_id
@@ -472,7 +742,17 @@ def main(argv: list[str] | None = None) -> int:
     resolved = _resolved(run_dir, args.resolved)
     score_path = run_dir / "score.json"
     score = json.loads(score_path.read_text()) if score_path.exists() else None
-    result = aggregate(tasks, resolved, score)
+    difficulty = load_difficulty(list(tasks)) if args.difficulty else None
+    result = aggregate(tasks, resolved, score, difficulty)
+    if args.paired:
+        base_dir = args.results_dir / args.paired
+        base_tasks = load_run(base_dir)
+        base_rows = [m for t in base_tasks.values() if (m := task_metrics(t))]
+        rows = [m for t in tasks.values() if (m := task_metrics(t))]
+        result["paired"] = {
+            "base": args.paired,
+            **paired(base_rows, rows, _resolved(base_dir, None), resolved),
+        }
     if args.baseline:
         base_dir = args.results_dir / args.baseline
         result["vs_baseline"] = {
