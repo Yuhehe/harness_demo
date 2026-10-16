@@ -1050,3 +1050,30 @@ plan §0 的最低标准，以及第 4 天的服务和 CI 验收。
 - 可复现性：`config_hash`、`git_dirty`、价格表哈希、回放模型
 - 成本口径：固定标准价，不受错峰定价影响
 - 重试分类和失败尝试的统计比通用 harness 更细
+
+## 24. `config_hash` 覆盖什么、不覆盖什么（2026-10-16 读代码核实；**已知缺口，用户决定暂不修**）
+
+**计算**（`src/harness/config.py` 的 `AgentConfig.canonical_json` / `config_hash`）：`model_dump(mode="json")` 展开成补齐默认值的完整配置（含校验时填好的成对 `max_tokens` / `timeout_s` 和 `reasoning_effort`），`json.dumps(..., sort_keys=True)`，SHA-256 取前 12 位。
+
+**用在哪里**：每题 `run_start` 记录指纹和完整配置（`agent/loop.py`）；`run_agent.py` 的 `check_run_meta` 在同一 `run_id` 续跑时比对指纹，不一致就拒绝；`run_b0.py` 记为 `harness_config_hash`（B0 的限制由 `default.yaml` 生成）；`tests/unit/test_config_files.py` 断言各消融的指纹互不相同；`results/CHANGELOG.md` 用"指纹不变"作为 `v0.1.1` 未改实验条件的证据之一。
+
+**不在指纹里、会影响结果的东西**，由 `run_start` 的其他字段补记：
+
+| 不在指纹里 | 原因 | 补记字段 |
+|---|---|---|
+| 主模型名 | `default.yaml` 故意不写 `llm.model`，运行时从 `.env` 的 `MODEL_MAIN` 解析（`LLMConfig.resolved_model`），配置里是 `None` | `run_start.model` |
+| 摘要模型 | 同理，`context.summary_model` 为空时读 `MODEL_CHEAP` | `run_start.summary_model` |
+| `policy.yaml` 的内容 | 配置里只有路径 `guard.policy_path` | `run_start.policy_hash` |
+| 价格表 | 不属于配置 | `run_start.prices_hash` |
+| 代码（提示词、工具等） | 不属于配置 | `run_start` 的 git commit、`git_dirty`；冻结 tag |
+| `--workers` | 命令行参数 | `run_start` 和 `status.jsonl` 的 `workers` |
+
+**缺口**：`check_run_meta`（`run_agent.py`、`run_b0.py`）只比对 `config_hash`。如果在 `.env` 里换了 `MODEL_MAIN` / `MODEL_CHEAP` 或改了 `policy.yaml`，再用同一个 `run_id` 续跑，**不会被拒绝**，两种条件的结果会混在一个 `run_id` 下；事后只能从每题的 `run_start` 查出来。这也和 CLAUDE.md §5.3"凡是会影响运行结果的键都进 `config_hash`"不完全一致（模型名不是配置键，而是从环境变量解析的）。
+
+**现状**：到 2026-10-16 为止所有运行用的都是同一组模型，`policy.yaml` 自冻结以来未改，已有结果不受影响。
+
+**候选修法**（未实施）：
+- A（倾向）：`run_meta.json` 额外记录解析后的主模型名、摘要模型名和 `policy_hash`，续跑时一起比对。只改运行器，不改 harness 行为和指纹，按 `v0.1.1` 的做法打新 tag 并记入 CHANGELOG 即可，不需要重跑。
+- B：把解析后的模型名并入指纹。会改变所有已有运行的指纹，与 `v0.1-frozen` 上的记录对不上，不建议。
+
+修了以后，CLAUDE.md §5.3 那句是否要补"环境变量解析的模型名由运行器另行比对"，届时登记待同步清单。
