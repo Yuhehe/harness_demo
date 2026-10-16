@@ -46,7 +46,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[0] / "swebench"))
 sys.path.insert(0, str(HERE.parents[0] / "report"))
 
-from run_agent import ConfigMismatch, should_ask
+from run_agent import STOP_AT_BUDGET, ConfigMismatch, should_ask, spent_so_far
 from score import check_dataset_revision
 from select_subset import (
     META_NAME,
@@ -100,10 +100,13 @@ def overrides(cfg: Any) -> list[str]:
     return [f"{k}={json.dumps(v)}" for k, v in specs.items()]
 
 
-def command(cfg: Any, ids: list[str], out_dir: Path, binary: Path) -> list[str]:
+def command(
+    cfg: Any, ids: list[str], out_dir: Path, binary: Path, workers: int = 1
+) -> list[str]:
     cmd = [str(binary), "swebench", "--subset", SUBSET, "--split", "test"]
     cmd += ["--filter", "^(" + "|".join(re.escape(i) for i in ids) + ")$"]
-    cmd += ["-w", "1", "-m", cfg.llm.resolved_model(), "-c", "swebench.yaml"]
+    # mini-swe-agent's own thread pool (-w/--workers, 2.4.6 run/benchmarks/swebench.py)
+    cmd += ["-w", str(workers), "-m", cfg.llm.resolved_model(), "-c", "swebench.yaml"]
     for spec in overrides(cfg):
         cmd += ["-c", spec]
     return [*cmd, "-o", str(out_dir)]
@@ -288,6 +291,7 @@ def build_parser() -> argparse.ArgumentParser:
                 action="store_true",
                 help="development run on an uncommitted tree",
             )
+            p.add_argument("--workers", type=int, default=1, help="mini-swe-agent's -w")
     return ap
 
 
@@ -314,8 +318,9 @@ def main(
 
     ids = read_ids(args.subset)
     cmd = command(
-        cfg, ids, run_dir / "mini", Path(sys.executable).with_name("mini-extra")
-    )
+        cfg, ids, run_dir / "mini", Path(sys.executable).with_name("mini-extra"),
+        workers=args.workers,
+    )  # fmt: skip
     if args.print_command:
         print(" ".join(cmd))
         return 0
@@ -324,12 +329,23 @@ def main(
         meta, newest_revision(meta["dataset_id"], None)
     )  # mini loads the newest
     print(f"B0 {args.run_id}: {len(ids)} task(s), step_limit {cfg.limits.max_steps}, cost_limit ${cfg.limits.max_cost_per_task_usd}, worst case ${len(ids) * cfg.limits.max_cost_per_task_usd:.2f}")  # fmt: skip
+    # mini-swe-agent runs as a subprocess, so its spending cannot be watched while it runs:
+    # refuse to start past the 80% line; inside the run each task has its own cost cap
+    budget = float(os.environ.get("MAX_TOTAL_COST_USD", "0")) or None
+    spent = spent_so_far(args.results_dir)
+    if budget and spent >= STOP_AT_BUDGET * budget:
+        raise SystemExit(
+            f"${spent:.2f} already spent is {STOP_AT_BUDGET:.0%} of MAX_TOTAL_COST_USD "
+            f"(${budget:.2f}); raise it or confirm to go on"
+        )
     git = (git_meta or _git_meta)()
     if git["git_dirty"] and not args.allow_dirty:
         raise SystemExit(
             "the working tree has uncommitted changes: commit first, or pass --allow-dirty for a development run"
         )
-    check_meta(run_dir, cfg, git, allow_dirty=args.allow_dirty)
+    check_meta(
+        run_dir, cfg, {**git, "workers": args.workers}, allow_dirty=args.allow_dirty
+    )
     if should_ask(len(ids), args.yes) and input("go on? [y/N] ").strip().lower() != "y":
         return 2
     done = run(

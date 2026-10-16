@@ -260,7 +260,7 @@
 
 **注意**：凡是改 harness 行为的项，如果在 `v0.1-frozen` 之后做，受影响的配置都要换 tag 重跑，并记入 `results/CHANGELOG.md`（CLAUDE.md §2 第 4 条）。
 
-- [ ] **并行化**（2026-10-13 记录）：`run_agent.py --workers` 大于 1 现在报错。一并处理：
+- [x] **并行化**（2026-10-13 记录；2026-10-16 完成：`run_agent.py --workers`，单进程 asyncio，预算检查计入在跑任务的预留；`run_b0.py --workers` 传给 mini-swe-agent 的 `-w`，开跑前查 80% 预算线。B0 运行中的花费仍无法实时计入，只能开跑前检查加每题成本上限）：`run_agent.py --workers` 大于 1 现在报错。一并处理：
   - B0 运行中的花费不在 80% 预算守卫里（`docs/notes.md` §16.C6）：开跑前从余量里先扣掉 B0 的最坏花费（`--reserve-usd`），或在运行中读取 B0 的花费
   - 资源上限：`max_sandboxes` 按单沙箱内存和 CPU 上限计算，判分容器另留余量（`docs/notes.md` §13）
 - [ ] **摘要档位的过渡区**（2026-10-13 记录，效果优化时再考虑）：`_plan` 只有长版和短版两档。最短尾部一超过长版的门槛，摘要就从 700 词直接降到 200 词；而在过渡区（短版放得下、长版放不下）里，剩下的空间既给不了尾部（已超过 `tail_cap`），也给不了摘要，就这样空着
@@ -325,6 +325,7 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 | 2026-10-12 | **瘦身**：CLAUDE.md 只留规则、不变量和指标名字；实现细节搬到代码的模块说明（`tracer.py` 的 span 字段目录、`tokens.py` 的估计误差、`docker_sandbox.py` 的约定）；默认数值改为指向 `config.py`；§8 加了"往本文件加内容之前先问"的标准 | §5.1、§5.3、§5.4、§5.5、§5.6、§5.7、§6、§7、§8 | [x] 2026-10-12（26 973 → 24 761 字节，约 8.2%，比预期小：文件的大头本来就是规则；理由和取舍见 `docs/notes.md` §15） |
 | 2026-10-15 | 新子集 `verified_25.txt` + `verified_25.meta.json`（从 `verified_50` 按仓库分层派生，种子 42，`select_subset.py derive`） | §4 目录树的 `subsets/` | [x] 2026-10-15 |
 | 2026-10-16 | 新文件 `docs/dev_log.md`：阶段性结论，数字从 `results/` 手抄（用户决定列为 §2.3 的例外，不得被 README、简历、`results/summary/` 引用） | §2.3 加例外；§4 目录树的 `docs/` | [x] 2026-10-16 |
+| 2026-10-16 | 运行器支持并行（`run_agent.py --workers`，`run_b0.py --workers`） | §7 `run_agent.py` 那行的注释"顺序运行，并行是 TODO" | [ ] |
 | 待办 | CLI 交互确认（`ask`）实现后 | §5.6 删掉"尚未实现" | [ ] |
 | 待办 | 回放补写 `llm_call` span 后（第 4 天） | §5.8 删掉"待做" | [ ] |
 | 待办 | `score.py` 写好后：`resolved.json` 约定（现在只在 `docs/notes.md` §12.6） | §6 或 §7 | [ ] |

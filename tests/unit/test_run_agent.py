@@ -53,7 +53,7 @@ async def test_every_task_gets_a_prediction_and_a_status(tmp_path):
     assert result.ran == IDS and not result.skipped and not result.stopped_for_budget
     assert [c[0] for c in runner.calls] == IDS
     assert runner.calls[0][1:3] == ("img/a__a-1", "fix a__a-1")
-    assert runner.calls[0][3] == {"run_id": "R", **GIT}
+    assert runner.calls[0][3] == {"run_id": "R", **GIT, "workers": 1}
     preds = ra.read_jsonl(tmp_path / "R" / ra.PREDS)
     assert [p["instance_id"] for p in preds] == IDS
     assert preds[0] == {
@@ -300,14 +300,24 @@ ARGS = [
 ]
 
 
-def test_more_than_one_worker_is_a_todo_that_names_the_machines_limit(
+def test_more_workers_than_the_machine_carries_is_refused_and_names_its_limit(
     fake_docker, tmp_path
 ):
     with pytest.raises(SystemExit) as e:
         ra.main([*ARGS, "--results-dir", str(tmp_path), "--workers", "4"])
-    assert "TODO" in str(e.value) and "2 sandboxes" in str(
-        e.value
-    )  # 12 GB: memory allows two
+    assert "can carry 2 sandboxes" in str(e.value)  # 12 GB: memory allows two
+    assert "--force-workers" in str(e.value)
+
+
+def test_check_workers():
+    cap = {"safe_max": 3, "by_memory": 3, "by_cpu": 5, "mem_gb": 15.6, "ncpu": 10}
+    ra.check_workers(1, cap)
+    ra.check_workers(3, cap)
+    with pytest.raises(SystemExit, match="at least 1"):
+        ra.check_workers(0, cap)
+    with pytest.raises(SystemExit, match="can carry 3"):
+        ra.check_workers(4, cap)
+    ra.check_workers(4, cap, force=True)
 
 
 def test_a_dirty_tree_is_refused_unless_you_say_it_is_a_development_run(
@@ -332,3 +342,129 @@ def test_a_summarizer_the_size_was_not_calibrated_for_stops_the_batch_before_any
     with pytest.raises(ValueError, match="calibrated with"):
         ra.main([*ARGS, "--results-dir", str(tmp_path)])
     assert not (tmp_path / ARGS[ARGS.index("--run-id") + 1]).exists()  # nothing started
+
+
+# ---- running tasks side by side ------------------------------------------------------------------
+class SlowRunner:
+    """Each task takes `delay` seconds (of event-loop time) and records how many ran at once."""
+
+    def __init__(self, delay=0.02, fail=(), cost=0.1, delays=None):
+        self.delay, self.fail, self.cost = delay, set(fail), cost
+        self.delays = delays or {}
+        self.active = self.peak = 0
+        self.calls, self.cleaned = [], []
+
+    async def __call__(self, task, image, cfg, run_dir, run_id, meta):
+        import asyncio
+
+        self.calls.append((task.instance_id, meta))
+        self.active += 1
+        self.peak = max(self.peak, self.active)
+        try:
+            await asyncio.sleep(self.delays.get(task.instance_id, self.delay))
+            if task.instance_id in self.fail:
+                raise RuntimeError("container did not start")
+            return outcome(cost=self.cost)
+        finally:
+            self.active -= 1
+            self.cleaned.append(task.instance_id)  # stands in for removing the sandbox
+
+
+MANY = [f"r__r-{i}" for i in range(7)]
+MANY_ROWS = {i: {"problem_statement": f"fix {i}", "image": f"img/{i}"} for i in MANY}
+
+
+async def many(tmp_path, runner, **kw):
+    return await ra.run_batch(
+        MANY,
+        MANY_ROWS,
+        CFG,
+        tmp_path / "R",
+        "R",
+        runner,
+        git=GIT,
+        say=lambda *_: None,
+        **kw,
+    )
+
+
+async def test_tasks_run_side_by_side_but_never_more_than_the_workers(tmp_path):
+    runner = SlowRunner()
+    result = await many(tmp_path, runner, workers=3)
+    assert runner.peak == 3  # really parallel, and capped
+    assert sorted(result.ran) == MANY and not result.stopped_for_budget
+    preds = ra.read_jsonl(tmp_path / "R" / ra.PREDS)
+    assert (
+        sorted(p["instance_id"] for p in preds) == MANY
+    )  # every task once, whole rows
+    status = ra.read_jsonl(tmp_path / "R" / ra.STATUS)
+    assert {s["workers"] for s in status} == {3}
+    assert {m["workers"] for _, m in runner.calls} == {3}  # into every task's run_start
+
+
+async def test_one_failing_task_does_not_stop_the_others_in_parallel(tmp_path):
+    runner = SlowRunner(fail={"r__r-2", "r__r-5"})
+    result = await many(tmp_path, runner, workers=3)
+    assert sorted(result.ran) == MANY
+    status = {s["instance_id"]: s for s in ra.read_jsonl(tmp_path / "R" / ra.STATUS)}
+    assert status["r__r-2"]["fail_reason"] == "env_error"
+    assert status["r__r-0"]["fail_reason"] is None
+
+
+async def test_the_budget_counts_what_the_tasks_in_flight_are_expected_to_spend(
+    tmp_path,
+):
+    # 3.0 spent, stop line 8.0, each task expected (and actually) 2.0, 3 workers:
+    # starts r0 (3+0 < 8), r1 (3+2 < 8), r2 (3+4 < 8); r0 finishes first, r1 and r2 are still
+    # running: 3 + 2 (finished) + 4 (two in flight) = 9 >= 8, so r3 does not start. Without
+    # the reserves it would see 5 < 8 and start.
+    runner = SlowRunner(cost=2.0, delays={"r__r-0": 0.01, "r__r-1": 0.2, "r__r-2": 0.2})
+    result = await many(
+        tmp_path,
+        runner,
+        workers=3,
+        budget_total=10.0,
+        spent_before=3.0,
+        reserve_per_task=2.0,
+    )
+    assert result.stopped_for_budget
+    assert sorted(result.ran) == MANY[:3]
+    assert result.spent == pytest.approx(6.0)
+
+
+async def test_one_worker_checks_the_budget_as_the_sequential_runner_did(tmp_path):
+    # a reserve does not count for the task about to start, so it changes nothing here
+    runner = Runner(outcome(cost=3.0), outcome(cost=3.0), outcome(cost=3.0))
+    result = await batch(
+        tmp_path, runner, budget_total=10.0, spent_before=3.0, reserve_per_task=5.0
+    )
+    assert result.ran == IDS[:2] and result.stopped_for_budget
+
+
+async def test_cancelling_the_batch_cancels_and_cleans_up_every_task_in_flight(
+    tmp_path,
+):
+    import asyncio
+
+    runner = SlowRunner(delay=5.0)
+    job = asyncio.create_task(many(tmp_path, runner, workers=3))
+    await asyncio.sleep(0.05)
+    job.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await job
+    assert runner.active == 0 and sorted(runner.cleaned) == MANY[:3]
+    assert not (tmp_path / "R" / ra.PREDS).exists()  # nothing marked done
+
+
+def test_leftover_sandboxes_are_listed_by_their_label():
+    from harness.sandbox.docker_sandbox import LABEL
+
+    seen = {}
+
+    def list_(all, filters):
+        seen.update(all=all, filters=filters)
+        return [SimpleNamespace(name="harness-b"), SimpleNamespace(name="harness-a")]
+
+    client = SimpleNamespace(containers=SimpleNamespace(list=list_))
+    assert ra.leftover_sandboxes(client) == ["harness-a", "harness-b"]
+    assert seen == {"all": True, "filters": {"label": LABEL}}

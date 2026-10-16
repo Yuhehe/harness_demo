@@ -1,4 +1,4 @@
-"""Run the agent over a subset of SWE-bench Verified, one task after another.
+"""Run the agent over a subset of SWE-bench Verified, up to --workers tasks at a time.
 
     uv run python eval/swebench/run_agent.py --config configs/default.yaml \\
         --subset configs/subsets/dev_5.txt --run-id M0-dev
@@ -19,8 +19,15 @@ run_meta.json (which config and commit the run belongs to).
 * Before the first task: the images must be present (nothing is pulled here), the estimated
   and the worst-case cost are printed, and above 10 tasks you are asked to confirm
   (CLAUDE.md 2.5). The run stops by itself at 80% of MAX_TOTAL_COST_USD.
-* Sequential for now. --workers > 1 is a TODO; the safe number of sandboxes for this
-  machine is printed so the TODO is concrete.
+* Parallel with --workers N (default 1): one process, asyncio, at most N tasks in flight
+  (the harness is async throughout: Docker calls go through threads, LLM calls are async).
+  N above the safe number of sandboxes for this machine (each at its full memory and cpu
+  limits) is refused unless --force-workers. The worker count is recorded in every task's
+  run_start and status row: tasks running side by side compete for cpu and disk, so latency
+  is only comparable between runs with the same worker count.
+* The budget check counts the money tasks in flight are expected to spend: a new task starts
+  only while spent + (in flight x expected cost per task) is below 80%. The overshoot past
+  80% is at most what the tasks in flight actually spend.
 """
 
 from __future__ import annotations
@@ -32,6 +39,7 @@ import os
 import re
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -140,9 +148,9 @@ def done_ids(run_dir: Path, *, retry_env_errors: bool = False) -> set[str]:
 
 # ---- money ----------------------------------------------------------------------------------------------
 def spent_so_far(results_dir: Path) -> float:
-    """What this harness has already spent, summed over every finished trajectory under
-    results/runs/ (standard price). Does not include B0: mini-swe-agent's trajectories have
-    another format and are not read here."""
+    """What has already been spent, summed over every finished trajectory under results/runs/
+    (standard price). B0 counts once converted (run_b0.py writes a run_end with the cost);
+    a B0 run still in progress does not."""
     total = 0.0
     for run in results_dir.glob("*/trajectories"):
         for path in run.glob("*.jsonl"):
@@ -222,6 +230,29 @@ def missing_images(
     return out
 
 
+def leftover_sandboxes(client: Any) -> list[str]:
+    """Names of harness sandboxes still present. After an interruption a container that was
+    being created when the task was cancelled can be left behind (the sandbox never got
+    hold of it to remove it). They are listed, not removed: another run may own them."""
+    from harness.sandbox.docker_sandbox import LABEL
+
+    return sorted(
+        c.name for c in client.containers.list(all=True, filters={"label": LABEL})
+    )
+
+
+def check_workers(workers: int, cap: dict[str, Any], *, force: bool = False) -> None:
+    """At least one; above the safe number of sandboxes only when asked for explicitly."""
+    if workers < 1:
+        raise SystemExit(f"--workers {workers}: need at least 1")
+    if workers > cap["safe_max"] and not force:
+        raise SystemExit(
+            f"--workers {workers}: this machine can carry {cap['safe_max']} sandboxes at their "
+            f"limits (memory allows {cap['by_memory']}, cpus {cap['by_cpu']}; "
+            f"{cap['mem_gb']} GB, {cap['ncpu']} cpus). Pass --force-workers to go above it."
+        )
+
+
 # ---- the batch --------------------------------------------------------------------------------------------------
 @dataclass
 class BatchResult:
@@ -244,62 +275,100 @@ async def run_batch(
     budget_total: float | None = None,
     retry_env_errors: bool = False,
     say: Any = print,
+    workers: int = 1,
+    reserve_per_task: float = 0.0,
 ) -> BatchResult:
-    """Run every task of `ids` that is not done yet, one after another. `runner(task, image,
-    cfg, run_dir, run_id, meta)` returns a cli.RunOutcome; tests pass a fake."""
+    """Run every task of `ids` that is not done yet, at most `workers` at a time. `runner(task,
+    image, cfg, run_dir, run_id, meta)` returns a cli.RunOutcome; tests pass a fake.
+
+    A task starts only while what is spent plus `reserve_per_task` for each task in flight is
+    below 80% of the budget; the task about to start is not counted, so one worker behaves as
+    the sequential runner did. All of it runs on one event loop, so the check and the
+    reservation are not interleaved with a task finishing, and each output row is written
+    whole."""
     from harness.agent.state import Task
 
     done = done_ids(run_dir, retry_env_errors=retry_env_errors)
     skipped = [i for i in ids if i in done]
+    todo = [i for i in ids if i not in done]
     ran: list[str] = []
     spent = 0.0
-    for n, iid in enumerate((i for i in ids if i not in done), 1):
-        if budget_total and spent_before + spent >= STOP_AT_BUDGET * budget_total:
-            say(
-                f"stopping: ${spent_before + spent:.2f} spent is {STOP_AT_BUDGET:.0%} of "
-                f"MAX_TOTAL_COST_USD (${budget_total:.2f}); raise it or confirm to go on"
-            )
-            return BatchResult(ran, skipped, True, spent)
-        row = rows[iid]
-        started = time.monotonic()
-        status: dict[str, Any] = {"instance_id": iid}
+    reserved: dict[str, float] = {}
+    slots = asyncio.Semaphore(workers)
+
+    async def one(iid: str) -> None:
+        nonlocal spent
         try:
-            out = await runner(
-                Task(iid, row["problem_statement"]), row["image"], cfg, run_dir, run_id,
-                {"run_id": run_id, **git},
+            row = rows[iid]
+            started = time.monotonic()
+            status: dict[str, Any] = {"instance_id": iid, "workers": workers}
+            try:
+                out = await runner(
+                    Task(iid, row["problem_statement"]), row["image"], cfg, run_dir, run_id,
+                    {"run_id": run_id, **git, "workers": workers},
+                )  # fmt: skip
+            except Exception as e:  # noqa: BLE001 - one bad task must not end the batch
+                patch = ""
+                status |= {
+                    "fail_reason": "env_error",
+                    "submitted": False,
+                    "error": f"{type(e).__name__}: {e}"[:300],
+                    "cost_usd": 0.0,
+                }
+            else:
+                r = out.result
+                patch = r.patch
+                spent += r.metrics["cost_usd"]
+                status |= {
+                    "fail_reason": r.fail_reason.value if r.fail_reason else None,
+                    "submitted": r.submitted,
+                    "steps": r.metrics["steps"],
+                    "cost_usd": r.metrics["cost_usd"],
+                }
+            status["wall_seconds"] = round(time.monotonic() - started, 1)
+            # the row that marks the task done goes in last
+            append_jsonl(run_dir / STATUS, status)
+            append_jsonl(
+                run_dir / PREDS,
+                {"instance_id": iid, "model_name_or_path": cfg.llm.resolved_model(), "model_patch": patch},
             )  # fmt: skip
-        except Exception as e:  # noqa: BLE001 - one bad task must not end the batch
-            patch = ""
-            status |= {
-                "fail_reason": "env_error",
-                "submitted": False,
-                "error": f"{type(e).__name__}: {e}"[:300],
-                "cost_usd": 0.0,
-            }
-        else:
-            r = out.result
-            patch = r.patch
-            spent += r.metrics["cost_usd"]
-            status |= {
-                "fail_reason": r.fail_reason.value if r.fail_reason else None,
-                "submitted": r.submitted,
-                "steps": r.metrics["steps"],
-                "cost_usd": r.metrics["cost_usd"],
-            }
-        status["wall_seconds"] = round(time.monotonic() - started, 1)
-        # the row that marks the task done goes in last
-        append_jsonl(run_dir / STATUS, status)
-        append_jsonl(
-            run_dir / PREDS,
-            {"instance_id": iid, "model_name_or_path": cfg.llm.resolved_model(), "model_patch": patch},
-        )  # fmt: skip
-        ran.append(iid)
-        say(
-            f"[{n}] {iid}: {status['fail_reason'] or 'submitted'}"
-            f"  ${status['cost_usd']:.4f}  {status['wall_seconds']}s"
-            + (f"  ({status['error']})" if "error" in status else "")
-        )
-    return BatchResult(ran, skipped, False, spent)
+            ran.append(iid)
+            say(
+                f"[{len(ran)}/{len(todo)}] {iid}: {status['fail_reason'] or 'submitted'}"
+                f"  ${status['cost_usd']:.4f}  {status['wall_seconds']}s"
+                + (f"  ({status['error']})" if "error" in status else "")
+            )
+        finally:
+            reserved.pop(iid, None)
+            slots.release()
+
+    running: list[asyncio.Task] = []
+    stopped = False
+    try:
+        for iid in todo:
+            await slots.acquire()
+            committed = spent_before + spent + sum(reserved.values())
+            if budget_total and committed >= STOP_AT_BUDGET * budget_total:
+                slots.release()
+                stopped = True
+                say(
+                    f"stopping: ${spent_before + spent:.2f} spent and "
+                    f"${sum(reserved.values()):.2f} expected from the tasks in flight reach "
+                    f"{STOP_AT_BUDGET:.0%} of MAX_TOTAL_COST_USD (${budget_total:.2f}); "
+                    f"raise it or confirm to go on"
+                )
+                break
+            reserved[iid] = reserve_per_task
+            running.append(asyncio.create_task(one(iid)))
+        await asyncio.gather(*running)
+    except BaseException:
+        for (
+            t
+        ) in running:  # Ctrl-C: stop the others too; each sandbox removes its container
+            t.cancel()
+        await asyncio.gather(*running, return_exceptions=True)
+        raise
+    return BatchResult(ran, skipped, stopped, spent)
 
 
 # ---- command line -----------------------------------------------------------------------------------------------------
@@ -319,7 +388,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument("--run-id", required=True)
     ap.add_argument("--results-dir", type=Path, default=Path("results/runs"))
-    ap.add_argument("--workers", type=int, default=1, help="only 1 for now (TODO)")
+    ap.add_argument("--workers", type=int, default=1, help="tasks run at the same time")
+    ap.add_argument(
+        "--force-workers",
+        action="store_true",
+        help="allow more workers than the machine's safe number of sandboxes",
+    )
     ap.add_argument(
         "--yes",
         action="store_true",
@@ -354,12 +428,7 @@ async def _main(args: argparse.Namespace) -> int:
         cfg.sandbox.mem_limit,
         cfg.sandbox.cpus,
     )
-    if args.workers != 1:
-        raise SystemExit(
-            f"--workers {args.workers}: parallel runs are a TODO. This machine could carry "
-            f"{cap['safe_max']} sandboxes at their limits (memory allows {cap['by_memory']}, "
-            f"cpus {cap['by_cpu']}; {cap['mem_gb']} GB, {cap['ncpu']} cpus)."
-        )
+    check_workers(args.workers, cap, force=args.force_workers)
     git = _git_meta()
     if git["git_dirty"] and not args.allow_dirty:
         raise SystemExit(
@@ -390,19 +459,19 @@ async def _main(args: argparse.Namespace) -> int:
     spent_before = spent_so_far(args.results_dir)
     expected = f"${est.expected:.2f}" if est.expected is not None else "unknown"
     print(
-        f"run {args.run_id}: {len(ids)} tasks, {len(ids) - len(pending)} done, {est.pending} to run (sequential)"
+        f"run {args.run_id}: {len(ids)} tasks, {len(ids) - len(pending)} done, {est.pending} to run ({args.workers} at a time)"
     )
     print(f"  expected cost : {expected}  ({est.expected_source})")
     print(
         f"  worst case    : ${est.worst_case:.2f}  ({est.pending} x ${cfg.limits.max_cost_per_task_usd} per-task cap)"
     )
     print(
-        f"  budget        : ${spent_before:.2f} spent so far of ${budget:.2f} MAX_TOTAL_COST_USD (B0 runs are not counted)"
+        f"  budget        : ${spent_before:.2f} spent so far of ${budget:.2f} MAX_TOTAL_COST_USD (B0 counted once converted); stops starting tasks at {STOP_AT_BUDGET:.0%}, may pass it by what the {args.workers} task(s) in flight spend"
         if budget
         else "  budget        : MAX_TOTAL_COST_USD is not set"
     )
     print(
-        f"  sandboxes     : up to {cap['safe_max']} could run at once on this machine; running 1"
+        f"  sandboxes     : up to {cap['safe_max']} could run at once on this machine; running {args.workers}"
     )
     if not pending:
         print("nothing to run")
@@ -418,10 +487,25 @@ async def _main(args: argparse.Namespace) -> int:
             task, image, cfg_, run_dir_, run_id, docker_client=client, meta=meta_
         )
 
-    result = await run_batch(
-        ids, rows, cfg, run_dir, args.run_id, runner,
-        git=git, spent_before=spent_before, budget_total=budget, retry_env_errors=args.retry_env_errors,
-    )  # fmt: skip
+    # each task may hold a thread for a whole command (up to bash_timeout_s)
+    asyncio.get_running_loop().set_default_executor(
+        ThreadPoolExecutor(max_workers=max(16, 4 * args.workers + 4))
+    )
+    try:
+        result = await run_batch(
+            ids, rows, cfg, run_dir, args.run_id, runner,
+            git=git, spent_before=spent_before, budget_total=budget, retry_env_errors=args.retry_env_errors,
+            workers=args.workers,
+            reserve_per_task=est.expected / est.pending if est.expected else cfg.limits.max_cost_per_task_usd,
+        )  # fmt: skip
+    except BaseException:
+        left = leftover_sandboxes(client)
+        if left:
+            print(
+                f"interrupted; harness sandboxes still present (not removed, another run may "
+                f"own them): {left}\n  remove with: docker rm -f {' '.join(left)}"
+            )
+        raise
     from aggregate import aggregate
 
     metrics = aggregate(load_run(run_dir))

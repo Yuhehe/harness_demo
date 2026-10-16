@@ -419,3 +419,29 @@ def b0_load(path):
     from harness.config import load_config
 
     return load_config(path)
+
+
+# ---- workers and the budget -----------------------------------------------------------------------
+def test_the_worker_count_goes_to_mini_swe_agent():
+    cmd = b0.command(MAIN, ["a__a-1"], Path("out"), Path("mini-extra"), workers=3)
+    assert cmd[cmd.index("-w") + 1] == "3"
+    cmd = b0.command(MAIN, ["a__a-1"], Path("out"), Path("mini-extra"))
+    assert cmd[cmd.index("-w") + 1] == "1"
+
+
+def test_b0_does_not_start_past_eighty_percent_of_the_budget(mini_output, monkeypatch):
+    run, _ = mini_output
+    spent_run = run.parent / "OLD" / "trajectories"
+    spent_run.mkdir(parents=True)
+    (spent_run / "x.jsonl").write_text(
+        json.dumps({"type": "run_end", "cost_usd": 8.5}) + "\n"
+    )
+    monkeypatch.setenv("MAX_TOTAL_COST_USD", "10")
+    calls = []
+    with pytest.raises(SystemExit, match="80%"):
+        _go(_run_argv(run.parent), calls, CLEAN)
+    assert not calls  # mini-swe-agent is not started
+    monkeypatch.setenv("MAX_TOTAL_COST_USD", "20")
+    _go(_run_argv(run.parent, "--workers", "2"), calls, CLEAN)
+    assert calls and calls[0][calls[0].index("-w") + 1] == "2"
+    assert json.loads((run / "run_meta.json").read_text())["workers"] == 2
