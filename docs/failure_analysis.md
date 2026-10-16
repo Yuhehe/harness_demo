@@ -57,3 +57,17 @@ M0 和 B0 没解决的是**同样 3 道题**：`django__django-11087`、`scikit-
 **更正后的归类**：这两题是**模型的做法选择**（参照仓库惯例 / 选择最朴素的实现），而且**每次运行会变**；不是题目本身的问题。django-11087 的归类不变（需求理解不完整）。三题仍然都不是 harness 的问题。
 
 **教训**：只凭一次运行的失败给题目下"题目有问题"的结论不可靠；同一配置多跑一次，就可能得到不同结果。
+
+## 归属标注（机器可读，`eval/report/failure_taxonomy.py` 读这张表）
+
+每行一个"运行 × 未解决的题"，归属只能是 `harness`、`model`、`task` 之一；依据指向上文的分析。没有出现在表里的失败题，脚本记为 `unlabelled`。
+
+| run_id | instance_id | 归属 | 依据 |
+|---|---|---|---|
+| M0 | django__django-11087 | model | 需求理解不完整：漏了被 `to_field` 引用的字段 |
+| M0 | scikit-learn__scikit-learn-14983 | model | 做法选择：照抄题目示例而没有复用 `_build_repr`（更正后的归类） |
+| M0 | sphinx-doc__sphinx-9602 | model | 做法选择：把字面值包成带格式的节点（更正后的归类） |
+| B0 | django__django-11087 | model | 同 M0，离参考补丁更远 |
+| B0 | scikit-learn__scikit-learn-14983 | model | 同 M0（更正后的归类） |
+| B0 | sphinx-doc__sphinx-9602 | model | 同 M0（更正后的归类） |
+| M0-r2 | django__django-11087 | model | 重跑仍未解决，归类不变 |

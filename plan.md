@@ -221,11 +221,11 @@
   - 两个都超过 10 题，各自打印预计花费并等你确认；M0 和 B0 依次跑，不同时跑（内存只够 3 个沙箱）
 
 **2. 分析与结果表（零花费，可以和运行并行）**
-- [~] 给 M0 和 B0 判分，用 `failure_taxonomy.py` 生成失败分类（2026-10-16：判分已完成（`score.py`，M0、B0、M0-r2）；**`failure_taxonomy.py` 还没写**，离线卡死检测也放在这里，见 `docs/notes.md` §23.2 第 4 条）
-  - 失败分类复用 `aggregate._taxonomy`，不另写一份；再加上判分细节（目标测试没过 / 回归 / 部分通过），并入 `docs/failure_analysis.md` 里人工标注的归属（harness / 模型 / 题目）
+- [x] 给 M0 和 B0 判分，用 `failure_taxonomy.py` 生成失败分类（2026-10-16：判分已完成（`score.py`，M0、B0、M0-r2）；`failure_taxonomy.py` 已完成，输出 `results/runs/<id>/failure_taxonomy.json`，在 M0、B0、M0-r2 上的结果与人工分析一致（失败都是 `submitted_but_failed` / `target_fail` / 归属 `model`；没有卡死嫌疑；M0 的 2 次拦截都对得上）。离线卡死检测也放在这里，见 `docs/notes.md` §23.2 第 4 条）
+  - 失败分类复用 `aggregate.py` 的分类逻辑（抽成 `end_category`，`fail_taxonomy` 指标和本脚本共用，重算 M0、B0、M0-r2 等的 `fail_taxonomy` 与原 `metrics.json` 一致），不另写一份；人工归属写在 `docs/failure_analysis.md` 末尾的"归属标注"表里（机器可读）；再加上判分细节（目标测试没过 / 回归 / 部分通过），并入 `docs/failure_analysis.md` 里人工标注的归属（harness / 模型 / 题目）
   - 卡死检测只做最简单的版本：在一个窗口里查相同的（工具, 参数）是否重复出现。它只是信号，不是判决；现有数据里没有打转的失败，等 A6 跑完再评估
-  - 写单元测试，并做变异检查
-- [ ] `eval/report/make_tables.py` 最小版（从第 5 天提前，因为本日验收要生成 M0 / B0 的结果表，而 CLAUDE.md §2.3 规定数字只能由它生成）：只做主比较这一张表，写进 `results/summary/main.md` 和 README 的 `RESULTS:MAIN` 标记之间；表上标明子集；50 题那一列在 ① 跑完之前保留 `{{TBD}}`
+  - 写单元测试，并做变异检查（2026-10-16：21 个测试；11 个变异体全部被抓到，其中 1 个第一次存活：测试数据里没有 `allow` 判定，已补）
+- [x] `eval/report/make_tables.py` 最小版（2026-10-16 完成：从轨迹和判分结果重新汇总（不读可能过时的 `metrics.json`），写 `results/summary/main.json`（数字和出处：运行、提交、配置哈希、模型、worker 数）、`main.md` 和 README 的 `RESULTS:MAIN`；两个运行的题目不一致、未判分、有未完成的题都拒绝生成；`--check` 只核对不写入。表中数字与 `docs/dev_log.md` 手抄的一致。14 个测试；10 个变异体全部被抓到，其中 1 个第一次存活：只测了题数不同、没测题数相同但题目不同，已补。从第 5 天提前，因为本日验收要生成 M0 / B0 的结果表，而 CLAUDE.md §2.3 规定数字只能由它生成）：只做主比较这一张表，写进 `results/summary/main.md` 和 README 的 `RESULTS:MAIN` 标记之间；表上标明子集；50 题那一列在 ① 跑完之前保留 `{{TBD}}`
 - [x] 人工看失败轨迹，写进 `docs/failure_analysis.md`（2026-10-16：verified_25 上 M0 和 B0 都只失败 3 题且是同样 3 题，全部看了；都不是 harness 的问题。~~2 题是题目或测试的问题~~，**已更正**：M0-r2 重跑时这 2 题（scikit-learn-14983、sphinx-9602）都解决了，改归为"模型的做法选择，每次运行会变"；1 题（django-11087）是模型对需求理解不完整。原文：人工看 5 条失败轨迹，写进 `docs/failure_analysis.md`：是什么现象、根因、是 harness 的问题还是模型的问题）
 - [ ] 如果发现 harness 的 bug：修复 → 打 `v0.2-frozen` → 在 `results/CHANGELOG.md` 记录 → **重跑 M0**（约 $4.3，要算进预算；A6 压缩最多，最可能暴露问题）
 
@@ -233,7 +233,7 @@
 - [ ] A2 `bash_only`：检验 M0 多出来的调用是不是来自 `view`（`docs/notes.md` §23.2 第 9 条）
 - [ ] A6 `budget_32k` 和 A6×A1 `budget_32k_none`：32k 下压缩能否防止溢出、代价多大（主指标 `overflow_rate`，§22.2）；简历第二条依赖这一组
 - [ ] （③，预算允许再跑）A1 `ctx_none`、A5 `no_planning`、A3 `ctx_truncate`、A4 `ctx_summarize`
-- 每个配置的做法：在冻结 worktree 里 `--workers 3` 跑 → `score.py` 判分 → `aggregate.py --baseline <配对基准>` → 按 §22.2 事先定的主指标判定 → 阶段性数字记进 `docs/dev_log.md` 并注明出处；延迟只描述，不下结论（§22.9）
+- 每个配置的做法：在冻结 worktree 里 `--workers 3` 跑 → `score.py` 判分 → `aggregate.py --paired M0-r2`（逐题配对；`--baseline` 是另一种比较：只看发生过压缩的题、在同一步数处比重复率，A6 用 `--baseline` 对不压缩的运行）→ `failure_taxonomy.py` → 按 §22.2 事先定的主指标判定 → 阶段性数字记进 `docs/dev_log.md` 并注明出处；延迟只描述，不下结论（§22.9）
 - A6 跑完后，顺带看"后续 TODO"里的摘要档位过渡区和 `tail_cap` 的依据
 - 原条目"按 P0、P1 的顺序跑消融实验 A1–A6（可以通宵并行）"按上面的顺序替代；"通宵并行"指一次一个配置、3 个 worker
 
@@ -270,7 +270,7 @@
 
 ## 第 5 天：出结果、写 README、写简历条目
 
-- [ ] `make_tables.py`：生成主实验、消融、安全、成本四张表，写入 README 的标记区之间（安全表在没做注入评测时只有误拦率一栏，README 的 `RESULTS:SECURITY` 模板到时按此改）
+- [ ] `make_tables.py`：生成主实验、消融、安全、成本四张表（主实验表的最小版已在第 3 天完成；其余三张待做），写入 README 的标记区之间（安全表在没做注入评测时只有误拦率一栏，README 的 `RESULTS:SECURITY` 模板到时按此改）
 - [ ] `plots.py`：两张图，保存到 `docs/img/`
   - 成本 vs 解决率散点图（每个配置一个点，基线也画进去）
   - 各配置的失败分类堆叠条形图
@@ -733,3 +733,4 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - **镜像状态（2026-10-16 核对）**：`verified_50` 剩下 25 个镜像已拉完（提交 `d45881d` 记录），`status.json` 中 55 个都是 `done` 且核对通过，`docker images` 里一个不缺，可用磁盘 93GB。第 0 天、第 2 天里过时的"镜像未拉"已更新；第 3 天的 ① 不再被卡住，计划相应更新：新增"补齐 50 题用几个 worker"一项待决定；子集一项改为两种都可选；验收加上"M0 和 B0 在 verified_50 上跑完并判分"。
 - **零花费检查（2026-10-16）**：冻结 worktree 在 `v0.1.1`、干净，`configs` 和 `src` 与 tag 无差异，两边 `.env` 相同；`.env` 改为 600；超时校准记入第 0 天；B0 文档的过时子项勾掉；`resolved.json` 约定判定为不进 CLAUDE.md。
 - **你的决定（2026-10-16）**：剩下 25 题先不跑；先完成 `failure_taxonomy.py` 和 `make_tables.py` 的最小版，验证后在 verified_25 上跑 A2 和 A6（`budget_32k`），预算问题暂不考虑。
+- `failure_taxonomy.py`、`make_tables.py` 最小版完成（见第 3 天任务 2）；`aggregate.py` 抽出 `end_category`，重算的指标与原 `metrics.json` 一致；`docs/failure_analysis.md` 加了机器可读的归属表；README 的主比较表由脚本生成（verified_25）。全套测试 598 通过、1 跳过；ruff 通过。另更正第 3 天消融流程的写法：逐题配对用 `aggregate.py --paired`，不是 `--baseline`。

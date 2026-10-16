@@ -621,29 +621,37 @@ def _share(part: float, whole: float) -> float | None:
     return part / whole if whole else None
 
 
+def end_category(
+    instance_id: str,
+    fail_reason: str | None,
+    resolved: set[str] | None,
+    score: dict[str, Any] | None = None,
+) -> str:
+    """How one run ended: its FailReason, `submitted`, or for a submitted run the scorer did not
+    resolve `submitted_but_failed`. With the scorer's verdicts (`score`), a submitted run the
+    scorer could not judge is `scoring_error` or `submitted_empty_patch`, not
+    `submitted_but_failed`: a broken scoring environment is not the model's failure."""
+    key = fail_reason or "submitted"
+    if key != "submitted" or resolved is None or instance_id in resolved:
+        return key
+    score = score or {}
+    if instance_id in set(score.get("empty_patch", [])):
+        return "submitted_empty_patch"
+    for name in ("error", "infra_failure", "ambiguous_failure", "incomplete"):
+        if instance_id in set(score.get(name, [])):
+            return "scoring_error"
+    return "submitted_but_failed"
+
+
 def _taxonomy(
     rows: list[dict[str, Any]],
     resolved: set[str] | None,
-    score: dict[str, list[str]] | None = None,
+    score: dict[str, Any] | None = None,
 ) -> dict[str, int]:
-    """Count the runs by how they ended. With the scorer's verdicts (`score`), a submitted run
-    the scorer could not judge is `scoring_error` or `submitted_empty_patch`, not
-    `submitted_but_failed`: a broken scoring environment is not the model's failure."""
-    broken: set[str] = set()
-    empty: set[str] = set()
-    if score:
-        for name in ("error", "infra_failure", "ambiguous_failure", "incomplete"):
-            broken |= set(score.get(name, []))
-        empty = set(score.get("empty_patch", []))
+    """Count the runs by how they ended (`end_category`)."""
     counts: dict[str, int] = {}
     for r in rows:
-        iid, key = r["instance_id"], r["fail_reason"] or "submitted"
-        if key == "submitted" and resolved is not None and iid not in resolved:
-            key = "submitted_but_failed"
-            if iid in empty:
-                key = "submitted_empty_patch"
-            elif iid in broken:
-                key = "scoring_error"
+        key = end_category(r["instance_id"], r["fail_reason"], resolved, score)
         counts[key] = counts.get(key, 0) + 1
     return counts
 

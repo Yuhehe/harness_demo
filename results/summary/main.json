@@ -1,0 +1,132 @@
+{
+  "paired": {
+    "cost_usd": {
+      "ci95": [
+        1.1889908963551723,
+        1.526134858977969
+      ],
+      "median_ratio": 1.3400943070010405,
+      "n": 25,
+      "other_higher": 20
+    },
+    "resolved": {
+      "both": 22,
+      "only_base": 0,
+      "only_other": 0,
+      "sign_test_p": 1.0
+    },
+    "steps": {
+      "ci95": [
+        1.2325581395348837,
+        1.510204081632653
+      ],
+      "median_ratio": 1.4210526315789473,
+      "n": 25,
+      "other_higher": 21
+    },
+    "tasks": 25,
+    "wall_seconds": {
+      "ci95": [
+        1.3220839485340643,
+        1.6738867620390894
+      ],
+      "median_ratio": 1.495596847109391,
+      "n": 25,
+      "other_higher": 22
+    }
+  },
+  "subset": "verified_25",
+  "systems": [
+    {
+      "cache_hit_rate": 0.9816383535992955,
+      "cost_per_resolved": 0.198344116,
+      "cost_per_task": {
+        "mean": 0.17454282208,
+        "p50": 0.08721838400000001
+      },
+      "fail_taxonomy": {
+        "submitted": 22,
+        "submitted_but_failed": 3
+      },
+      "latency": {
+        "p50": 216.312,
+        "p95": 888.2426
+      },
+      "name": "harness-lab",
+      "provenance": {
+        "config_hashes": [
+          "6ea20eaecc69"
+        ],
+        "git_commits": [
+          "ff11f3bdcf03bf4bfb6530a672fbd5a2fceb5245"
+        ],
+        "models": [
+          "deepseek/deepseek-v4-pro"
+        ],
+        "workers": [
+          1
+        ]
+      },
+      "resolve_rate": {
+        "n": 25,
+        "rate": 0.88,
+        "resolved": 22,
+        "wilson95": [
+          0.7004380781662651,
+          0.9583325864293191
+        ]
+      },
+      "role": "main",
+      "run_id": "M0",
+      "steps_mean": 48.52,
+      "tokens_in_mean": 1560511.48,
+      "tokens_out_mean": 17504.64
+    },
+    {
+      "cache_hit_rate": 0.9725583122664937,
+      "cost_per_resolved": 0.143432504,
+      "cost_per_task": {
+        "mean": 0.12622060352,
+        "p50": 0.10675640800000002
+      },
+      "fail_taxonomy": {
+        "submitted": 22,
+        "submitted_but_failed": 3
+      },
+      "latency": {
+        "p50": 197.011,
+        "p95": 622.8057999999996
+      },
+      "name": "mini-SWE-agent",
+      "provenance": {
+        "config_hashes": [
+          "6ea20eaecc69"
+        ],
+        "git_commits": [
+          "ff11f3bdcf03bf4bfb6530a672fbd5a2fceb5245"
+        ],
+        "models": [
+          "deepseek/deepseek-v4-pro"
+        ],
+        "workers": [
+          1
+        ]
+      },
+      "resolve_rate": {
+        "n": 25,
+        "rate": 0.88,
+        "resolved": 22,
+        "wilson95": [
+          0.7004380781662651,
+          0.9583325864293191
+        ]
+      },
+      "role": "baseline",
+      "run_id": "B0",
+      "steps_mean": 36.48,
+      "tokens_in_mean": 893980.0,
+      "tokens_out_mean": 14035.92
+    }
+  ],
+  "tasks": 25
+}
