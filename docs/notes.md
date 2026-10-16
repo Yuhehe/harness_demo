@@ -928,3 +928,117 @@ A−B = C−D = 492：**回传的推理全部计入**，不管后面有没有新
 - 例外：`M0` 在 verified_25 上的第一次运行是在主目录里启动的，当时主目录正好就在 tag 的提交 `ff11f3b` 上、工作区干净（`run_meta.json` 有记录），等价于在 tag 上跑。
 
 **B0 的续跑（2026-10-15 核实，mini-swe-agent 2.4.6，`minisweagent/run/benchmarks/swebench.py` 第 212–232 行）**：默认会跳过 `preds.json` 里已经有结果的题（加 `--redo-existing` 才重做）。所以 B0 可以用同一个 run-id 先跑 verified_25、以后再用 verified_50 补齐另外 25 题；`run_b0.py convert` 每次读完整的 `preds.json`，不受影响。M0 的续跑由 `run_agent.py` 按 `instance_id` 跳过已完成的题。
+
+## 22. 与主流 harness 的差距（2026-10-15，读源码核实）
+
+版本：SWE-agent `3ea751c`、OpenHands SDK `11d82b2`（software-agent-sdk）、Aider `5dc9490`、Codex `5fff637`、mini-swe-agent 2.4.6（本机 `.venv`）；Claude Code 闭源，依据官方文档 `code.claude.com/docs/en/tools-reference` 的 "Bash tool behavior" 一节（2026-10-15 抓取）。上下文压缩的对比见 §12、§20.1，这里不重复。
+
+**比较的口径**：本项目要交付的是可信的实验结论，不是产品（CLAUDE.md §1、§2.7）。所以差距分两类：A 类影响实验结论或它的解释力，B 类是按范围不做的产品功能。
+
+### 22.1 逐项核实
+
+| 方面 | 本项目 | 主流做法（依据） |
+|---|---|---|
+| shell 状态 | 每次 bash 都是新 shell，`cd` 和环境变量都不保留（`agent/prompts.py` 的 system prompt 写明） | **SWE-agent**：一个持久 bash 会话（`sweagent/environment/swe_env.py:185-186` `CreateBashSessionRequest`，命令经 `run_in_session` 执行，`:221`）。**OpenHands**：持久终端会话，默认用 tmux（`openhands-tools/.../terminal/definition.py:1`、`terminal/tmux_terminal.py`），可 `reset` 重建。**Claude Code**：每条命令是独立进程，但 `cd` 在项目目录内会延续；**环境变量不保留**。**mini-swe-agent**：每个动作一次独立的 `docker exec`（`environments/docker.py:101-123`），和本项目一样无状态 |
+| 编辑后的语法检查 | 无 | **说法更正**：我之前说"SWE-agent 编辑后先 lint，改出语法错误就拒绝"，只对旧配置成立。SWE-agent 当前默认配置（`config/default.yaml` 用 `tools/edit_anthropic`）的 `USE_LINTER` 默认是 `false`（`tools/edit_anthropic/bin/str_replace_editor:33`），开了也只是"已应用，但 linter 发现语法错误"的警告（`:36-38`）；**拒绝并回滚**的是 `tools/windowed_edit_linting`（`bin/edit:95-120`，flake8），只在 `config/sweagent_0_7/*.yaml` 里启用。**OpenHands SDK**：编辑器的 docstring 提到 `enable_linting`（`file_editor/editor.py:192`），但代码里没有实现。**Aider**：`--auto-lint` 默认开（`aider/args.py:543-546`） |
+| 编辑命令 | `view`、`str_replace` | SWE-agent `edit_anthropic` 和 OpenHands `file_editor` 都是 `view / create / str_replace / insert / undo_edit`（`tools/edit_anthropic/config.yaml:24`；`file_editor/definition.py:26`） |
+| 卡死检测 | 只有步数上限，以及连续 3 次格式错误或纯文字回复时终止 | **OpenHands**：`StuckDetector`（`openhands-sdk/.../conversation/stuck_detector.py`），默认开（`local_conversation.py:222`），在最近 20 个事件里查 5 种模式：相同的动作-观察重复 4 次、动作-错误重复 3 次、无用户输入的独白 3 次、交替模式 6 次、上下文窗口错误（阈值见 `conversation/types.py:150-160`）；命中后状态设为 `STUCK`，运行停止（`local_conversation.py:769-772`）；动作-错误连续出现时先提醒一次（`:752`） |
+| 提交前自检 | `submit` 直接结束 | **SWE-agent** 默认的 `review_on_submit_m`：第一次 `submit` 不结束，而是回一段复查清单（重跑复现脚本、删掉临时脚本、还原改过的测试文件）并附上当前 diff，再次 `submit` 才结束（`tools/review_on_submit_m/bin/submit:34-40`，清单在 `config/default.yaml` 的 `SUBMIT_REVIEW_MESSAGES`） |
+| 代码库索引 | 只有 grep 搜索（镜像里没有 `rg`） | **Aider** 有仓库地图：tree-sitter 抽取符号（`aider/repomap.py:19`），networkx 做排序（`:368`） |
+| 权限与沙箱 | 正则匹配命令文本 + Docker（断网、资源上限）；`ask` 在批量运行里按 `deny` | **Codex**：OS 级沙箱，Linux 上是 `no_new_privs` + seccomp + bubblewrap（`codex-rs/linux-sandbox/src/lib.rs:1-5`），macOS 上是 Seatbelt；沙箱策略 `ReadOnly / WorkspaceWrite / DangerFullAccess`（`protocol/src/protocol.rs:1181-1207`）；审批策略 `UnlessTrusted / OnRequest / Never`，另有细粒度配置（`:1100-1117`） |
+| 并行评测 | 顺序运行，`--workers` 大于 1 报错（`eval/swebench/run_agent.py:357`） | mini-swe-agent 的 `swebench` 批量命令有 `--workers`（§4） |
+
+### 22.2 A 类：影响实验或结论
+
+1. **shell 无状态**：M0 和 B0 都无状态，二者的对比是公平的；和 SWE-agent、OpenHands 的公开数字并列时要说明这一点。
+2. **编辑后不检查语法**：只有 Aider 默认开 lint，SWE-agent 当前默认不开，OpenHands 没有实现，所以**这不是主流的默认做法**。它可以作为一个消融因素，但不在当前矩阵里。
+3. **编辑命令少**：A2（bash_only 对 tools）比较的是"bash"和"bash + 精简的编辑工具集"，写结论时要说明工具集的具体范围。
+4. **没有卡死检测**：M0 里有 89 步、106 步的题。失败分类里如果出现"原地打转耗尽步数"，这是 harness 层面可以改的地方；`post_compaction_repeat_rate` 只统计压缩之后，覆盖不到这种情况。
+5. **没有提交前自检**：SWE-agent 默认有。模型提交时留下的临时脚本会进补丁（我们的 prompt 里只是让模型自己删）。
+6. **上下文策略在 128k 下基本不起作用**：M0 的前 21 题没有触发过一次压缩。论文里"遮蔽把成本减半"来自每一轮都生效的窗口（§12.3），本项目的 `truncate` 只在越过水位线时才触发。
+7. **压缩后不核对大小，也没有防抖动**：Aider 压缩后实测，超了就递归再摘要；Claude Code 有 `thrashing` 检测（§20.1.1）。主要影响 A6（32k）。
+8. **只能顺序运行**：影响进度，不影响结论。
+
+以上凡是改 harness 行为的项，在 `v0.1-frozen` 之后做都要换 tag，并重跑受影响的配置（CLAUDE.md §2.4）。建议先看 M0 的失败分析，确认有没有对应的失败模式，再决定做不做。
+
+### 22.3 B 类：按范围不做（README 的"局限性"里写明即可）
+
+交互确认和审批模式（CLI 的 `ask` 尚未实现）、项目记忆文件（CLAUDE.md / AGENTS.md）、仓库地图、子 agent、MCP / hooks / skills 等扩展机制、流式输出（CLAUDE.md §5.1 的决定）、多模型路由（只有摘要用便宜模型）、OS 级沙箱和审批策略。
+
+### 22.4 本项目做得比主流多的地方（README 可用）
+
+- 可回读的截断：完整输出落盘，在结果里注明路径（OpenHands 有类似做法，§20.1.1）
+- 压缩前预估摘要大小并预留空间（主流实现都不做，§20.1）
+- 摘要后由代码拼接状态块（思路同 Claude Code 的"重读最近修改的文件"）
+- 可复现性：`config_hash`、`git_dirty`、价格表哈希、回放模型
+- 成本口径：固定标准价，不受错峰定价影响
+- 重试分类和失败尝试的统计比通用 harness 更细
+
+## 22. harness 的评判标准（2026-10-16 记录，**只记录，尚未实施**；在跑消融之前写下，作为事先登记的判定规则）
+
+这里只写方法，不写结果（CLAUDE.md §2.3：数字只能由 `make_tables.py` 从 `results/` 生成）。项目要交付的是可信的结论，所以标准分两类：harness 好不好（一到四），结论能不能信（五、六）。
+
+### 22.1 主比较：M0 对 B0（同一模型、同一批题、同样的限制）
+
+| 维度 | 指标（CLAUDE.md §6） | 判定 |
+|---|---|---|
+| 主指标：解决问题 | `resolve_rate` + 95% Wilson 区间 | 逐题配对，只看一方解决的分歧题，双侧精确检验（例：分歧题至少 6 道且全部偏向同一方，p 才 < 0.05）；不显著就报"无法区分"并给区间 |
+| 成本 | `cost_per_task`（均值、P50） | 逐题花费比值的中位数 + bootstrap 95% 区间；区间不含 1 才说更贵 / 更便宜 |
+| 速度 | `latency`（P50 / P95）、`steps` | 同上，按配对比值判定 |
+| 效率来源 | `tokens_in/out/cached`、`cache_hit_rate` | 用来解释成本差别，不单独下结论 |
+
+### 22.2 消融：每次一个因素，与 M0 同题配对；每组事先指定主问题和主指标
+
+| 配置 | 主问题 | 主指标 | 辅助指标 |
+|---|---|---|---|
+| A1 / A3 / A4（128k 下的上下文策略） | 128k 下策略有没有差别 | 先看是否发生过压缩；没有就结论为"128k 下策略不起作用" | `resolve_rate`、`cost_per_task` |
+| A6 及 A6 + 不压缩（32k） | 上下文紧张时压缩能否防止溢出、代价多大 | `overflow_rate` | `resolve_rate`、`steps_after_compaction`、`post_compaction_repeat_rate`（与不压缩的运行在同一步数处比）、`summary_file_recall`、`compaction_cost_share`、`cache_hit_rate` |
+| A2（只用 bash） | 专用工具是否让步数和成本变多 | `steps`、`cost_per_task` | `resolve_rate` |
+| A5（不做规划） | 规划有没有用 | `resolve_rate` | `steps` |
+
+### 22.3 可靠性（门槛，不和 B0 比；出现就必须解释并记录）
+
+基础设施故障（`env_error`、判分出错、空补丁）；格式错误、输出截断、纯文字回复终止；失败重试（`failed_attempts`、`retry_rate`）；估计误差导致的溢出；`monitoring` 里的比例异常、摘要超出预计、跳过的压缩。
+
+### 22.4 安全
+
+`ASR`（权限层开和关，20 个用例，直接报计数）；`utility_under_attack`（开权限层时良性任务完成率不能明显下降）；`false_block_rate`（从 M0 轨迹统计，每次拦截人工复核）。
+
+### 22.5 可信度（是 / 否）
+
+同一个冻结 tag、配置哈希一致、`run_start` 记录提交号；报告数字全部由 `make_tables.py` 生成；冻结后修 bug 则重跑受影响配置并记入 `results/CHANGELOG.md`；每道失败题归类为 harness / 模型 / 题目的问题（`docs/failure_analysis.md`）。
+
+### 22.6 交付验收
+
+plan §0 的最低标准，以及第 4 天的服务和 CI 验收。
+
+### 22.7 补充的遗漏项（2026-10-16）
+
+| # | 内容 | 用途 | 做法 |
+|---|---|---|---|
+| 1 | 同一配置重复运行的随机波动 | 判断其他差别是不是噪声的基准 | 至少把 M0 在 verified_25 上重跑一次；统计每题解决情况翻转的比例、成本和步数的变化幅度 |
+| 2 | 按仓库和难度分层 | 防止整体数字被某一类题主导 | 解决率、成本按仓库和数据集的难度标签分组报告（只描述） |
+| 3 | 回归率；目标测试部分通过 | 区分"没改对"和"改坏了别的" | 有 `PASS_TO_PASS` 失败的题的比例；`FAIL_TO_PASS` 部分通过的情况 |
+| 4 | 补丁是否干净 | 临时文件、改测试文件会被一起提交 | 补丁是否改了测试文件、是否带临时文件、改动的文件数和行数 |
+| 5 | 每解决一题的成本 `cost_per_resolved` | 比每题成本更公平的性价比指标 | 总花费 / 解决题数 |
+| 6 | 耗时拆分 | 区分模型慢、命令慢、harness 自身开销 | 耗时拆成模型调用、工具执行、harness 自身 |
+| 7 | 多重比较 | 比得多总会碰巧显著 | 只对每组的主指标做判定，其余标为探索性 |
+
+### 22.8 与 Codex CLI 对比的前提（**用户决定：放在最后**，按 plan 属可选任务 B1）
+
+条件对不齐时，Codex 的结果只能作外部参考，不能把差别归因于 harness。
+
+**条件对齐**
+- 同一模型：Codex 默认用 OpenAI 的模型；能否通过自定义服务商接入 DeepSeek，**待核实**。
+- 命令在题目容器里执行：Codex 默认在本机执行命令，且自身要联网调模型，而题目容器断网；装进容器并联网（隔离条件就和 M0、B0 不同），或在本机运行、把命令转进容器（是否支持**待核实**）。
+- 同样的限制：`codex exec` 的命令行**没有步数上限和成本上限选项**（2026-10-16 核实 `codex-rs/exec/src/cli.rs`，提交 `e790ce2`），只能外部限墙钟、超时杀进程。
+- 同样的上下文预算：Codex 按模型完整窗口在 90% 时自动压缩；M0 人为限为 128k。需记录并说明。
+- 版本固定：Codex 版本、`--ignore-user-config`、思考强度。
+
+**口径要统一的指标**
+- 步数：`codex exec --json` 的事件（`exec_events.rs`）里没有模型调用次数，用量按"轮"汇总（`turn.completed` 的 `usage`：输入、缓存命中输入、缓存写入、输出、推理输出），一个任务通常一轮。三方对比改用**工具调用次数（按类型）**和 token 总量；"模型调用次数"只在 M0 和 B0 之间比。
+- 成本：三方都按记录的 token 用我们的价格表重算（Codex 多一项缓存写入，DeepSeek 不单独收费）。
+- 失败分类：`turn.failed`、超时被杀、没改代码等映射到我们的失败原因，映射不了的单独列。
+- 压缩：从事件里统计压缩次数（事件里能否看到，**待核实**）。
+- 耗时：三方统一用外部计时的墙钟。
+- 新增：工具调用次数（按类型），以及 22.7 的 #3、#4、#5。

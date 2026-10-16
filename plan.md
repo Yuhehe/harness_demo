@@ -658,3 +658,4 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 ### 2026-10-16
 
 - 失败分析（`docs/failure_analysis.md`）：M0 与 B0 在 verified_25 上失败的是同样 3 题，两边都是"目标测试失败、没有回归"。scikit-learn-14983：题目给的期望输出与隐藏测试冲突（参数顺序）；sphinx-9602：功能正确，但测试检查节点类型这一实现细节；django-11087：两边都没想到要保留被 `to_field` 引用的字段（M0 更接近参考补丁）。都不是 harness 的问题，不需要修 harness、不需要打 v0.2
+- **你的决定（2026-10-16）**：harness 的评判标准与补充的遗漏项记入 `docs/notes.md` §22（只记录，尚未实施）；与 Codex CLI 的对比放在最后（plan 里的可选任务 B1），前提和要统一的指标见 §22.8
