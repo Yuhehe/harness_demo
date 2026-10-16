@@ -18,7 +18,7 @@
 
 1. **Agent 核心不用任何 Agent 框架。** `src/harness/` 里禁止引入 LangChain、LangGraph、LlamaIndex、CrewAI、AutoGen、OpenAI Agents SDK、Claude Agent SDK 等。LLM 调用只通过 **LiteLLM**，它只负责传输请求、统一各家接口和计算成本。
 2. **模型给出的命令只能在沙箱容器里执行。** 宿主机上禁止用 `subprocess` 运行模型产生的任何字符串。
-3. **禁止编造实验数字。** README 和 `docs/` 里的所有指标都必须由 `eval/report/make_tables.py` 从 `results/` 自动生成。没有数据的地方保留 `{{TBD}}`，不许估算，也不许"示意"。
+3. **禁止编造实验数字。** README 和 `docs/` 里的所有指标都必须由 `eval/report/make_tables.py` 从 `results/` 自动生成。没有数据的地方保留 `{{TBD}}`，不许估算，也不许"示意"。**唯一例外**是 `docs/dev_log.md`：记录开发过程中的阶段性结论，数字可以从 `results/` 手抄，但每个数字必须注明出处（文件和字段），写完要和源文件核对；README、简历条目和 `results/summary/` 不得引用它。
 4. **对比实验之前先冻结版本。** 跑主实验前打 git tag（例如 `v0.1-frozen`），所有对比配置都在同一个 tag 上跑。之后如果修了 harness 的 bug，受影响的配置必须全部重跑，并在 `results/CHANGELOG.md` 里记录原因。
 5. **控制预算。** 必须遵守 `configs/*.yaml` 中的 `max_cost_per_task_usd` 和 `.env` 里的 `MAX_TOTAL_COST_USD`。累计花费超过总预算的 80% 就停下来，向用户确认后再继续。**启动任何超过 10 个任务的批量运行之前，先打印预计花费并等用户确认。**
 6. **不提交密钥。** API Key 只放在 `.env`（已加入 gitignore），仓库里只放 `.env.example`。
@@ -81,7 +81,7 @@ harness-lab/
 │   ├── baselines/{mini_swe_agent.md, run_b0.py, codex_exec.py}
 │   ├── security/{cases/, build_cases.py, run_security.py}
 │   └── report/{aggregate.py, summary_probe.py, failure_taxonomy.py, make_tables.py, plots.py}
-├── docs/{notes.md, learning/}  # notes.md：外部接口核实记录；learning/：学习笔记
+├── docs/{notes.md, dev_log.md, failure_analysis.md, learning/}  # notes.md：外部接口核实记录；dev_log.md：阶段性结论（§2.3 的例外）；failure_analysis.md：失败分析；learning/：学习笔记
 ├── results/            # runs/ 目录 gitignore；summary/ 提交
 ├── tests/{unit/, e2e/, fixtures/toy_repo/, fixtures/replays/}
 ├── docker/{Dockerfile, docker-compose.yml}
