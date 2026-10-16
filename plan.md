@@ -324,6 +324,7 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 | 2026-10-12 | 新目录 `configs/smoke/`（冒烟配置，不是消融）；`aggregate.py` 的 `--baseline` 用法已验证 | §4 目录树 | [x] 2026-10-12 |
 | 2026-10-12 | **瘦身**：CLAUDE.md 只留规则、不变量和指标名字；实现细节搬到代码的模块说明（`tracer.py` 的 span 字段目录、`tokens.py` 的估计误差、`docker_sandbox.py` 的约定）；默认数值改为指向 `config.py`；§8 加了"往本文件加内容之前先问"的标准 | §5.1、§5.3、§5.4、§5.5、§5.6、§5.7、§6、§7、§8 | [x] 2026-10-12（26 973 → 24 761 字节，约 8.2%，比预期小：文件的大头本来就是规则；理由和取舍见 `docs/notes.md` §15） |
 | 2026-10-15 | 新子集 `verified_25.txt` + `verified_25.meta.json`（从 `verified_50` 按仓库分层派生，种子 42，`select_subset.py derive`） | §4 目录树的 `subsets/` | [x] 2026-10-15 |
+| 2026-10-16 | 新文件 `docs/dev_log.md`：阶段性结论，数字从 `results/` 手抄（用户决定列为 §2.3 的例外，不得被 README、简历、`results/summary/` 引用） | §2.3 加例外；§4 目录树的 `docs/` | [ ] |
 | 待办 | CLI 交互确认（`ask`）实现后 | §5.6 删掉"尚未实现" | [ ] |
 | 待办 | 回放补写 `llm_call` span 后（第 4 天） | §5.8 删掉"待做" | [ ] |
 | 待办 | `score.py` 写好后：`resolved.json` 约定（现在只在 `docs/notes.md` §12.6） | §6 或 §7 | [ ] |
@@ -659,3 +660,4 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 
 - 失败分析（`docs/failure_analysis.md`）：M0 与 B0 在 verified_25 上失败的是同样 3 题，两边都是"目标测试失败、没有回归"。scikit-learn-14983：题目给的期望输出与隐藏测试冲突（参数顺序）；sphinx-9602：功能正确，但测试检查节点类型这一实现细节；django-11087：两边都没想到要保留被 `to_field` 引用的字段（M0 更接近参考补丁）。都不是 harness 的问题，不需要修 harness、不需要打 v0.2
 - **你的决定（2026-10-16）**：harness 的评判标准与补充的遗漏项记入 `docs/notes.md` §22（只记录，尚未实施）；与 Codex CLI 的对比放在最后（plan 里的可选任务 B1），前提和要统一的指标见 §22.8
+- **你的决定（2026-10-16）**：M0 对 B0 的阶段性结论记在 `docs/dev_log.md`，数字从 `results/` 手抄，列为 CLAUDE.md §2.3 的例外（不得被 README、简历、`results/summary/` 引用）；写完后用脚本核对了文件里的 38 个数字，全部和 `metrics.json` 一致。CLAUDE.md 的修改等你确认 diff
