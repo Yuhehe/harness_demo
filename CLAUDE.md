@@ -219,7 +219,7 @@ async def run_task(task: Task, cfg: AgentConfig, sandbox: Sandbox, llm: LLMClien
 uv sync                                          # 按 uv.lock 建环境（Python 3.12）
 uv run ruff check . && uv run ruff format --check . && uv run pytest -q
 uv run harness run --config configs/default.yaml --repo tests/fixtures/toy_repo --task "fix failing test"
-uv run python eval/swebench/run_agent.py --config configs/default.yaml --subset configs/subsets/dev_5.txt --run-id dev   # 顺序运行，并行是 TODO
+uv run python eval/swebench/run_agent.py --config configs/default.yaml --subset configs/subsets/dev_5.txt --run-id dev [--workers 3]   # --workers 并行（默认 1）；延迟只在 worker 数相同的运行之间比较
 uv run python eval/swebench/score.py --run-id dev
 uv run python eval/baselines/run_b0.py run --config configs/default.yaml --subset configs/subsets/dev_5.txt --run-id B0-dev
 uv run python eval/report/aggregate.py --run-id dev [--baseline A1]   # 写 results/runs/<id>/metrics.json
