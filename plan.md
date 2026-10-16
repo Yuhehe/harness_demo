@@ -58,7 +58,7 @@
   - [x] `.env` 的变量名已改成 `DEEPSEEK_API_KEY`、`DEEPSEEK_API_BASE=https://api.deepseek.com`（原先的 `OPENAI_*` 在 `deepseek/` 前缀下读不到，`get_llm_provider` 得到 `api_key_resolved=False`，地址落到默认的 `/beta`）。2026-10-05 核实：格式正确，LiteLLM 解析出提供商、密钥、地址，本机假服务器上请求形状和用量/成本解析都对（详见 `docs/notes.md` §5）
   - [x] `.env.example` **不同步**（你的决定，2026-10-05）：保持适用范围最广的 `OPENAI_*` 格式。它是通用模板，`.env` 是你自己的 DeepSeek 配置（`DEEPSEEK_*`、`deepseek/` 前缀），两者的键允许不同
   - 走通用的 `openai/<模型名>` 路线时，已核实的差异（2026-10-05，本机假服务器，离线）：① `thinking=` 关键字参数会抛 `UnsupportedParamsError`；如果设了 `drop_params=True` 则会**静默丢掉**，思考模式就失控。要改用 `extra_body={"thinking": {...}}`，请求体里能正确带上。mini-swe-agent 的 `swebench.yaml` 默认 `drop_params: True`，所以 B0 的 `model_kwargs.thinking` 在这条路线上会被静默丢掉；② `completion_cost` 抛 `ModelNotMappedError`：我们自有的价格表不受影响，但 mini-swe-agent 的成本统计会失败（要么给覆盖文件加 `openai/` 的键，要么 `ignore_errors`，后者会让 `cost_limit` 失效）；③ `reasoning_content`、缓存命中 token、思考 token 的解析与 `deepseek/` 路线相同
-  - [ ] `.env` 权限是 644，建议 `chmod 600`（未处理）
+  - [x] `.env` 权限是 644，建议 `chmod 600`（2026-10-16 已改为 600；冻结 worktree 里的 `.env` 本来就是 600，且与主目录的逐字节相同）
   - [x] 验证计划步骤 1–3 已完成（2026-10-05，真实调用）：密钥有效，`deepseek/deepseek-flash` 和 `deepseek/deepseek-v4-pro` 都存在，响应能解析，两个模型都支持函数调用；**不传 `thinking` 时服务端默认开启思考模式**（响应带 `reasoning_content`）；`usage` 里有 `prompt_cache_hit_tokens`。4 次调用合计 $0.001159（LiteLLM 价格表估算），详见 `docs/notes.md` §5
   - [x] 验证计划步骤 4 已完成（2026-10-05）：`reasoning_content` 回传**没有被强制**（去掉后单轮、3 轮工具链都正常），且回传内容不计 prompt token；`thinking: disabled` 可用；默认思考模式下 `max_tokens` 太小会得到空内容和 `finish_reason=length`；两种模式的 prompt 模板不同，一次运行内不要切换。30 次调用 $0.005940（LiteLLM 价格表估算），详见 `docs/notes.md` §5
   - [x] 验证计划步骤 7–9 已完成（2026-10-05，详见 `docs/notes.md` §5 末尾）：① 错误密钥抛 `BadRequestError` 但 `status_code=401`（不是 `AuthenticationError`），所以重试要**按 `status_code` 分类**，不能按类名；不存在的模型名返回支持的名字 `deepseek-flash`、`deepseek-v4-pro`；② 本机假服务器：429/500/502/503/断连/缺 `choices` 都映射到 429 或 5xx 的状态码，`Timeout` 是 408，畸形的 200 是 `APIError(200)`，**LiteLLM 没有隐藏重试**，`Retry-After` 在 `e.litellm_response_headers` 里；③ mini-swe-agent 冒烟成功（见下面 mini-swe-agent 一项）
@@ -67,7 +67,7 @@
   - [x] 价格覆盖文件 `eval/baselines/litellm_registry.json` 和 4 个单元测试 `tests/unit/test_price_registry.py`、`tests/conftest.py`（固定 `LITELLM_LOCAL_MODEL_COST_MAP=True`）已完成（2026-10-05，已提交）：覆盖文件的标准价与 LiteLLM 一致；不用覆盖文件时成本随错峰判断变化；用了之后无论是否错峰都是标准价。**第 1 天写 `llm/cost.py` 时**：用同一个公式和一张标准价表，不调用 `completion_cost`，每个 `llm_call` 记录原始 token 和成本，`run_start` 记录价格表的哈希
   - [x] **重试策略已决定**（2026-10-05，你的决定：方案 B）：除 429 和 5xx 外，也重试**客户端超时**（`Timeout`）和**不可用的 200**（响应体不是合法 JSON 或缺 `choices`）；总共最多 3 次尝试，指数退避加抖动，429 遵守 `Retry-After`；按（异常类型、状态码、响应形状）判断；4xx 不重试；每次记录次数和 `retry_reason`；用尽后以 `env_error` 终止；重试等待计入墙钟时间和延迟。**CLAUDE.md §5.1 和 §5.7 已按此修改**；问题清单和策略详见 `docs/notes.md` §5
   - [x] **输出上限、超时、流式、截断、失败尝试已决定**（2026-10-06，你的决定：全部按我的方案；调研数据和依据见 `docs/notes.md` §5，CLAUDE.md §5.1、§5.3、§5.7 已修改）：① 当前只用非流式，基本功能完成后再支持流式；② 思考开 `max_tokens=65536`、`timeout_s=900`，思考关 `max_tokens=16384`、`timeout_s=300`，成对设置，超时必须大于顶满上限的耗时；③ `finish_reason=length` 不重试，半截工具调用不执行，连续 3 次截断记为 `format_error`（详情 `output_truncated`），另设 `truncated_outputs` 计数器；④ `insufficient_system_resource` 和 `aborted` 加入重试类别并丢弃半截内容；⑤ 重试保持最多 3 次尝试；⑥ 主指标只统计成功调用，失败尝试另记并估算浪费；⑦ `context.budget_tokens` 只算输入；⑧ B0 在关闭思考时显式设 `max_tokens=16384` 和超时
-  - [ ] 仍待验证：真实 DeepSeek 上的 429、5xx、超时表现和失败请求的计费；`aborted` 的触发场景；速度数据每项只有 1 个样本，要用第 1 天 `dev_5` 的真实延迟校准超时；B0 的 `model_kwargs.max_tokens` 和 `timeout` 是否在 mini-swe-agent 里生效（没实测）
+  - [ ] 仍待验证：真实 DeepSeek 上的 429、5xx、超时表现和失败请求的计费；`aborted` 的触发场景；速度数据每项只有 1 个样本，要用第 1 天 `dev_5` 的真实延迟校准超时；B0 的 `model_kwargs.max_tokens` 和 `timeout` 是否在 mini-swe-agent 里生效（没实测）。**2026-10-16 更新超时一项**：`llm_call` 的 `latency_s`，M0 1213 次最长 137.2 秒（P99 34.7），M0-r2 1187 次最长 88.1 秒（P99 32.0），全部 `outcome=ok`，思考开时超时 900 秒：正常调用远低于超时；这不代表测过顶满输出上限要多久。429 / 5xx / `aborted` 在这些运行里一次没出现，仍未验证；B0 的 `model_kwargs` 一项已于 2026-10-12 实测生效
   - [x] **`thinking` 默认开**（你的决定，2026-10-07：参考主流 harness）。每次调用都显式传，所有配置统一。**强度 `reasoning_effort` 临时定为 `high`，等你确认**：调研和依据见 `docs/notes.md` §11.1（要点：LiteLLM 会丢掉 `reasoning_effort` 关键字，必须走 `extra_body`；`high` 与 B0 的默认一致；官方数字里 `max` 只比 `high` 高约 1 个点，50 题分辨不出来）。强度已是配置项并进了 `config_hash`、回放键和 `run_start`，改成 `max` 要同时重新核对成对的 `max_tokens`/`timeout_s`
 - [~] 建仓库，写 `pyproject.toml`（`requires-python = ">=3.12,<3.13"`）、`.python-version`（`3.12`）、`.env.example`、`.gitignore`；用 `uv add` / `uv add --dev` 加依赖，`uv sync` 生成 `.venv` 和 `uv.lock`（**提交 `uv.lock`**）；加入 CLAUDE.md、plan.md 和 README.md
   - [x] `.python-version`（3.12）、`pyproject.toml`（`requires-python` 已锁 `>=3.12,<3.13`）、`.venv`（Python 3.12.12）、`uv.lock`（已提交）、plan.md、README.md 已就绪
@@ -84,17 +84,17 @@
   - 配额 django 20 / sympy 15 / sphinx 10 / scikit-learn 10（共 55，只按各仓库题数定，不涉及其他理由）；`verified_50` 实际是 django 18 / sympy 14 / sklearn 9 / sphinx 9，`dev_5` 是 5 道 `<15 min fix`（django 2、sklearn 1、sphinx 1、sympy 1），两者不重叠
   - 已验证：用固定 revision 重跑，三个文件**字节相同**；再次运行默认拒绝覆盖（`--force` 才覆盖）；12 个单元测试（假数据集，不联网）
   - [x] 配额已确认（2026-10-05，你的决定：保持 django 20 / sympy 15 / sphinx 10 / scikit-learn 10）；子集文件已提交（`04f6a4a`）。冻结标签在第 2 天主实验前打（CLAUDE.md §2.4）；之后如要改配额，用 `--quota repo=N --force` 重新生成，已跑的配置要全部重跑
-- [~] `eval/swebench/pull_images.py`：拉取 55 个镜像（**时机已调整两次**，原计划是"当晚就在后台开始拉取"；2026-10-05 你决定：**配额已确认，但不现在拉，等主 harness 实现后再动手**；仍须在第 2 天晚上开跑主实验前拉完，所以最晚第 2 天白天开始）
+- [x] `eval/swebench/pull_images.py`：拉取 55 个镜像（2026-10-16 全部完成：`results/runs/pull_images/status.json` 中 55 个都是 `done`，`base_commit_ok`、`clean` 均为真，`docker images` 里一个不缺；过程见第 2 天"拉 `verified_50` 的镜像"一项。**时机已调整两次**，原计划是"当晚就在后台开始拉取"；2026-10-05 你决定：**配额已确认，但不现在拉，等主 harness 实现后再动手**；仍须在第 2 天晚上开跑主实验前拉完，所以最晚第 2 天白天开始）
   - [x] 脚本完成并测试（2026-10-04）：镜像名读数据集 `image` 字段（只断言命名规则，不手拼）；并发拉取、失败重试、429 限速时停止；断点续跑（状态在 `results/runs/pull_images/status.json`）；可用空间低于 `--min-free-gb`（默认 20）时停下；`--verify` 在断网的一次性容器里校验 `/testbed`；`--dry-run`；超过 10 个镜像要 `--yes`；12 个单元测试（假 docker 客户端）
   - [x] 5 个 dev 镜像已拉取并通过 `--verify`（`base_commit` 一致、工作区干净）。镜像里**没有 `rg`**，第 1 天的 search 工具必须回退到 grep；镜像的 `HEAD` 是 base_commit 之上一个空提交，所以校验比对的是 `HEAD^`（详见 `docs/notes.md` §2）
   - [x] 磁盘实测见 `docs/notes.md` §7：5 个镜像共占 15.4GB，每个新增 1.8–5.4GB；镜像是"共享基础层 + 每个 (repo, version) 一个环境层 + 每个镜像一个实例层"，55 题共 22 个 (repo, version)
-  - [ ] **剩余 50 个镜像还没拉，等主 harness 实现后再拉**（你的决定，2026-10-05）：拉取不依赖任何功能；第 1 天只用 `dev_5`（已就绪），第 2 天晚上才用 `verified_50`；配额已确认，没有别的前置条件。粗略估计约 45–60GB（假设见 `docs/notes.md` §7，样本只有 5 个），当前可用约 143.6GB，放得下，**不需要扩大虚拟磁盘**；Docker Hub 匿名额度每小时 100 次，剩余 92，够用
-  - [ ] 建议的命令（后台）：`mkdir -p results/runs/pull_images && nohup uv run python eval/swebench/pull_images.py --yes --verify --workers 2 --min-free-gb 35 > results/runs/pull_images/pull.log 2>&1 &`（`--min-free-gb 35` 是因为底线只在每次开始拉取前检查，并发在途的镜像可能再多占十几 GB）；之后用 `--dry-run` 和 `results/runs/pull_images/status.json` 看进度
+  - [x] （2026-10-16 已完成：`verified_25` 于 10-15、其余 25 个于 10-16 拉完并核对，见第 2 天）~~**剩余 50 个镜像还没拉，等主 harness 实现后再拉**~~（你的决定，2026-10-05）：拉取不依赖任何功能；第 1 天只用 `dev_5`（已就绪），第 2 天晚上才用 `verified_50`；配额已确认，没有别的前置条件。粗略估计约 45–60GB（假设见 `docs/notes.md` §7，样本只有 5 个），当前可用约 143.6GB，放得下，**不需要扩大虚拟磁盘**；Docker Hub 匿名额度每小时 100 次，剩余 92，够用
+  - [x] （已过时：实际用的命令见第 2 天"拉 `verified_50` 的镜像"一项）建议的命令（后台）：`mkdir -p results/runs/pull_images && nohup uv run python eval/swebench/pull_images.py --yes --verify --workers 2 --min-free-gb 35 > results/runs/pull_images/pull.log 2>&1 &`（`--min-free-gb 35` 是因为底线只在每次开始拉取前检查，并发在途的镜像可能再多占十几 GB）；之后用 `--dry-run` 和 `results/runs/pull_images/status.json` 看进度
 - [x] 用 uv 安装 mini-SWE-agent（`uv tool install` 或放进 dev 依赖组，择一并记到 `docs/notes.md`，不用 pip），用 `--help` 确认它批量跑 SWE-bench 的命令，写进 `eval/baselines/mini_swe_agent.md`（2026-10-04）
   - 选择放进 dev 依赖组（`uv add --dev mini-swe-agent`，2.4.6，锁进 `uv.lock`，不与其他依赖冲突），理由记在 `docs/notes.md` §8；`tests/unit/test_no_agent_frameworks.py` 保证 `src/harness/` 不 import 它
   - `eval/baselines/mini_swe_agent.md` 含命令模板、参数说明、与 M0 的差异清单（网络默认联网、无资源上限、命令超时 60 秒等）、输出结构、判分命令和 `--help` 原文；`-c environment.run_args=[...]` 能解析成列表已离线验证
   - [x] 冒烟测试已完成（2026-10-05，`django__django-11066`，`deepseek/deepseek-flash`，`--network none`）：退出 `Submitted`，99 秒，25 次调用，生成 767 个字符的补丁；`swebench eval` 判分命令也验证通过（34 秒，`resolved: 1`；dev 题的冒烟，不是实验结果）。LiteLLM 记录的成本 $0.008483 是错峰价（标准价是 $0.016967），详见 `mini_swe_agent.md` §7
-  - [ ] 文档里的 `{{STEP_LIMIT}}`、`{{COST_LIMIT}}`、容器资源上限要等 `configs/default.yaml` 创建后才能填；`-c 'model.model_kwargs.thinking={"type":"disabled"}'` 在 mini-swe-agent 里是否生效还没测
+  - [x] （2026-10-16 核对：`mini_swe_agent.md` 里已没有 `{{`；`model_kwargs` 于 2026-10-12 实测生效；"关闭思考"不再需要测，所有配置都开思考）文档里的 `{{STEP_LIMIT}}`、`{{COST_LIMIT}}`、容器资源上限要等 `configs/default.yaml` 创建后才能填；`-c 'model.model_kwargs.thinking={"type":"disabled"}'` 在 mini-swe-agent 里是否生效还没测
 
 **验收**：`uv sync` 成功且 `uv.lock` 已提交；`.env` 可用；子集文件已提交；镜像开始拉取。
 （2026-10-05 调整：镜像拉取不再是第 0 天的验收项，改为主 harness 实现后再拉、最晚第 2 天白天开始；`dev_5` 的 5 个镜像已就绪；配额已确认。）
@@ -189,7 +189,7 @@
   - [x] 摘要预留与实际的差距可解释（§17.1）；压缩后大小的偏差已解释并修复，报告改用服务端数字（§17.2–17.4）
   - [x] `run_b0.py` 的两道保护（`docs/notes.md` §16.C1；2026-10-14，`4d9011a`）：拒绝有未提交改动的工作区（开发运行可用 `--allow-dirty` 并记录），同一 `run_id` 的配置哈希必须一致；用同一份配置跑 B0-dev 能对上。（B0 运行中的花费进预算守卫是另一件事，按你的决定和并行化一起记入"后续 TODO"）
 - [x] **打 tag `v0.1-frozen`**（2026-10-15，提交 `ff11f3b`，记入 `results/CHANGELOG.md`；2026-10-16 另打 `v0.1.1`：只改运行器和分析，harness、配置、依赖与 `v0.1-frozen` 相同）
-- [~] 在 `verified_50` 上跑 M0 和 B0（2026-10-16 更新：**verified_25 这一半已完成**：M0 串行、在 `ff11f3b` 上；B0 在冻结 worktree 里；另有同配置重跑 `M0-r2`（`v0.1.1`，3 个 worker）作为随机波动的基准；均已判分，数字见 `results/runs/{M0,B0,M0-r2}/` 和 `docs/dev_log.md`。**剩下 25 题待跑**，镜像未拉。原文：晚上：在 `verified_50` 上跑 M0，同时跑 B0（mini-swe-agent，同一模型、同一题目子集）；先打印预计花费并等你确认；本机实测 15.6GB 内存（不是原来写的 WSL 12GB），worker 数 × 单容器内存上限（现在 4g）加判分容器不能超，M0 和 B0 是否并行要先定
+- [~] 在 `verified_50` 上跑 M0 和 B0（2026-10-16 更新：**verified_25 这一半已完成**：M0 串行、在 `ff11f3b` 上；B0 在冻结 worktree 里；另有同配置重跑 `M0-r2`（`v0.1.1`，3 个 worker）作为随机波动的基准；均已判分，数字见 `results/runs/{M0,B0,M0-r2}/` 和 `docs/dev_log.md`。**剩下 25 题待跑**，镜像已就绪（2026-10-16 拉完并核对），排在第 3 天的 ①。原文：晚上：在 `verified_50` 上跑 M0，同时跑 B0（mini-swe-agent，同一模型、同一题目子集）；先打印预计花费并等你确认；本机实测 15.6GB 内存（不是原来写的 WSL 12GB），worker 数 × 单容器内存上限（现在 4g）加判分容器不能超，M0 和 B0 是否并行要先定
 - [x] 拉 `verified_50` 的镜像（2026-10-16 完成：剩下 25 个用 `pull_images.py --subsets configs/subsets/verified_50.txt --workers 2 --min-free-gb 35 --verify` 拉取，约 7.5 分钟，没有失败或限流；50 个都在断网容器里核对过 `/testbed` 在基准提交、工作区干净；脚本报告的可用空间 114.1 → 99.5 GB（约 14.6GB，同仓库共享层更多）。2026-10-15 你的决定：先拉按仓库分层抽出的一半 `verified_25`）：**25/25 完成**，每个都在断网容器里核对过 `/testbed` 在基准提交、工作区干净；约 9 分钟，没有被限流；可用空间 141.6 → 113.4 GB（约 28GB，比按 §7 估的 45–50GB 少，同仓库共享的层更多）。剩下 25 个待定。原记录：拉剩余 45 个镜像（**你的决定**：M0 基本符合预期之前不拉；`verified_50` 与 `dev_5` 不重合，本地只有 5 个 dev 镜像；按 §7 的实测约需 90–100GB，现有 133GB 可用）
 
 **验收**：dev_5 全流程能生成判分结果；tag 已打；M0 和 B0 已开跑。
@@ -200,27 +200,32 @@
 
 ## 第 3 天：分析主实验，跑消融
 
-**执行顺序（2026-10-16 与你商定，理由见当天日志）**：① 主比较补齐 50 题（M0、B0）；② 消融 A2 和 A6 / A6×A1；③ 服务化、CI、其余消融。注入安全评测（原 ③）于同日改为可选任务，移到第 5 天可选任务的第一项（排在 B1 之前），见当天日志。§0 实验矩阵里的 P0 / P1 标注没有改，执行按这个顺序。
+**执行顺序（2026-10-16 与你商定，理由见当天日志）**：① 主比较补齐 50 题（M0、B0；镜像已全部就绪，可以直接跑）；② 消融 A2 和 A6 / A6×A1；③ 服务化、CI、其余消融。注入安全评测（原 ③）于同日改为可选任务，移到第 5 天可选任务的第一项（排在 B1 之前），见当天日志。§0 实验矩阵里的 P0 / P1 标注没有改，执行按这个顺序。
 
 **开跑前待你决定**（花钱之前）
-- [ ] **预算**：已花 $14.78（`results/runs/*/trajectories/*.jsonl` 中 `run_end` 的成本合计，2026-10-16 统计），80% 停止线是 $32，余量约 $17.2。按 verified_25 的单题成本**估计**（M0 $0.175、M0-r2 $0.167、B0 $0.126，出自三者的 `run_end` 合计 ÷ 25）：A2 $3.2–4.4，A6 约 $5–6，A6×A1 约 $2–4，A1 约 $4.3，A5 约 $4，A3 / A4 各约 $4.3，7 个配置合计约 $30；剩下 25 题的 M0 + B0 约 $7.5；安全评测约 $1–2（已改为可选）。要么提高 `MAX_TOTAL_COST_USD`，要么砍配置。定下来后，用 verified_25 的单题成本填 §0 的预算表，并注明出处
-- [ ] **消融用哪个子集**：建议 verified_25（镜像已就绪，可以和 M0、M0-r2、B0 逐题配对），剩下 25 题等镜像拉完再补。开跑前写定
+- [ ] **预算**：已花 $14.78（`results/runs/*/trajectories/*.jsonl` 中 `run_end` 的成本合计，2026-10-16 统计），80% 停止线是 $32，余量约 $17.2。按 verified_25 的单题成本**估计**（M0 $0.175、M0-r2 $0.167、B0 $0.126，出自三者的 `run_end` 合计 ÷ 25）：A2 $3.2–4.4，A6 约 $5–6，A6×A1 约 $2–4，A1 约 $4.3，A5 约 $4，A3 / A4 各约 $4.3，7 个配置合计约 $30；剩下 25 题的 M0 + B0 约 $7.6（M0 约 $4.4、B0 约 $3.2）；安全评测约 $1–2（已改为可选）。只跑 ① 能放进余量（之后约剩 $9.6）；① + A2 也能放下；① + A2 + A6 + A6×A1 约 $18–22，超过余量。要么提高 `MAX_TOTAL_COST_USD`，要么把 A6×A1 推到下一轮。定下来后，用 verified_25 的单题成本填 §0 的预算表，并注明出处
+- [ ] **消融用哪个子集**：镜像已全部就绪，两种都能跑。建议 verified_25：可以和 M0-r2 逐题配对（M0-r2 只有这 25 题），花费是 50 题的一半；50 题能缩小区间，但每个配置的花费翻倍（约 $6.5–12），而且要先把 M0-r2 也补到 50 题才有同口径的配对基准。开跑前写定
 - [ ] **消融的配对基准**：建议 M0-r2（同在 `v0.1.1` 上、同样 3 个 worker）；M0 对 M0-r2 的配对区间作为随机波动的基准（`docs/notes.md` §22.9）
+- [ ] **补齐 50 题用几个 worker**：前 25 题的 M0 和 B0 都是串行跑的（`status.jsonl` 里没有 `workers` 字段，是并行化之前的运行器），M0-r2 是 3 个 worker。建议用 3 个 worker（快约 3 倍）：harness 和配置与前半相同，解决率、成本、步数不受影响；延迟本来就只描述、不下结论（§22.9），报告里按前后两半分别注明 worker 数。如果要 50 题的延迟口径一致，就串行跑
 - [ ] **128k 下的 A1、A3、A4 要不要跑**：M0 在 128k 下一次压缩都没触发（`results/runs/{M0,M0-r2}/metrics.json` 的 `compaction`），按 §22.2 事先定的规则，预计它们和 M0 等价。如果把 A3 / A4 改到 32k 跑，要新建配置并打新 tag
 
 **0. 开跑前检查（零花费）**
-- [ ] 冻结 worktree 在 `v0.1.1`（`77f0d9e`，2026-10-16 已确认），且 `git diff v0.1.1 -- configs src` 为空；每次开跑前再核对一次
+- [x] （2026-10-16 核对：`git describe` 为 `v0.1.1`，工作区干净，`git diff v0.1.1 -- configs src` 为空；两边 `.env` 逐字节相同）冻结 worktree 在 `v0.1.1`（`77f0d9e`，2026-10-16 已确认），且 `git diff v0.1.1 -- configs src` 为空；每次开跑前再核对一次
 - 约定：一次只跑一个配置，3 个 worker（15.6GB 内存，每个沙箱上限 4g，还要给判分容器留空间）；所有运行都用同一份 `.env` 里的模型（模型名不在 `config_hash` 里，`docs/notes.md` §24）；每批先打印预计花费，等你确认（CLAUDE.md §2.5）
 
 **1. 主比较补齐 50 题（①）**
-- [ ] 在 verified_50 剩下的 25 题上跑 M0 和 B0（同一个 tag、同一份配置）。**卡在剩下 25 个镜像上**，什么时候拉还没定（本计划不含拉取）
+- [ ] 在 verified_50 剩下的 25 题上跑 M0 和 B0（同一份配置；镜像 2026-10-16 已全部就绪）
+  - 做法：在冻结 worktree（`v0.1.1`）里沿用 run-id `M0` 和 `B0`，子集换成 `verified_50.txt`，靠断点续跑跳过已完成的 25 题，结果写回主目录。`M0` 的续跑保护只比对配置哈希（`6ea20eaecc69`，没变），所以允许续跑；后半的 `run_start` 记录的是 `77f0d9e`，前半是 `ff11f3b`，两者之间 harness 和配置没有差别（`results/CHANGELOG.md` 的 v0.1.1 一节）
+  - 开跑前先核实（零花费）：① `run_agent.py` 开跑前打印的待跑题数和预计花费只算剩下的 25 题（它没有 `--dry-run`；在确认提示处核对，答 no 就退出，不花钱）；② B0：mini-swe-agent 默认跳过 `preds.json` 里已有的题（`--redo-existing` 才重跑，`minisweagent/run/benchmarks/swebench.py:229`），`convert` 从完整的 `preds.json` 重写 `preds.jsonl` / `status.jsonl`，要确认前 25 题的行不丢；`run_b0.py` 打印的最坏花费按 50 题算，偏高
+  - 跑完：`score.py` 判 50 题（前 25 题的判分结果要和原来一致），`aggregate.py --baseline B0`，阶段性数字记进 `docs/dev_log.md`；`make_tables.py` 的 50 题一列就有数了
+  - 两个都超过 10 题，各自打印预计花费并等你确认；M0 和 B0 依次跑，不同时跑（内存只够 3 个沙箱）
 
 **2. 分析与结果表（零花费，可以和运行并行）**
 - [~] 给 M0 和 B0 判分，用 `failure_taxonomy.py` 生成失败分类（2026-10-16：判分已完成（`score.py`，M0、B0、M0-r2）；**`failure_taxonomy.py` 还没写**，离线卡死检测也放在这里，见 `docs/notes.md` §23.2 第 4 条）
   - 失败分类复用 `aggregate._taxonomy`，不另写一份；再加上判分细节（目标测试没过 / 回归 / 部分通过），并入 `docs/failure_analysis.md` 里人工标注的归属（harness / 模型 / 题目）
   - 卡死检测只做最简单的版本：在一个窗口里查相同的（工具, 参数）是否重复出现。它只是信号，不是判决；现有数据里没有打转的失败，等 A6 跑完再评估
   - 写单元测试，并做变异检查
-- [ ] `eval/report/make_tables.py` 最小版（从第 5 天提前，因为本日验收要生成 M0 / B0 的结果表，而 CLAUDE.md §2.3 规定数字只能由它生成）：只做主比较这一张表，写进 `results/summary/main.md` 和 README 的 `RESULTS:MAIN` 标记之间；表上标明子集，50 题那一列保留 `{{TBD}}`
+- [ ] `eval/report/make_tables.py` 最小版（从第 5 天提前，因为本日验收要生成 M0 / B0 的结果表，而 CLAUDE.md §2.3 规定数字只能由它生成）：只做主比较这一张表，写进 `results/summary/main.md` 和 README 的 `RESULTS:MAIN` 标记之间；表上标明子集；50 题那一列在 ① 跑完之前保留 `{{TBD}}`
 - [x] 人工看失败轨迹，写进 `docs/failure_analysis.md`（2026-10-16：verified_25 上 M0 和 B0 都只失败 3 题且是同样 3 题，全部看了；都不是 harness 的问题。~~2 题是题目或测试的问题~~，**已更正**：M0-r2 重跑时这 2 题（scikit-learn-14983、sphinx-9602）都解决了，改归为"模型的做法选择，每次运行会变"；1 题（django-11087）是模型对需求理解不完整。原文：人工看 5 条失败轨迹，写进 `docs/failure_analysis.md`：是什么现象、根因、是 harness 的问题还是模型的问题）
 - [ ] 如果发现 harness 的 bug：修复 → 打 `v0.2-frozen` → 在 `results/CHANGELOG.md` 记录 → **重跑 M0**（约 $4.3，要算进预算；A6 压缩最多，最可能暴露问题）
 
@@ -233,13 +238,13 @@
 - 原条目"按 P0、P1 的顺序跑消融实验 A1–A6（可以通宵并行）"按上面的顺序替代；"通宵并行"指一次一个配置、3 个 worker
 
 **4. 前几天的遗留项（零花费）**
-- [ ] 第 0 天：`.env` 权限 644 → `chmod 600`
-- [ ] 第 0 天"仍待验证"里的超时校准：M0 与 M0-r2 的 2400 次 `llm_call` 最长 137 秒（思考开，超时 900 秒），记为"正常调用远低于超时"，这不代表测过顶满输出上限要多久；真实的 429 / 5xx 在运行里一次没出现过，这部分保持未验证
-- [ ] 第 0 天 mini-swe-agent 一项下"`{{STEP_LIMIT}}` 等占位符"的子项：实际已完成（`mini_swe_agent.md` 里已没有 `{{`，`model_kwargs` 于 2026-10-12 实测生效；"关闭思考"那条已不需要测，因为所有配置都开思考），勾选
-- [ ] 待同步清单"`score.py` 写好后：`resolved.json` 约定"：触发条件已满足。先给你看 CLAUDE.md 的 diff，或者按 §8 的标准判定为不进 CLAUDE.md，然后勾掉
+- [x] 第 0 天：`.env` 权限 644 → `chmod 600`（2026-10-16）
+- [x] （2026-10-16，已写进第 0 天该项）第 0 天"仍待验证"里的超时校准：M0 与 M0-r2 的 2400 次 `llm_call` 最长 137 秒（思考开，超时 900 秒），记为"正常调用远低于超时"，这不代表测过顶满输出上限要多久；真实的 429 / 5xx 在运行里一次没出现过，这部分保持未验证
+- [x] （2026-10-16）第 0 天 mini-swe-agent 一项下"`{{STEP_LIMIT}}` 等占位符"的子项：实际已完成（`mini_swe_agent.md` 里已没有 `{{`，`model_kwargs` 于 2026-10-12 实测生效；"关闭思考"那条已不需要测，因为所有配置都开思考），勾选
+- [x] 待同步清单"`score.py` 写好后：`resolved.json` 约定"：触发条件已满足。2026-10-16 按 CLAUDE.md §8 的标准判定为**不进 CLAUDE.md**：它是 `score.py` 与 `aggregate.py` 之间的文件接口，违反它不会让结论失真（`aggregate.py` 读不到时 `resolve_rate` 为 null），约定已写在两个文件的模块说明里（`score.py:6`、`aggregate.py:10`）。如果你认为应当写进 CLAUDE.md，再改
 - 不列入（已知搁置）：回放补写 `llm_call` span（第 4 天）、`pyproject` 的项目名、第 0 天步骤 5 和 6、续跑保护只比对 `config_hash`（notes §24）、CLI 的 `ask` 交互确认
 
-**验收**：M0 和 B0 的结果表生成（`make_tables.py` 最小版）；A2、A6、A6×A1 跑完（原为"P0 的消融实验跑完"，2026-10-16 按新顺序调整）。（原有的"20 个注入用例可以运行"随注入评测移到第 5 天可选任务）
+**验收**：M0 和 B0 在 verified_50 上跑完并判分；M0 和 B0 的结果表生成（`make_tables.py` 最小版）；A2、A6、A6×A1 跑完（原为"P0 的消融实验跑完"，2026-10-16 按新顺序调整）。（原有的"20 个注入用例可以运行"随注入评测移到第 5 天可选任务）
 
 ---
 
@@ -379,7 +384,7 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 | 2026-10-16 | 注入安全评测从必做改为可选（MVP 不再含"1 份安全评测"；误拦率仍做） | §1 第 3 条（安全评测列为项目的实验之一），措辞要改为"可选"或注明 | [x] 2026-10-16（你说直接改，没有先看 diff） |
 | 待办 | CLI 交互确认（`ask`）实现后 | §5.6 删掉"尚未实现" | [ ] |
 | 待办 | 回放补写 `llm_call` span 后（第 4 天） | §5.8 删掉"待做" | [ ] |
-| 待办 | `score.py` 写好后：`resolved.json` 约定（现在只在 `docs/notes.md` §12.6） | §6 或 §7 | [ ] |
+| 待办 | `score.py` 写好后：`resolved.json` 约定（现在只在 `docs/notes.md` §12.6） | §6 或 §7 | [x] 2026-10-16（判定为不进 CLAUDE.md，约定在 `score.py`、`aggregate.py` 的模块说明里） |
 | 待办 | 冻结前定下 `default.yaml` 的步数 / 成本 / 墙钟上限（现在是临时值） | 不进 CLAUDE.md，只记 plan.md | [x] 2026-10-12（150 步 / $2 / 1800 秒，依据在 `default.yaml` 注释） |
 | 2026-10-13 | 提示词估计的误差：有锚时约 ±8% 仍成立（实测更小），压缩过程中没有锚；回传的推理计入 `prompt_tokens`，本地计数也计入（`docs/notes.md` §17.2–17.3） | §5.3 不变量里"约 ±8% 的误差（§11.3）" | [x] 2026-10-14 |
 | 2026-10-13 | 新 span 类型 `compaction_skipped`（什么都没做的压缩尝试，不计入压缩次数） | §5.7 span 类型列表 | [x] 2026-10-14 |
@@ -725,3 +730,6 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
   - 改动：MVP 去掉"1 份安全评测"；第 3 天的安全部分整体移到第 5 天可选任务的第一项；第 4 天只留误拦率统计（零花费，从 M0 轨迹来）；第 3、4、5 天的验收和简历第三条相应改写（做了注入评测再换回原文）。
   - 理由：注入评测只用自己的 harness，预计约 $1–2，加 1 到 1.5 天，比 Codex 对比便宜、可控（后者有几个前提还没核实，notes §22.8）。权限层在 M0 里一直开着，往后调不影响已有结果，不用重跑。
   - CLAUDE.md §1 第 3 条已同步（你说直接改）：误拦率为必做，注入评测为可选、排在 Codex 对比之前；待同步清单已勾掉。
+- **镜像状态（2026-10-16 核对）**：`verified_50` 剩下 25 个镜像已拉完（提交 `d45881d` 记录），`status.json` 中 55 个都是 `done` 且核对通过，`docker images` 里一个不缺，可用磁盘 93GB。第 0 天、第 2 天里过时的"镜像未拉"已更新；第 3 天的 ① 不再被卡住，计划相应更新：新增"补齐 50 题用几个 worker"一项待决定；子集一项改为两种都可选；验收加上"M0 和 B0 在 verified_50 上跑完并判分"。
+- **零花费检查（2026-10-16）**：冻结 worktree 在 `v0.1.1`、干净，`configs` 和 `src` 与 tag 无差异，两边 `.env` 相同；`.env` 改为 600；超时校准记入第 0 天；B0 文档的过时子项勾掉；`resolved.json` 约定判定为不进 CLAUDE.md。
+- **你的决定（2026-10-16）**：剩下 25 题先不跑；先完成 `failure_taxonomy.py` 和 `make_tables.py` 的最小版，验证后在 verified_25 上跑 A2 和 A6（`budget_32k`），预算问题暂不考虑。
