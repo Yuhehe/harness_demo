@@ -230,8 +230,8 @@
 - [ ] 如果发现 harness 的 bug：修复 → 打 `v0.2-frozen` → 在 `results/CHANGELOG.md` 记录 → **重跑 M0**（约 $4.3，要算进预算；A6 压缩最多，最可能暴露问题）
 
 **3. 消融（②；其余的归入 ③）**
-- [ ] A2 `bash_only`：检验 M0 多出来的调用是不是来自 `view`（`docs/notes.md` §23.2 第 9 条）
-- [ ] A6 `budget_32k` 和 A6×A1 `budget_32k_none`：32k 下压缩能否防止溢出、代价多大（主指标 `overflow_rate`，§22.2）；简历第二条依赖这一组
+- [x] A2 `bash_only`：检验 M0 多出来的调用是不是来自 `view`（`docs/notes.md` §23.2 第 9 条）（2026-10-16，verified_25，3 个 worker，$5.28，判分 23/25；**假设不成立**：去掉专用工具没有变便宜，和 B0 同样只用 bash 仍比 B0 贵；数字和判定见 `docs/dev_log.md`）
+- [~] A6 `budget_32k` 和 A6×A1 `budget_32k_none`：32k 下压缩能否防止溢出、代价多大（主指标 `overflow_rate`，§22.2）；简历第二条依赖这一组（2026-10-16：**A6 已完成**，verified_25，$6.24，判分 22/25，没有溢出，17/25 题压缩共 86 次，没有回退或摘要失败；见 `docs/dev_log.md`。**A6×A1 还没跑**，主问题要等它才能回答）
 - [ ] （③，预算允许再跑）A1 `ctx_none`、A5 `no_planning`、A3 `ctx_truncate`、A4 `ctx_summarize`
 - 每个配置的做法：在冻结 worktree 里 `--workers 3` 跑 → `score.py` 判分 → `aggregate.py --paired M0-r2`（逐题配对；`--baseline` 是另一种比较：只看发生过压缩的题、在同一步数处比重复率，A6 用 `--baseline` 对不压缩的运行）→ `failure_taxonomy.py` → 按 §22.2 事先定的主指标判定 → 阶段性数字记进 `docs/dev_log.md` 并注明出处；延迟只描述，不下结论（§22.9）
 - A6 跑完后，顺带看"后续 TODO"里的摘要档位过渡区和 `tail_cap` 的依据
@@ -244,7 +244,7 @@
 - [x] 待同步清单"`score.py` 写好后：`resolved.json` 约定"：触发条件已满足。2026-10-16 按 CLAUDE.md §8 的标准判定为**不进 CLAUDE.md**：它是 `score.py` 与 `aggregate.py` 之间的文件接口，违反它不会让结论失真（`aggregate.py` 读不到时 `resolve_rate` 为 null），约定已写在两个文件的模块说明里（`score.py:6`、`aggregate.py:10`）。如果你认为应当写进 CLAUDE.md，再改
 - 不列入（已知搁置）：回放补写 `llm_call` span（第 4 天）、`pyproject` 的项目名、第 0 天步骤 5 和 6、续跑保护只比对 `config_hash`（notes §24）、CLI 的 `ask` 交互确认
 
-**验收**：M0 和 B0 在 verified_50 上跑完并判分；M0 和 B0 的结果表生成（`make_tables.py` 最小版）；A2、A6、A6×A1 跑完（原为"P0 的消融实验跑完"，2026-10-16 按新顺序调整）。（原有的"20 个注入用例可以运行"随注入评测移到第 5 天可选任务）
+**验收**：M0 和 B0 在 verified_50 上跑完并判分（2026-10-16 你的决定：暂不跑）；M0 和 B0 的结果表生成（`make_tables.py` 最小版）；A2、A6、A6×A1 跑完（原为"P0 的消融实验跑完"，2026-10-16 按新顺序调整）。（原有的"20 个注入用例可以运行"随注入评测移到第 5 天可选任务）
 
 ---
 
@@ -734,3 +734,6 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - **零花费检查（2026-10-16）**：冻结 worktree 在 `v0.1.1`、干净，`configs` 和 `src` 与 tag 无差异，两边 `.env` 相同；`.env` 改为 600；超时校准记入第 0 天；B0 文档的过时子项勾掉；`resolved.json` 约定判定为不进 CLAUDE.md。
 - **你的决定（2026-10-16）**：剩下 25 题先不跑；先完成 `failure_taxonomy.py` 和 `make_tables.py` 的最小版，验证后在 verified_25 上跑 A2 和 A6（`budget_32k`），预算问题暂不考虑。
 - `failure_taxonomy.py`、`make_tables.py` 最小版完成（见第 3 天任务 2）；`aggregate.py` 抽出 `end_category`，重算的指标与原 `metrics.json` 一致；`docs/failure_analysis.md` 加了机器可读的归属表；README 的主比较表由脚本生成（verified_25）。全套测试 598 通过、1 跳过；ruff 通过。另更正第 3 天消融流程的写法：逐题配对用 `aggregate.py --paired`，不是 `--baseline`。
+- **A2、A6 完成**（verified_25，冻结 worktree `v0.1.1`，3 个 worker，依次跑；每个开跑前都先空跑一次核对题数、配置哈希和预计花费）。A2 $5.28（运行器预计 $3.55）、判分 23/25；A6 $6.24（预计 $3.88）、判分 22/25。两者都没有判分出错、截断或失败重试；A6 有 1 次格式错误。结论和数字见 `docs/dev_log.md`（已逐项与 `metrics.json` 核对）。A2、A6 共 5 道未解决题还没人工看。
+- **花费**：全部运行的 `run_end` 合计 $26.30，占 `MAX_TOTAL_COST_USD`（$40）的 66%，离 80% 停止线（$32）还剩约 $5.7。两个运行的实际花费都比运行器的预计高 50% 以上（预计按以前所有运行的单题均值算，A2、A6 的单题成本比均值高）。
+- **待你决定**：A6×A1（`budget_32k_none`）是否跑，不跑则 A6 的主问题（压缩能否防止溢出）只能描述；它遇到溢出就提前结束，花费应低于 A6，但余量只有约 $5.7，可能需要先提高 `MAX_TOTAL_COST_USD`。

@@ -124,3 +124,79 @@ M0-r2 自身：解决 24/25（只有 django-11087 未解决），合计花费 $4
 **注意事项**：
 - 容器启动和销毁的时间目前没有记录：`status.wall_seconds` 与轨迹跨度只差约 0.5 s，两者都不含容器启停。并行时 Docker 的这部分开销看不到，需要等下一版补 trace 字段（`docs/notes.md` §22）。
 - 只有 1 对运行、25 题，上面都是描述性的观察，没有做统计检验。
+
+## 2026-10-16：A2（只用 bash）对 M0-r2，verified_25
+
+**运行条件**：冻结 worktree，`v0.1.1`（提交 `77f0d9e`），配置 `configs/ablations/bash_only.yaml`（哈希 `8a196050cbdc`，与主配置只差 `action_space: tools -> bash_only`），3 个 worker，25 题（`verified_25.txt`）。配对基准 M0-r2（同一提交、同样 3 个 worker，但在不同时段运行）。
+
+**出处**：`results/runs/A2/metrics.json`（`aggregate.py --run-id A2 --paired M0-r2 --difficulty`，含 `paired`，base = M0-r2）、`results/runs/A2/score.json`、`results/runs/A2/failure_taxonomy.json`、`results/runs/M0-r2/metrics.json`。随机波动基准（M0-r2 对 M0）和 A2 对 B0 两组配对没有写进任何文件，是用 `aggregate.paired` 对两个运行的轨迹现算的（同一函数、同一种子）。判定规则见 `docs/notes.md` §22.2、§22.9。
+
+**事先登记的问题**（§22.2）：专用工具是否让步数和成本变多；主指标 `steps`、`cost_per_task`。数据背景：M0 比 B0 贵、步数多，多出的调用主要是 `view`（§23.2 第 9 条）。
+
+| 指标 | A2 | M0-r2 | 出处字段 |
+|---|---|---|---|
+| 解决 | 23/25（Wilson 0.75–0.98） | 24/25 | `resolve_rate` |
+| 每题成本 均值 / P50 | $0.211 / $0.141 | $0.167 / — | `cost_per_task` |
+| 平均步数 | 54.4 | 47.5 | `steps_mean` |
+| 平均输入 / 输出 token | 1 846 536 / 21 489 | — | `tokens_in_mean`、`tokens_out_mean` |
+| 缓存命中率 | 98.1% | — | `cache_hit_rate` |
+| 工具调用 | bash 1338、submit 24 | bash 805、view 235、search 86、todo 51、str_replace 40、submit 25 | `quality.tool_calls.by_tool` |
+| 结束方式 | 提交 24（其中 2 题未解决），`step_limit` 1 | — | `fail_taxonomy` |
+| 每解决一题的成本 | $0.230 | — | `quality.cost_per_resolved` |
+
+**逐题配对**（中位数比值，bootstrap 95% 区间）：
+
+| 比较 | 成本 | 步数 | 解决情况分歧 |
+|---|---|---|---|
+| A2 / M0-r2（`paired`） | 1.29 [1.05, 1.41]，18/25 题 A2 更贵 | 1.11 [1.04, 1.29]，18/25 题 A2 更多 | 只 M0-r2 解决 2，只 A2 解决 1，p = 1.0 |
+| 随机波动基准：M0-r2 / M0（现算） | 0.96 [0.77, 1.13] | 1.00 [0.83, 1.08] | 只 M0-r2 解决 2，p = 0.5 |
+| A2 / B0（现算，探索性，不是事先登记的比较） | 1.51 [1.23, 1.84] | 1.42 [1.33, 1.67] | 只 A2 解决 1，p = 1.0 |
+
+**结论（阶段性）**
+
+1. **去掉专用工具没有让成本和步数变少**，方向反而是变多：A2 对 M0-r2 的成本和步数区间都不含 1，且偏向 A2 更多。按 §22.9 的规则（差别区间要**整体**落在随机波动区间之外），成本区间 [1.05, 1.41] 与波动区间 [0.77, 1.13] 有重叠，步数也一样（[1.04, 1.29] 对 [0.83, 1.08]），所以**不能说超出了随机波动**；能说的是"没有变便宜"。
+2. **"M0 比 B0 贵是因为 `view` 调用多"这个假设不成立**（§23.2 第 9 条）：A2 去掉了 `view`，和 B0 一样只用 bash，但仍比 B0 贵、步数更多（探索性比较，1.51 / 1.42）。M0 与 B0 的差距来自工具集以外的部分（system prompt、规划提示、输出截断方式等），需要另行分析，目前没有数据能区分。
+3. **解决率无法区分**：23 对 24，分歧题 3 道，p = 1.0。
+4. A2 有 2 题在 128k 下触发了压缩（django-11087、sphinx-9602；M0 和 M0-r2 一次都没有），A2 的平均输入 token 也更多。一种可能是 bash 输出（`cat`、`grep`）比 `view` 的分段读取更长，但这只是推测，没有核对。
+5. django-11087 在 A2 里用满了 150 步（`step_limit`），但提交的补丁通过了判分：这是第一次有运行解决这道题。
+6. 质量：没有回归、没有改测试文件、没有新建文件（`quality.tests`、`quality.patch`）；没有格式错误、截断或失败重试；没有卡死嫌疑（`failure_taxonomy.json` 的 `loop_signal`）。
+
+**注意事项**：25 题、各 1 次运行；耗时只描述（A2 与 M0-r2 不在同一时段）；未解决的 2 题还没人工看，`failure_taxonomy.json` 里归属是 `unlabelled`。
+
+## 2026-10-16：A6（预算 32k，hybrid）对 M0-r2，verified_25
+
+**运行条件**：冻结 worktree，`v0.1.1`（提交 `77f0d9e`），配置 `configs/ablations/budget_32k.yaml`（哈希 `9765e9636470`，与主配置只差 `context.budget_tokens: 128000 -> 32000`），3 个 worker，25 题，在 A2 之后紧接着跑。配对基准 M0-r2。
+
+**出处**：`results/runs/A6/metrics.json`（`aggregate.py --run-id A6 --paired M0-r2 --difficulty`）、`results/runs/A6/score.json`、`results/runs/A6/failure_taxonomy.json`、`results/runs/M0-r2/metrics.json`；"M0-r2 提示词超过 32k 的题数"由 M0-r2 轨迹里 `llm_call.prompt_tokens` 的每题最大值现算；压缩的种类（只清理 / 带摘要）由 A6 轨迹的 `compaction` span 现算。
+
+**事先登记的问题**（§22.2）：上下文紧张时压缩能否防止溢出、代价多大；主指标 `overflow_rate`。**这个问题本次答不完**：要和同样 32k、不压缩的 A6×A1（`budget_32k_none`）比，那个配置还没跑。下面只做描述。
+
+| 指标 | A6 | M0-r2 | 出处字段 |
+|---|---|---|---|
+| 解决 | 22/25（Wilson 0.70–0.96） | 24/25 | `resolve_rate` |
+| `overflow_rate` | 0 | 0 | `overflow_rate` |
+| 每题成本 均值 / P50 | $0.250 / $0.178 | $0.167 / — | `cost_per_task` |
+| 平均步数 | 59.8 | 47.5 | `steps_mean` |
+| 缓存命中率 | 92.4% | 98.1% | `cache_hit_rate` |
+| 结束方式 | 提交 24（其中 2 题未解决），`step_limit` 1 | — | `fail_taxonomy` |
+| 每解决一题的成本 | $0.284 | — | `quality.cost_per_resolved` |
+
+**压缩**（`compaction`、`monitoring`）：
+- 17/25 题发生了压缩，共 86 次，全部是 `normal` 档；其中 17 次带 LLM 摘要，69 次只清理旧输出（现算）。没有跳过的尝试、没有比例异常。
+- 压缩成本占这些题总成本的 4.2%（`compaction_cost_share`）。
+- 第一次压缩之后平均还走了 51.6 步（`steps_after_compaction_mean`）。
+- 压缩后重复之前调用的比例 0.25%（`post_compaction_repeat_rate_mean`），摘要提到改过的文件的比例 1.0（`summary_file_recall_mean`）。两者都还没有和不压缩的运行在同一步数处对比（要 A6×A1）。
+- 压缩后的提示词平均 19 010 token（服务端数字，86 次全有），压缩 span 里的估计平均偏差 −1.3%（`tokens_after`）。
+- 17 次摘要都没有超过预计大小，最大是预计的 0.96（`monitoring.summary_size`）。
+
+**逐题配对**（A6 / M0-r2，`paired`）：成本 1.33 [0.99, 1.60]，17/25 题 A6 更贵；步数 1.13 [1.00, 1.36]；解决情况只 M0-r2 解决 2 题、只 A6 解决 0 题，p = 0.5。
+
+**结论（阶段性，描述性）**
+
+1. **32k 预算下没有溢出**：25 题都没有以 `context_overflow` 结束。作为参照（不是反事实），M0-r2 的 25 题里有 14 题提示词超过过 32 000 token，这 14 题在 A6 里都发生了压缩。但"不压缩就会溢出多少"要等 A6×A1 实测。
+2. **代价**：成本和步数的区间下端正好碰到 1（[0.99, 1.60]、[1.00, 1.36]），不能说一定更贵、更长。缓存命中率从 98.1% 降到 92.4%，符合"压缩改写了前缀"的预期。压缩本身只占成本的 4.2%，多出来的成本主要来自更多的步数和更低的缓存命中。
+3. **解决率无法区分**：22 对 24，p = 0.5。A6 没解决的 sympy-15875 在 M0、M0-r2 里都解决了；在人工看轨迹之前，不能归因于压缩。
+4. **压缩机制在真实压力下工作正常**：没有回退、没有摘要失败、没有超出预计的摘要、估计误差很小；1 次格式错误（django-11299，最终解决），没有截断和失败重试。
+5. django-11087 又一次用满 150 步（`step_limit`），这次没有解决。
+
+**注意事项**：25 题、各 1 次运行；A6 与 M0-r2 不在同一时段，耗时只描述；A6 的 3 道未解决题还没人工看（归属 `unlabelled`）。
