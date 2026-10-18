@@ -58,3 +58,14 @@ results of record.
 - `llm_call` spans add `served_model` and `system_fingerprint` (trace only).
 - `aggregate.py`: `quality.call_mix` (calls by class from the command text, single-edit tasks,
   share of responses with several calls).
+
+## v0.2.1-exp (2026-10-18)
+
+Adds the `mini` prompt variant for the diagnostic run of plan.md stage 3 (mini-swe-agent's
+SWE-bench prompt, verbatim up to its submission section, which is replaced: the agent calls the
+submit tool and the harness makes the patch). New config `configs/ablations/prompt_mini_bash.yaml`
+(bash only + `mini`, a deliberate pair). `task_message` takes the config. The `v1` and `lite`
+texts are unchanged (system prompt and task message pinned by hash in
+`tests/unit/test_prompts.py`), and so are the config hashes of `default.yaml` (`af1871001292`)
+and `prompt_lite.yaml` (`74d112cfe5ab`), so M0-v02 and lite-v02 (run on v0.2-exp) stay
+comparable with runs on this tag.

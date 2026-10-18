@@ -99,6 +99,20 @@ async def test_run_then_submit():
     assert types.count("tool_call") == 2 and types.count("guard_decision") == 2
 
 
+async def test_the_prompt_variant_reaches_the_conversation():
+    _, llm, _ = await run(
+        [R(call("submit"))], config=cfg(action_space="bash_only", prompt_variant="mini")
+    )
+    system, task = llm.calls[0]["messages"][:2]
+    assert system["content"].startswith("You are a helpful assistant")
+    assert (
+        task["content"].startswith("<pr_description>")
+        and TASK.problem_statement in task["content"]
+    )
+    _, llm, _ = await run([R(call("submit"))])
+    assert llm.calls[0]["messages"][1]["content"].startswith("Resolve this issue:")
+
+
 async def test_run_start_records_what_makes_the_run_reproducible():
     _, _, tracer = await run([R(call("submit"))])
     start = tracer.of("run_start")[0]

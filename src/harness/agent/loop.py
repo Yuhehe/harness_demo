@@ -116,7 +116,7 @@ async def run_task(
     )
 
     state.append(system_message(prompts.system_prompt(cfg, sandbox.workdir)))
-    state.append(user_message(prompts.task_message(task.problem_statement)))
+    state.append(user_message(prompts.task_message(task.problem_statement, cfg)))
 
     def note() -> str:
         lim = cfg.limits

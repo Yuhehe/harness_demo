@@ -251,8 +251,9 @@ class AgentConfig(_Strict):
     action_space: Literal["bash_only", "tools"] = "tools"
     planning: Literal["on", "off"] = "on"
     # the system prompt: v1 is the frozen text of v0.1; lite drops two instructions and adds
-    # one (agent/prompts.py, docs/notes.md section 25.1, plan.md "M0 与 B0 差距的验证")
-    prompt_variant: Literal["v1", "lite"] = "v1"
+    # one; mini is mini-swe-agent's SWE-bench prompt, for a diagnostic run (agent/prompts.py,
+    # docs/notes.md section 25.1, plan.md "M0 与 B0 差距的验证")
+    prompt_variant: Literal["v1", "lite", "mini"] = "v1"
     context: ContextConfig = ContextConfig()
     guard: GuardConfig = GuardConfig()
     sandbox: SandboxConfig = SandboxConfig()

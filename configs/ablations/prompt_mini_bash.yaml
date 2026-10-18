@@ -1,0 +1,7 @@
+# Diagnostic (not in the v0.1 matrix), two deliberate changes: bash only, and mini-swe-agent's
+# SWE-bench prompt. Against B0 on the same tasks at the same time, what remains is this
+# harness's mechanics; against A2 (bash only, v1 prompt), the prompt (plan.md, stage 3).
+extends: ../default.yaml
+
+action_space: bash_only
+prompt_variant: mini

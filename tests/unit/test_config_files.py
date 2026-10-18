@@ -30,6 +30,8 @@ EXPECTED = {
     "no_guard": {"guard.enabled"},
     # exploratory, v0.2-exp (plan.md "M0 与 B0 差距的验证")
     "prompt_lite": {"prompt_variant"},
+    # diagnostic pair, v0.2.1-exp (plan.md stage 3): bash only + mini-swe-agent's prompt
+    "prompt_mini_bash": {"action_space", "prompt_variant"},
 }
 
 
