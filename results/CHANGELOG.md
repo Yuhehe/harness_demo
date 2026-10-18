@@ -31,3 +31,30 @@ M0 and B0 on verified_25 (run on `v0.1-frozen`) need no rerun.
   the metrics of docs/notes.md §22.7 that the runs already have, and `--paired`.
 - Real check before tagging: dev run `dev-parallel` (2 tasks, 2 workers) both submitted, both
   started at the same moment, no sandbox left behind.
+
+## Provider change: deepseek-flash replaced (reported 2026-10-18)
+
+DeepSeek replaced the model behind `deepseek-flash` (reported by the user; our records cannot
+confirm it, because no flash fingerprint was ever stored). Runs that called flash are not
+comparable with later runs that do: A6 (17 summary calls), the compaction smoke runs, the
+summary-size calibration (docs/notes.md §19) and the summary probes. Runs that called only
+`deepseek-v4-pro` are unaffected: M0, M0-r2, A2 (its two compactions only cleared outputs),
+A6xA1; B0 does not go through our client. `deepseek-v4-pro` itself looks unchanged: the
+`system_fingerprint` of a call made on 2026-10-18 equals the one in all 1017 responses
+mini-swe-agent stored for B0 (2026-10-15) and B0-dev (2026-10-12). From v0.2-exp on, every
+`llm_call` span records `served_model` and `system_fingerprint`.
+
+## v0.2-exp (2026-10-18)
+
+Exploratory tag for the M0 vs B0 gap (plan.md, "M0 与 B0 差距的验证"); the v0.1 results stay the
+results of record.
+
+- New config key `prompt_variant` (`v1` default, `lite`), so every config hash changes. `v1`
+  renders byte for byte the v0.1 system prompt (pinned by `tests/unit/test_prompts.py`; the
+  replay end-to-end test still matches the recorded requests), so the harness behaves as in
+  v0.1 under every existing config. M0's comparison runs for `lite` are made on this tag, at
+  the same time, not taken from v0.1.
+- New config `configs/ablations/prompt_lite.yaml` (`prompt_variant: lite` only).
+- `llm_call` spans add `served_model` and `system_fingerprint` (trace only).
+- `aggregate.py`: `quality.call_mix` (calls by class from the command text, single-edit tasks,
+  share of responses with several calls).

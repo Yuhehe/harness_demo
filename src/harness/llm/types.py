@@ -40,6 +40,9 @@ class LLMResponse:
     usage: Usage
     model: str = ""
     response_id: str | None = None
+    # the provider's build identifier (DeepSeek returns one per response): a model can change
+    # behind an unchanged name, and this is the only trace of it
+    system_fingerprint: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -54,6 +57,7 @@ class LLMResponse:
             usage=Usage(**d["usage"]),
             model=d.get("model", ""),
             response_id=d.get("response_id"),
+            system_fingerprint=d.get("system_fingerprint"),
         )
 
 

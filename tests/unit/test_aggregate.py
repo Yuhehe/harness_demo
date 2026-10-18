@@ -6,6 +6,8 @@ import pytest
 from aggregate import (
     Task,
     aggregate,
+    call_mix,
+    classify_call,
     compare,
     edited_before,
     load_run,
@@ -554,3 +556,109 @@ def test_the_bootstrap_interval_is_the_same_on_every_run_and_moves_with_the_seed
     assert (
         paired(base, other, None, None, rounds=300, seed=1)["cost_usd"]["ci95"] != first
     )
+
+
+# ---- call mix (docs/notes.md section 25.1) ---------------------------------------------------------
+@pytest.mark.parametrize(
+    ("tool", "args", "want"),
+    [
+        ("view", {"path": "a.py"}, "explore"),
+        ("search", {"pattern": "x"}, "explore"),
+        ("str_replace", {"path": "/testbed/django/db/models.py"}, "edit"),
+        ("str_replace", {"path": "/testbed/reproduce_bug.py"}, "scratch"),
+        ("todo", {}, "todo"),
+        ("submit", {}, "submit"),
+        (
+            "bash",
+            {"command": "cd /testbed && sed -n '1,80p' django/db/models.py"},
+            "explore",
+        ),
+        ("bash", {"command": "grep -rn foo django | head"}, "explore"),
+        ("bash", {"command": "sed -i 's/a/b/' django/db/models.py"}, "edit"),
+        ("bash", {"command": "cat > /tmp/repro.py <<'EOF'\nprint(1)\nEOF"}, "scratch"),
+        ("bash", {"command": "cat > docs/conf.py <<'EOF'\nx=1\nEOF"}, "scratch"),
+        (
+            "bash",
+            {"command": "python - <<'PY'\nopen('sklearn/a.py','w').write(s)\nPY"},
+            "edit",
+        ),
+        ("bash", {"command": "python -m pytest tests/x.py -q 2>&1 | tail"}, "test"),
+        ("bash", {"command": "cd /testbed && python tests/runtests.py delete"}, "test"),
+        ("bash", {"command": "python /tmp/repro.py"}, "script"),
+        (
+            "bash",
+            {"command": "cat /tmp/harness/out_3.txt | grep Error"},
+            "reread_saved",
+        ),
+        ("bash", {"command": "rm -f /tmp/repro.py"}, "cleanup"),
+        ("bash", {"command": "git diff -- a.py > patch.txt"}, "submit"),
+        (
+            "bash",
+            {"command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && cat patch.txt"},
+            "submit",
+        ),
+        ("bash", {"command": "pip list"}, "other"),
+        # one command writing a scratch file and a source file is an edit
+        (
+            "bash",
+            {"command": "cat > /tmp/r.py <<'E'\nx\nE\nsed -i s/a/b/ pkg/m.py"},
+            "edit",
+        ),
+    ],
+)
+def test_classify_call(tool, args, want):
+    assert classify_call(tool, args) == want
+
+
+def asst(step, *calls):
+    return {
+        "type": "message", "role": "assistant", "step": step, "content": "",
+        "tool_calls": [
+            {"id": f"c{step}{i}", "type": "function",
+             "function": {"name": n, "arguments": json.dumps(a)}}
+            for i, (n, a) in enumerate(calls)
+        ],
+    }  # fmt: skip
+
+
+def test_call_mix_counts_calls_and_multi_call_responses():
+    t = task([
+        asst(1, ("view", {"path": "a.py"}), ("search", {"pattern": "x"})),
+        asst(2, ("str_replace", {"path": "a.py"})),
+        asst(3, ("bash", {"command": "python -m pytest -q"})),
+        {"type": "message", "role": "tool", "step": 3, "content": "ok"},
+        run_end(3),
+    ])  # fmt: skip
+    m = call_mix(t)
+    assert m["responses"] == 3 and m["multi_call_responses"] == 1
+    assert (m["calls"]["explore"], m["calls"]["edit"], m["calls"]["test"]) == (2, 1, 1)
+    assert call_mix(task([run_end(1)])) is None
+
+
+def test_call_mix_reads_b0_from_minis_trajectory(tmp_path):
+    run = tmp_path / "B"
+    write(tmp_path, "B", "x", [run_end(2)])
+    mini = {"messages": [
+        {"role": "assistant", "tool_calls": [
+            {"function": {"name": "bash", "arguments": json.dumps({"command": "ls"})}},
+            {"function": {"name": "bash", "arguments": json.dumps({"command": "sed -i s/a/b/ m.py"})}},
+        ]},
+        {"role": "tool", "content": "x"},
+        {"role": "assistant", "content": "", "extra": {"actions": [{"command": "python -m pytest"}]}},
+    ]}  # fmt: skip
+    (run / "mini" / "x").mkdir(parents=True)
+    (run / "mini" / "x" / "x.traj.json").write_text(json.dumps(mini))
+    write(
+        tmp_path,
+        "B",
+        "y",
+        [
+            asst(1, ("str_replace", {"path": "a.py"})),
+            asst(2, ("str_replace", {"path": "b.py"})),
+            run_end(2),
+        ],
+    )
+    q = aggregate(load_run(run))["quality"]["call_mix"]
+    assert q["tasks"] == 2 and q["single_edit_tasks"] == 1  # y edited twice
+    assert q["per_task"]["explore"] == 0.5 and q["per_task"]["test"] == 0.5
+    assert q["multi_call_share"] == 0.25 and q["calls_per_response"] == 5 / 4

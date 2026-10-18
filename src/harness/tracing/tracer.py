@@ -10,7 +10,9 @@ run_start       config, config_hash, model, thinking, reasoning_effort, max_toke
                 the caller's meta (run_id, git_commit, git_dirty)
 llm_call        one per attempt: attempt, outcome (ok | retry | fail), purpose (agent | summary),
                 model, latency_s; ok: finish_reason, prompt_tokens, cached_tokens,
-                completion_tokens, reasoning_tokens, cost_usd, response_id, retries;
+                completion_tokens, reasoning_tokens, cost_usd, response_id, served_model and
+                system_fingerprint (what the provider says answered: `model` is only the name
+                asked for, and a model can change behind it), retries;
                 retry / fail: retry_reason, status_code, usage (None), wasted_prompt_tokens_est,
                 error
 tool_call       step, tool, args_hash, exit_code, truncated, format_error, duration_s

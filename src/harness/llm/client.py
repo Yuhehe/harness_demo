@@ -157,6 +157,7 @@ def parse_response(raw: Any, model: str) -> LLMResponse:
         usage=Usage(prompt, completion, cached, reasoning),
         model=str(getattr(raw, "model", "") or model),
         response_id=getattr(raw, "id", None),
+        system_fingerprint=getattr(raw, "system_fingerprint", None) or None,
     )
 
 
@@ -295,6 +296,8 @@ class LiteLLMClient:
                     reasoning_tokens=resp.usage.reasoning_tokens,
                     cost_usd=cost.cost_usd(self.model, resp.usage),
                     response_id=resp.response_id,
+                    served_model=resp.model,
+                    system_fingerprint=resp.system_fingerprint,
                     retries=attempt - 1,
                 )
                 return resp

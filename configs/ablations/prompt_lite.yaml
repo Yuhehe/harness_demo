@@ -1,0 +1,6 @@
+# Exploratory (not in the v0.1 matrix): the system prompt's `lite` variant, the only change.
+# Tests whether the prompt explains why M0 takes more steps than B0 (docs/notes.md section 25.1;
+# plan.md "M0 与 B0 差距的验证"). Run against M0 on the same tag at the same time.
+extends: ../default.yaml
+
+prompt_variant: lite

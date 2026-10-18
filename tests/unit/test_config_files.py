@@ -28,6 +28,8 @@ EXPECTED = {
     # the one deliberate pair (plan.md A6: budget pressure combined with A1)
     "budget_32k_none": {"context.budget_tokens", "context.strategy"},
     "no_guard": {"guard.enabled"},
+    # exploratory, v0.2-exp (plan.md "M0 与 B0 差距的验证")
+    "prompt_lite": {"prompt_variant"},
 }
 
 

@@ -97,6 +97,24 @@ async def test_success_is_parsed_and_the_request_has_the_agreed_shape(make):
     assert client.stats.calls == 1 and client.stats.failed_attempts == 0
 
 
+async def test_the_provider_build_is_recorded(make):
+    """`model` in the span is the name asked for; what answered is `served_model` plus the
+    provider's `system_fingerprint` (a model can change behind an unchanged name)."""
+    body = ok_body() | {"model": "deepseek-flash-0918", "system_fingerprint": "fp_abc"}
+    client, _, tracer, _ = make([Step(body=body)])
+    r = await client.complete(MSGS)
+    assert r.system_fingerprint == "fp_abc" and r.model == "deepseek-flash-0918"
+    (span,) = tracer.of("llm_call")
+    assert span["model"] == "deepseek/deepseek-flash"
+    assert (span["served_model"], span["system_fingerprint"]) == (
+        "deepseek-flash-0918",
+        "fp_abc",
+    )
+    without, _, tracer2, _ = make([Step(body=ok_body())])
+    assert (await without.complete(MSGS)).system_fingerprint is None
+    assert tracer2.of("llm_call")[0]["system_fingerprint"] is None
+
+
 async def test_generic_openai_route_sends_thinking_in_the_body(make):
     client, server, _, _ = make(
         [Step()], model="openai/deepseek-flash", thinking="enabled"

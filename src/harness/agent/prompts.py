@@ -34,9 +34,38 @@ _PLANNING = (
 )
 
 
+# `lite` (prompt_variant): the v1 text with three edits, fixed before the experiment that
+# tests them (plan.md, "M0 与 B0 差距的验证"). It drops the two instructions the trace analysis
+# points at (docs/notes.md section 25.1), keeps the fact that long outputs are cut, and asks for
+# independent commands in one response, as mini-swe-agent's prompt does.
+_LITE_EDITS = (
+    ("- Run the relevant tests after changing code, and read the output.\n", ""),
+    (
+        (
+            "- Keep outputs small (use head, grep, line ranges). Long outputs are cut and saved "
+            "to a file.\n"
+        ),
+        "- Long outputs are cut and saved to a file.\n",
+    ),
+    (
+        "- There is no network access.",
+        (
+            "- When commands do not depend on each other, issue them as several tool calls in "
+            "one response.\n- There is no network access."
+        ),
+    ),
+)
+
+
 def system_prompt(cfg: AgentConfig, workdir: str = "/testbed") -> str:
     planning = _PLANNING if cfg.planning == "on" and cfg.action_space == "tools" else ""
-    return _SYSTEM.format(workdir=workdir, planning=planning)
+    text = _SYSTEM.format(workdir=workdir, planning=planning)
+    if cfg.prompt_variant == "lite":
+        for old, new in _LITE_EDITS:
+            if text.count(old) != 1:
+                raise ValueError(f"lite prompt edit does not apply: {old!r}")
+            text = text.replace(old, new)
+    return text
 
 
 def task_message(problem_statement: str) -> str:

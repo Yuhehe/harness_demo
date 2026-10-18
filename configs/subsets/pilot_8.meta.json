@@ -1,0 +1,19 @@
+{
+  "algorithm": "v1: per repo (sorted) rng.sample over id-sorted ids of the parent",
+  "count": 8,
+  "parent": "configs/subsets/verified_25.txt",
+  "parent_count": 25,
+  "quotas": {
+    "django/django": 2,
+    "scikit-learn/scikit-learn": 2,
+    "sphinx-doc/sphinx": 2,
+    "sympy/sympy": 2
+  },
+  "repos": {
+    "django/django": 2,
+    "scikit-learn/scikit-learn": 2,
+    "sphinx-doc/sphinx": 2,
+    "sympy/sympy": 2
+  },
+  "seed": 42
+}

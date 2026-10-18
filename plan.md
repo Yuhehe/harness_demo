@@ -255,10 +255,10 @@
 **执行方式**：按阶段依次做，每个阶段做完根据结果决定下一步；每次批量运行先打印预计花费；超过 10 题的批量和越过 80% 预算线（$40）时停下来等你确认。
 
 **阶段 0：准备（零花费或几分钱）**
-- [ ] 0.1 记录 flash 换版：`results/CHANGELOG.md` 和 notes 记下受影响的结果（A6 的 17 次摘要、压缩冒烟、§19 的摘要大小标定、探针）；不受影响的（M0、M0-r2、B0、A2、A6×A1 只调用 v4-pro，A2 的 2 次压缩只清理没摘要）
-- [ ] 0.2 核对模型版本：v4-pro 和 flash 各发一次最小调用，看响应里的 `model`、`system_fingerprint`；今后在 `llm_call` span 里记下服务端返回的这两个字段（只加追踪字段，不改行为）
-- [ ] 0.3 把调用构成分析做进 `aggregate.py`（`quality.call_mix`：每题探索、跑测试、跑脚本、改源码次数，只改一次源码的题数，一个回复多个调用的比例），配测试
-- [ ] 0.4 提示词开关 `prompt.variant`（`v1` = 现在的提示词，`lite` = 变体），新配置 `configs/ablations/prompt_lite.yaml`；回归测试：`v1` 的 system prompt 与 v0.1 逐字节相同、回放端到端测试照常通过、变体文本不同且进入 `run_start` 和 `config_hash`
+- [x] （2026-10-18，`results/CHANGELOG.md`、notes §26）0.1 记录 flash 换版：`results/CHANGELOG.md` 和 notes 记下受影响的结果（A6 的 17 次摘要、压缩冒烟、§19 的摘要大小标定、探针）；不受影响的（M0、M0-r2、B0、A2、A6×A1 只调用 v4-pro，A2 的 2 次压缩只清理没摘要）
+- [x] （2026-10-18：服务端只返回不带版本的名字和 `system_fingerprint`；v4-pro 的 fingerprint 与 B0、B0-dev 的 1017 次响应一致，判断没变；flash 以前没记过，无法核实；新字段 `served_model`、`system_fingerprint` 已加，测试和变异检查通过）0.2 核对模型版本：v4-pro 和 flash 各发一次最小调用，看响应里的 `model`、`system_fingerprint`；今后在 `llm_call` span 里记下服务端返回的这两个字段（只加追踪字段，不改行为）
+- [x] （2026-10-18：在 M0、M0-r2、A2、B0 上复现了 dev_log 的数字；测试和变异检查通过，2 个变异体第一次存活，已补测试）0.3 把调用构成分析做进 `aggregate.py`（`quality.call_mix`：每题探索、跑测试、跑脚本、改源码次数，只改一次源码的题数，一个回复多个调用的比例），配测试
+- [x] （2026-10-18：键名定为顶层的 `prompt_variant`；`v1` 三种组合的 system prompt 哈希与 v0.1.1 相同；`lite` 保留了"长输出会被截断并落盘"这句事实，只删指令；全套 633 通过、1 跳过，回放端到端测试通过）0.4 提示词开关 `prompt.variant`（`v1` = 现在的提示词，`lite` = 变体），新配置 `configs/ablations/prompt_lite.yaml`；回归测试：`v1` 的 system prompt 与 v0.1 逐字节相同、回放端到端测试照常通过、变体文本不同且进入 `run_start` 和 `config_hash`
 - [ ] 0.5 打 tag `v0.2-exp`（加了配置键，所有配置的哈希都变），记入 CHANGELOG；在新 worktree 里跑
 
 **`lite` 变体（事先固定）**：只改 system prompt 的三处，工具和其他配置不动：删"Run the relevant tests after changing code"；删"Keep outputs small (use head, grep, line ranges)"；加"互不依赖的命令放在同一个回复里"。"最小改动、不要重构"暂不动。
@@ -415,6 +415,9 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 | 2026-10-16 | 新文件 `docs/dev_log.md`：阶段性结论，数字从 `results/` 手抄（用户决定列为 §2.3 的例外，不得被 README、简历、`results/summary/` 引用） | §2.3 加例外；§4 目录树的 `docs/` | [x] 2026-10-16 |
 | 2026-10-16 | 运行器支持并行（`run_agent.py --workers`，`run_b0.py --workers`） | §7 `run_agent.py` 那行的注释"顺序运行，并行是 TODO" | [x] 2026-10-16 |
 | 2026-10-16 | 注入安全评测从必做改为可选（MVP 不再含"1 份安全评测"；误拦率仍做） | §1 第 3 条（安全评测列为项目的实验之一），措辞要改为"可选"或注明 | [x] 2026-10-16（你说直接改，没有先看 diff） |
+| 2026-10-18 | 新配置键 `prompt_variant`（`v1` / `lite`），用于提示词对照实验 | §5.3 表（是否列入：它决定一个实验的设计） | [ ] |
+| 2026-10-18 | `llm_call` span 新字段 `served_model`、`system_fingerprint`（服务端实际回答的模型） | §5.7 `llm_call` 一条 | [ ] |
+| 2026-10-18 | 新配置 `configs/ablations/prompt_lite.yaml`；新子集 `configs/subsets/pilot_8.txt`（阶段 1） | §4 目录树 | [ ] |
 | 待办 | CLI 交互确认（`ask`）实现后 | §5.6 删掉"尚未实现" | [ ] |
 | 待办 | 回放补写 `llm_call` span 后（第 4 天） | §5.8 删掉"待做" | [ ] |
 | 待办 | `score.py` 写好后：`resolved.json` 约定（现在只在 `docs/notes.md` §12.6） | §6 或 §7 | [x] 2026-10-16（判定为不进 CLAUDE.md，约定在 `score.py`、`aggregate.py` 的模块说明里） |

@@ -99,6 +99,9 @@ class Task:
     external_tools: dict[str, int] | None = (
         None  # B0: tool calls from mini's trajectory
     )
+    external_responses: list[list[tuple[str, dict[str, Any]]]] | None = (
+        None  # B0: each model response's calls (tool, arguments), from mini's trajectory
+    )
 
     @property
     def complete(self) -> bool:
@@ -136,8 +139,37 @@ def load_run(run_dir: Path) -> dict[str, Task]:
     for iid, t in tasks.items():
         traj = run_dir / "mini" / iid / f"{iid}.traj.json"
         if traj.exists():  # B0: mini-swe-agent's own trajectory has the tool calls
-            t.external_tools = mini_tool_calls(json.loads(traj.read_text()))
+            mini = json.loads(traj.read_text())
+            t.external_tools = mini_tool_calls(mini)
+            t.external_responses = mini_responses(mini)
     return tasks
+
+
+def mini_responses(traj: dict[str, Any]) -> list[list[tuple[str, dict[str, Any]]]]:
+    """Each model response in a mini-swe-agent trajectory as its calls (tool, arguments)."""
+    out = []
+    for m in traj.get("messages", []):
+        if m.get("role") != "assistant":
+            continue
+        calls = [
+            (c.get("function", {}).get("name", "bash"), _args(c.get("function", {})))
+            for c in m.get("tool_calls") or []
+        ]
+        if not calls:
+            calls = [
+                ("bash", {"command": a.get("command", "")})
+                for a in (m.get("extra") or {}).get("actions") or []
+            ]
+        out.append(calls)
+    return out
+
+
+def _args(fn: dict[str, Any]) -> dict[str, Any]:
+    try:
+        a = json.loads(fn.get("arguments") or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return a if isinstance(a, dict) else {}
 
 
 def mini_tool_calls(traj: dict[str, Any]) -> dict[str, int]:
@@ -218,6 +250,99 @@ def time_split(t: Task) -> dict[str, float] | None:
         "model": model,
         "tools": tools,
         "other": max(wall - model - tools, 0.0),
+    }
+
+
+# ---- what the calls were for (heuristic, from the command text) ------------------------------------
+# docs/notes.md section 25.1: where a run's steps go. A command is sorted by its text, so the
+# classes are approximate (checked by hand on M0, A2 and B0, docs/dev_log.md 2026-10-16):
+#   explore   reading and searching: view, search, cat/sed -n/head/grep/find/ls/git/...
+#   edit      changing a source file: str_replace, or sed -i / cat > / a Python write to a file
+#             that is not a scratch file
+#   scratch   the same, into /tmp, a repro or test_*/debug script, or a throwaway Sphinx project
+#   test      a test runner (pytest, runtests.py, bin/test, unittest, tox)
+#   script    any other python run
+#   todo, submit (incl. mini's patch.txt steps), reread_saved (/tmp/harness/out_N), cleanup (rm),
+#   other
+_SCRATCH = re.compile(
+    r"(^|/)(repro\w*|reproduce\w*|scratch\w*|tmp\w*|debug\w*|check\w*|test_\w*|\w*_test"
+    r"|conf|foo|example)\.py$|(^|/)index\.rst$|^\$|^/tmp/|patch\.txt$"
+)
+_WRITE = re.compile(
+    r"sed\s+-i|perl\s+-pi|\bgit\s+apply\b|\bpatch\s+-p|open\([^)]*['\"]w['\"]|write_text\(|"
+    r"cat\s+>\s*\S+|cat\s+<<[^\n]*>\s*\S+|>\s*(?!/dev/null|&)\S+\.(py|txt|rst|cfg|toml)\b|\btee\s"
+)
+_TARGET = re.compile(
+    r"(?:cat\s+>\s*|>\s*|tee\s+|sed\s+-i[^\n]*?\s)(\S+\.(?:py|rst|txt|cfg|toml))"
+)
+CALL_CLASSES = (
+    "explore", "edit", "scratch", "test", "script", "todo", "submit", "reread_saved",
+    "cleanup", "other",
+)  # fmt: skip
+
+
+def classify_call(tool: str, args: dict[str, Any]) -> str:
+    if tool == "str_replace":
+        return "scratch" if _SCRATCH.search(str(args.get("path", ""))) else "edit"
+    if tool in ("view", "search"):
+        return "explore"
+    if tool in ("todo", "submit"):
+        return tool
+    cmd = str(args.get("command", ""))
+    c = re.sub(r"^\s*cd\s+\S+\s*&&\s*", "", cmd).strip()
+    if "COMPLETE_TASK_AND_SUBMIT" in c or re.search(
+        r"git diff[^|]*>\s*patch\.txt|cat patch\.txt", c
+    ):
+        return "submit"
+    if re.search(r"/tmp/harness/(out|ctx)_\d+", c):
+        return "reread_saved"
+    if re.match(r"rm\s", c):
+        return "cleanup"
+    if _WRITE.search(c):
+        targets = _TARGET.findall(c)
+        if targets and all(_SCRATCH.search(t) for t in targets):
+            return "scratch"
+        if not targets and re.search(r"(repro|scratch|/tmp/)", c):
+            return "scratch"
+        return "edit"
+    if re.search(r"pytest|runtests\.py|bin/test\b|-m unittest|\btox\b", c):
+        return "test"
+    if re.match(r"python3?\b", c):
+        return "script"
+    if re.match(r"(cat|sed|head|tail|nl|less|grep|rg|find|ls|git|awk|wc|tree)\b", c):
+        return "explore"
+    return "other"
+
+
+def responses(t: Task) -> list[list[tuple[str, dict[str, Any]]]]:
+    """Each model response of the run as its calls (tool, arguments)."""
+    if t.external_responses is not None:
+        return t.external_responses
+    return [
+        [
+            (c.get("function", {}).get("name", ""), _args(c.get("function", {})))
+            for c in calls
+        ]
+        for m in t.messages
+        if m.get("role") == "assistant"
+        for calls in [m.get("tool_calls") or []]
+    ]
+
+
+def call_mix(t: Task) -> dict[str, Any] | None:
+    """Calls by class, source edits, and how often one response carried several calls. None
+    without per-response records (B0 converted without mini's trajectory)."""
+    rs = responses(t)
+    if not rs:
+        return None
+    counts = dict.fromkeys(CALL_CLASSES, 0)
+    for calls in rs:
+        for tool, args in calls:
+            counts[classify_call(tool, args)] += 1
+    return {
+        "calls": counts,
+        "responses": len(rs),
+        "multi_call_responses": sum(len(calls) > 1 for calls in rs),
     }
 
 
@@ -362,6 +487,7 @@ def task_metrics(t: Task) -> dict[str, Any] | None:
         "repo": repo_of(t.instance_id),
         "tool_calls": tool_counts(t),
         "time_split": time_split(t),
+        "call_mix": call_mix(t),
         "patch": None if t.patch is None else patch_stats(t.patch),
         "ratio_unusual": sum(
             bool(c.get("ratio_unusual")) for c in [*t.compactions, *t.skipped]
@@ -449,7 +575,23 @@ def _quality(
             for label, g in sorted(groups.items())
         }
 
+    mixes = [r["call_mix"] for r in rows if r["call_mix"]]
     return {
+        "call_mix": None
+        if not mixes
+        else {
+            "tasks": len(mixes),
+            "per_task": {c: mean([m["calls"][c] for m in mixes]) for c in CALL_CLASSES},
+            "single_edit_tasks": sum(m["calls"]["edit"] == 1 for m in mixes),
+            "multi_call_share": _share(
+                sum(m["multi_call_responses"] for m in mixes),
+                sum(m["responses"] for m in mixes),
+            ),
+            "calls_per_response": _share(
+                sum(sum(m["calls"].values()) for m in mixes),
+                sum(m["responses"] for m in mixes),
+            ),
+        },
         "cost_per_resolved": total_cost / k if k else None,
         "tests": {
             "judged": len(judged),
