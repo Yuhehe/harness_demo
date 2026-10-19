@@ -96,28 +96,55 @@ Notes: workers per run: M0 1/2, B0 1. Wall time is only comparable between runs 
 <!-- RESULTS:ABLATION:START -->
 ### Ablations (one factor changed at a time)
 
-| ID | Change vs. M0 | Resolve rate | Δ vs. M0 | $/task | Overflow rate |
-|---|---|---|---|---|---|
-| A1 | context = none | {{TBD}} | {{TBD}} | {{TBD}} | {{TBD}} |
-| A2 | action space = bash_only | {{TBD}} | {{TBD}} | {{TBD}} | {{TBD}} |
-| A3 | context = truncate | {{TBD}} | {{TBD}} | {{TBD}} | {{TBD}} |
-| A4 | context = summarize | {{TBD}} | {{TBD}} | {{TBD}} | {{TBD}} |
-| A5 | planning = off | {{TBD}} | {{TBD}} | {{TBD}} | {{TBD}} |
-| A6 | budget = 32K | {{TBD}} | {{TBD}} | {{TBD}} | {{TBD}} |
+Each ablation against `M0-r2` (the main configuration rerun on the same commit with the same worker count) on the ablation's own tasks; ratios are medians of the per-task ratio with a bootstrap 95% interval. "Only abl / only base" counts the tasks only one side resolved, with an exact sign test.
+
+| ID | Change vs. M0 | Tasks | Resolved | Only abl / only base | $/task | Cost ratio | Steps ratio | Overflow rate |
+|---|---|---|---|---|---|---|---|---|
+| A2 | action space = bash only | 25 (`verified_25`) | 23/25 (base 24) | 1 / 2 (p = 1) | $0.211 | 1.29 (1.05–1.41) | 1.11 (1.04–1.29) | 0.0% |
+| A5 | planning = off | 25 (`verified_25`) | 22/25 (base 24) | 0 / 2 (p = 0.5) | $0.168 | 1.05 (0.84–1.27) | 1.07 (0.81–1.26) | 0.0% |
+| A6 | context budget = 32k (hybrid) | 25 (`verified_25`) | 22/25 (base 24) | 0 / 2 (p = 0.5) | $0.250 | 1.33 (0.99–1.60) | 1.13 (1.00–1.36) | 0.0% |
+| A6xA1 | context budget = 32k, context = none | 25 (`verified_25`) | 15/25 (base 24) | 0 / 9 (p = 0.0039) | $0.080 | 0.71 (0.53–0.86) | 0.71 (0.56–0.86) | 60.0% |
+| (noise) | none: `M0` against `M0-r2`, same config | 25 | — | 0 / 2 (p = 0.5) | — | 1.04 (0.88–1.30) | 1.00 (0.93–1.21) | — |
+| (noise) | none: `M0-r2` against `M0`, same config | 25 | — | 2 / 0 (p = 0.5) | — | 0.96 (0.77–1.13) | 1.00 (0.83–1.08) | — |
+
+Not run: A1, A3, A4. `M0-r2` compacted in 0 of its tasks at the 128k budget, so at that budget the context strategy never acts.
+Context pressure (32k): A6 (compaction on) against A6xA1 (off) on the same tasks: overflow 0.0% vs 60.0%; resolved only with compaction / only without: 7 / 0 (p = 0.016); cost ratio 2.03 (1.24–2.86), steps ratio 1.59 (1.14–2.12) (runs that overflow stop early, so they are cheaper).
+The two noise rows are the same pair of runs of the main configuration, each way round; the direction of a ratio is arbitrary, so both are shown. One run per configuration.
 <!-- RESULTS:ABLATION:END -->
 
 <!-- RESULTS:COST:START -->
+### Cost
+
+Standard (peak) price for every token, the same formula for all runs (`llm/cost.py`).
+
+| Run | Tasks | Total | $/task mean (P50) | $/resolved | Tokens in/out (mean) | Cache hit | Compaction share | Steps |
+|---|---|---|---|---|---|---|---|---|
+| M0 | 50 (`verified_50`) | $10.293 | $0.206 ($0.116) | $0.278 | 1910k / 20k | 98.2% | 0.0% | 53.4 |
+| B0 | 50 (`verified_50`) | $8.046 | $0.161 ($0.108) | $0.206 | 1293k / 17k | 97.8% | — | 41.7 |
+| M0-r2 | 25 (`verified_25`) | $4.173 | $0.167 ($0.122) | $0.174 | 1384k / 18k | 98.1% | — | 47.5 |
+| A2 | 25 (`verified_25`) | $5.282 | $0.211 ($0.141) | $0.230 | 1847k / 21k | 98.1% | 0.0% | 54.4 |
+| A5 | 25 (`verified_25`) | $4.191 | $0.168 ($0.120) | $0.191 | 1419k / 18k | 98.0% | — | 47.3 |
+| A6 | 25 (`verified_25`) | $6.241 | $0.250 ($0.178) | $0.284 | 1132k / 20k | 92.4% | 4.2% | 59.8 |
+| A6xA1 | 25 (`verified_25`) | $2.003 | $0.080 ($0.087) | $0.134 | 470k / 8.6k | 95.8% | — | 29.0 |
+
+Where the calls go (per task; classes from the command text, `aggregate.py`):
+
+| Run | Explore | Run scripts | Run tests | Edit source | Todo | Tasks with one source edit | Responses with several calls |
+|---|---|---|---|---|---|---|---|
+| M0 | 29.8 | 12.9 | 5.1 | 2.5 | 1.7 | 24/50 | 4.0% |
+| B0 | 24.3 | 10.5 | 3.9 | 1.8 | 0.0 | 32/50 | 5.4% |
 <!-- RESULTS:COST:END -->
 
 <!-- RESULTS:SECURITY:START -->
-### Prompt-injection suite (20 cases)
+### Permission guard
 
-| Guard | Attack success rate ↓ | Utility under attack ↑ | False-block rate on SWE-bench ↓ |
-|---|---|---|---|
-| off | {{TBD}} | {{TBD}} | — |
-| on | {{TBD}} | {{TBD}} | {{TBD}} |
+Prompt-injection suite: not run (optional, plan.md).
 
-Breakdown by injection vector (README, code comment, tool output, issue text): see `results/summary/security.md`.
+| Run | Tasks | Guard checks (bash) | Blocks | Reviewed: false / true / unreviewed | False-block rate (all calls) | False-block rate (bash) |
+|---|---|---|---|---|---|---|
+| M0 | 50 | 2793 (1916) | 7 | 7 / 0 / 0 | 0.25% | 0.37% |
+
+Every block was reviewed by hand (docs/failure_analysis.md); the rule matches commands by text, so it is defence in depth, not a proof. The sandbox (no network, resource caps) is the boundary.
 <!-- RESULTS:SECURITY:END -->
 
 ![cost vs resolve]({{docs/img/cost_vs_resolve.png}})
@@ -199,7 +226,7 @@ results/       per-run trajectories (gitignored) and committed summaries
 
 - 50 tasks and a single model, so results may not generalize to other models or task distributions.
 - The injection suite is small and hand-built, so it is not a replacement for AgentDojo-scale evaluation.
-- The service mounts `docker.sock` to create sandboxes, which gives the service container root-equivalent power on the host. Bind it to localhost and use it on machines you control; it is **not** a production security boundary.
+- The service mounts `docker.sock` to create sandboxes, which gives the service container root-equivalent power on the host. Files it writes under `results/service/` are owned by root. Bind it to localhost and use it on machines you control; it is **not** a production security boundary.
 - One run per configuration; the ablations use 25 of the 50 tasks. Run-to-run variation on the same tasks is measured once (the main configuration rerun) and used as the yardstick.
 - The permission guard matches command text with regular expressions. Its test-file rule cannot tell creating a new scratch file under `tests/` from editing an existing test, which is where all its blocks on the main run came from; the policy is frozen with the main run, so this is reported, not fixed.
 - The model provider can change a model behind an unchanged name (it happened to the summarizer model during this project). Trajectories record the server's model name and fingerprint since `v0.2-exp`; results made before that rely on the baseline's stored fingerprints.

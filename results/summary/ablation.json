@@ -1,0 +1,437 @@
+{
+  "base": "M0-r2",
+  "base_compactions": 0,
+  "base_provenance": {
+    "config_hashes": [
+      "6ea20eaecc69"
+    ],
+    "git_commits": [
+      "77f0d9e8979366067000edf32acb17b688365062"
+    ],
+    "models": [
+      "deepseek/deepseek-v4-pro"
+    ],
+    "workers": [
+      3
+    ]
+  },
+  "not_run": [
+    "A1",
+    "A3",
+    "A4"
+  ],
+  "pressure": {
+    "overflow_with": 0.0,
+    "overflow_without": 0.6,
+    "paired": {
+      "base": "A6xA1",
+      "cost_usd": {
+        "ci95": [
+          1.2444647216048919,
+          2.8576100048044846
+        ],
+        "median_ratio": 2.033898305084746,
+        "n": 25,
+        "other_higher": 20
+      },
+      "other": "A6",
+      "resolved": {
+        "both": 15,
+        "only_base": 0,
+        "only_other": 7,
+        "sign_test_p": 0.015625
+      },
+      "steps": {
+        "ci95": [
+          1.1363636363636365,
+          2.1176470588235294
+        ],
+        "median_ratio": 1.59375,
+        "n": 25,
+        "other_higher": 20
+      },
+      "tasks": 25,
+      "wall_seconds": {
+        "ci95": [
+          1.1474248380801537,
+          2.240472436471073
+        ],
+        "median_ratio": 1.7789159636694982,
+        "n": 25,
+        "other_higher": 19
+      }
+    },
+    "with": "A6",
+    "without": "A6xA1"
+  },
+  "rows": [
+    {
+      "change": "action space = bash only",
+      "cost_per_task": {
+        "mean": 0.21129035136,
+        "p50": 0.14101692000000005
+      },
+      "id": "A2",
+      "overflow_rate": 0.0,
+      "paired": {
+        "base": "M0-r2",
+        "cost_usd": {
+          "ci95": [
+            1.046906087440201,
+            1.4104912075005145
+          ],
+          "median_ratio": 1.291754451161936,
+          "n": 25,
+          "other_higher": 18
+        },
+        "other": "A2",
+        "resolved": {
+          "both": 22,
+          "only_base": 2,
+          "only_other": 1,
+          "sign_test_p": 1.0
+        },
+        "steps": {
+          "ci95": [
+            1.0434782608695652,
+            1.288888888888889
+          ],
+          "median_ratio": 1.1090909090909091,
+          "n": 25,
+          "other_higher": 18
+        },
+        "tasks": 25,
+        "wall_seconds": {
+          "ci95": [
+            1.2740748958019683,
+            1.5215587754148165
+          ],
+          "median_ratio": 1.4018219025857612,
+          "n": 25,
+          "other_higher": 19
+        }
+      },
+      "provenance": {
+        "config_hashes": [
+          "8a196050cbdc"
+        ],
+        "git_commits": [
+          "77f0d9e8979366067000edf32acb17b688365062"
+        ],
+        "models": [
+          "deepseek/deepseek-v4-pro"
+        ],
+        "workers": [
+          3
+        ]
+      },
+      "resolve_rate": {
+        "n": 25,
+        "rate": 0.92,
+        "resolved": 23,
+        "wilson95": [
+          0.7503348787704218,
+          0.977780066308908
+        ]
+      },
+      "run_id": "A2",
+      "subset": "verified_25",
+      "tasks": 25
+    },
+    {
+      "change": "planning = off",
+      "cost_per_task": {
+        "mean": 0.16764744128,
+        "p50": 0.119658176
+      },
+      "id": "A5",
+      "overflow_rate": 0.0,
+      "paired": {
+        "base": "M0-r2",
+        "cost_usd": {
+          "ci95": [
+            0.8401244844714947,
+            1.2674534635197836
+          ],
+          "median_ratio": 1.045942427761885,
+          "n": 25,
+          "other_higher": 14
+        },
+        "other": "A5",
+        "resolved": {
+          "both": 22,
+          "only_base": 2,
+          "only_other": 0,
+          "sign_test_p": 0.5
+        },
+        "steps": {
+          "ci95": [
+            0.8095238095238095,
+            1.2580645161290323
+          ],
+          "median_ratio": 1.0727272727272728,
+          "n": 25,
+          "other_higher": 14
+        },
+        "tasks": 25,
+        "wall_seconds": {
+          "ci95": [
+            0.7900118793062486,
+            0.9982220863778528
+          ],
+          "median_ratio": 0.9189546450504572,
+          "n": 25,
+          "other_higher": 7
+        }
+      },
+      "provenance": {
+        "config_hashes": [
+          "2f529a66df04"
+        ],
+        "git_commits": [
+          "77f0d9e8979366067000edf32acb17b688365062"
+        ],
+        "models": [
+          "deepseek/deepseek-v4-pro"
+        ],
+        "workers": [
+          3
+        ]
+      },
+      "resolve_rate": {
+        "n": 25,
+        "rate": 0.88,
+        "resolved": 22,
+        "wilson95": [
+          0.7004380781662651,
+          0.9583325864293191
+        ]
+      },
+      "run_id": "A5",
+      "subset": "verified_25",
+      "tasks": 25
+    },
+    {
+      "change": "context budget = 32k (hybrid)",
+      "cost_per_task": {
+        "mean": 0.24964250192,
+        "p50": 0.17773025600000003
+      },
+      "id": "A6",
+      "overflow_rate": 0.0,
+      "paired": {
+        "base": "M0-r2",
+        "cost_usd": {
+          "ci95": [
+            0.9931490363298701,
+            1.6007476794776907
+          ],
+          "median_ratio": 1.3288090837678952,
+          "n": 25,
+          "other_higher": 17
+        },
+        "other": "A6",
+        "resolved": {
+          "both": 22,
+          "only_base": 2,
+          "only_other": 0,
+          "sign_test_p": 0.5
+        },
+        "steps": {
+          "ci95": [
+            1.0,
+            1.358695652173913
+          ],
+          "median_ratio": 1.1333333333333333,
+          "n": 25,
+          "other_higher": 17
+        },
+        "tasks": 25,
+        "wall_seconds": {
+          "ci95": [
+            1.124725344375898,
+            1.476045264563318
+          ],
+          "median_ratio": 1.2335494416116621,
+          "n": 25,
+          "other_higher": 19
+        }
+      },
+      "provenance": {
+        "config_hashes": [
+          "9765e9636470"
+        ],
+        "git_commits": [
+          "77f0d9e8979366067000edf32acb17b688365062"
+        ],
+        "models": [
+          "deepseek/deepseek-v4-pro"
+        ],
+        "workers": [
+          3
+        ]
+      },
+      "resolve_rate": {
+        "n": 25,
+        "rate": 0.88,
+        "resolved": 22,
+        "wilson95": [
+          0.7004380781662651,
+          0.9583325864293191
+        ]
+      },
+      "run_id": "A6",
+      "subset": "verified_25",
+      "tasks": 25
+    },
+    {
+      "change": "context budget = 32k, context = none",
+      "cost_per_task": {
+        "mean": 0.0801369536,
+        "p50": 0.08664365600000001
+      },
+      "id": "A6xA1",
+      "overflow_rate": 0.6,
+      "paired": {
+        "base": "M0-r2",
+        "cost_usd": {
+          "ci95": [
+            0.5282916278318084,
+            0.8566691875337097
+          ],
+          "median_ratio": 0.709712149720507,
+          "n": 25,
+          "other_higher": 6
+        },
+        "other": "A6xA1",
+        "resolved": {
+          "both": 15,
+          "only_base": 9,
+          "only_other": 0,
+          "sign_test_p": 0.00390625
+        },
+        "steps": {
+          "ci95": [
+            0.5555555555555556,
+            0.8648648648648649
+          ],
+          "median_ratio": 0.7142857142857143,
+          "n": 25,
+          "other_higher": 5
+        },
+        "tasks": 25,
+        "wall_seconds": {
+          "ci95": [
+            0.48773426591342883,
+            0.9942848745121732
+          ],
+          "median_ratio": 0.8240307963958349,
+          "n": 25,
+          "other_higher": 7
+        }
+      },
+      "provenance": {
+        "config_hashes": [
+          "cf505bbbc109"
+        ],
+        "git_commits": [
+          "77f0d9e8979366067000edf32acb17b688365062"
+        ],
+        "models": [
+          "deepseek/deepseek-v4-pro"
+        ],
+        "workers": [
+          3
+        ]
+      },
+      "resolve_rate": {
+        "n": 25,
+        "rate": 0.6,
+        "resolved": 15,
+        "wilson95": [
+          0.4073912778512734,
+          0.7659694233580908
+        ]
+      },
+      "run_id": "A6xA1",
+      "subset": "verified_25",
+      "tasks": 25
+    }
+  ],
+  "run_to_run": {
+    "base": "M0-r2",
+    "cost_usd": {
+      "ci95": [
+        0.8821265197224429,
+        1.3002539665201116
+      ],
+      "median_ratio": 1.0436154598700604,
+      "n": 25,
+      "other_higher": 13
+    },
+    "other": "M0",
+    "resolved": {
+      "both": 22,
+      "only_base": 2,
+      "only_other": 0,
+      "sign_test_p": 0.5
+    },
+    "steps": {
+      "ci95": [
+        0.9285714285714286,
+        1.2112676056338028
+      ],
+      "median_ratio": 1.0,
+      "n": 25,
+      "other_higher": 12
+    },
+    "tasks": 25,
+    "wall_seconds": {
+      "ci95": [
+        1.0622513065906063,
+        1.280903595042533
+      ],
+      "median_ratio": 1.2561770557333163,
+      "n": 25,
+      "other_higher": 18
+    }
+  },
+  "run_to_run_reverse": {
+    "base": "M0",
+    "cost_usd": {
+      "ci95": [
+        0.7690805225353893,
+        1.1336242337603062
+      ],
+      "median_ratio": 0.95820734595529,
+      "n": 25,
+      "other_higher": 12
+    },
+    "other": "M0-r2",
+    "resolved": {
+      "both": 22,
+      "only_base": 0,
+      "only_other": 2,
+      "sign_test_p": 0.5
+    },
+    "steps": {
+      "ci95": [
+        0.8255813953488372,
+        1.0769230769230769
+      ],
+      "median_ratio": 1.0,
+      "n": 25,
+      "other_higher": 11
+    },
+    "tasks": 25,
+    "wall_seconds": {
+      "ci95": [
+        0.7806988784091863,
+        0.9413968180557878
+      ],
+      "median_ratio": 0.7960661241469912,
+      "n": 25,
+      "other_higher": 7
+    }
+  }
+}

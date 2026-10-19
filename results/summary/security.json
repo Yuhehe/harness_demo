@@ -1,0 +1,13 @@
+{
+  "bash_decisions": 1916,
+  "decisions": 2793,
+  "denies": 7,
+  "false_block_rate": 0.002506265664160401,
+  "false_block_rate_bash": 0.0036534446764091857,
+  "false_blocks": 7,
+  "injection_suite": "not run (optional, plan.md)",
+  "run_id": "M0",
+  "tasks": 50,
+  "true_blocks": 0,
+  "unreviewed": 0
+}

@@ -17,3 +17,6 @@ results/runs/
 
 # mini-swe-agent global config dir (set MSWEA_GLOBAL_CONFIG_DIR to this)
 .mswea/
+
+# the service (docker compose) writes its task files here
+results/service/

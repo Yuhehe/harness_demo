@@ -220,9 +220,14 @@ def summarize_ablations(
         "not_run": not_run,
         "base_compactions": base["metrics"]["compaction"]["tasks_with_compaction"],
     }
-    if m0 is not None:  # the yardstick: the same config twice
-        out["run_to_run"] = pair_on(base, {**m0, "ids": m0["ids"] & base["ids"],
-                                           "rows": [r for r in m0["rows"] if r["instance_id"] in base["ids"]]})  # fmt: skip
+    if m0 is not None:  # the yardstick: the same config twice, in both directions
+        m0_on_base = {
+            **m0,
+            "ids": m0["ids"] & base["ids"],
+            "rows": [r for r in m0["rows"] if r["instance_id"] in base["ids"]],
+        }
+        out["run_to_run"] = pair_on(base, m0_on_base)
+        out["run_to_run_reverse"] = pair_on(m0_on_base, base)
     if "A6" in runs and "A6xA1" in runs:
         out["pressure"] = {
             "with": "A6",
@@ -320,6 +325,10 @@ def summarize_security(
 # ---- rendering ------------------------------------------------------------------------------------
 def _pct(x: float | None) -> str:
     return "—" if x is None else f"{100 * x:.1f}%"
+
+
+def _pct2(x: float | None) -> str:
+    return "—" if x is None else f"{100 * x:.2f}%"
 
 
 def _usd(x: float | None) -> str:
@@ -464,12 +473,14 @@ def render_ablation(a: dict[str, Any]) -> str:
             f"| {rr['resolved']}/{rr['n']} (base {base_k}) | {_res(p)} | {_usd(r['cost_per_task']['mean'])} "
             f"| {_ci(p.get('cost_usd'))} | {_ci(p.get('steps'))} | {_pct(r['overflow_rate'])} |"
         )
-    if "run_to_run" in a:
-        p = a["run_to_run"]
-        lines.append(
-            f"| (noise) | none: `{p['other']}` again, same config | {p['tasks']} | — "
-            f"| {_res(p)} | — | {_ci(p.get('cost_usd'))} | {_ci(p.get('steps'))} | — |"
-        )
+    for key in ("run_to_run", "run_to_run_reverse"):
+        if key in a:
+            p = a[key]
+            lines.append(
+                f"| (noise) | none: `{p['other']}` against `{p['base']}`, same config "
+                f"| {p['tasks']} | — | {_res(p)} | — | {_ci(p.get('cost_usd'))} "
+                f"| {_ci(p.get('steps'))} | — |"
+            )
     notes = []
     if a["not_run"]:
         notes.append(
@@ -488,8 +499,9 @@ def render_ablation(a: dict[str, Any]) -> str:
             "(runs that overflow stop early, so they are cheaper)."
         )
     notes.append(
-        "A difference counts only if its interval lies wholly outside the noise row's "
-        "(docs/notes.md section 22.9); one run per configuration."
+        "The two noise rows are the same pair of runs of the main configuration, each way "
+        "round; the direction of a ratio is arbitrary, so both are shown. One run per "
+        "configuration."
     )
     lines += [""] + notes
     return "\n".join(lines) + "\n"
@@ -544,7 +556,7 @@ def render_security(s: dict[str, Any]) -> str:
                 (
                     f"| {s['run_id']} | {s['tasks']} | {s['decisions']} ({s['bash_decisions']}) "
                     f"| {s['denies']} | {s['false_blocks']} / {s['true_blocks']} / {s['unreviewed']} "
-                    f"| {_pct(s['false_block_rate'])} | {_pct(s['false_block_rate_bash'])} |"
+                    f"| {_pct2(s['false_block_rate'])} | {_pct2(s['false_block_rate_bash'])} |"
                 ),
                 "",
                 (

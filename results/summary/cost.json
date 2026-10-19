@@ -1,0 +1,244 @@
+{
+  "baseline": "B0",
+  "main": "M0",
+  "rows": [
+    {
+      "cache_hit_rate": 0.982061275844705,
+      "call_mix": {
+        "calls_per_response": 1.0468515742128937,
+        "multi_call_share": 0.03973013493253373,
+        "per_task": {
+          "cleanup": 0.18,
+          "edit": 2.46,
+          "explore": 29.76,
+          "other": 1.3,
+          "reread_saved": 0.06,
+          "scratch": 1.36,
+          "script": 12.86,
+          "submit": 1.06,
+          "test": 5.08,
+          "todo": 1.74
+        },
+        "single_edit_tasks": 24,
+        "tasks": 50
+      },
+      "compaction_cost_share": 0.0,
+      "cost_per_resolved": 0.27818656562162164,
+      "cost_per_task": {
+        "mean": 0.20585805856,
+        "p50": 0.115918088
+      },
+      "run_id": "M0",
+      "steps_mean": 53.36,
+      "subset": "verified_50",
+      "tasks": 50,
+      "tokens_in_mean": 1910180.44,
+      "tokens_out_mean": 19718.8,
+      "total_usd": 10.292902928
+    },
+    {
+      "cache_hit_rate": 0.9784719169260879,
+      "call_mix": {
+        "calls_per_response": 1.0743048897411314,
+        "multi_call_share": 0.05417066155321189,
+        "per_task": {
+          "cleanup": 0.14,
+          "edit": 1.76,
+          "explore": 24.32,
+          "other": 1.3,
+          "reread_saved": 0.0,
+          "scratch": 0.8,
+          "script": 10.52,
+          "submit": 2.1,
+          "test": 3.88,
+          "todo": 0.0
+        },
+        "single_edit_tasks": 32,
+        "tasks": 50
+      },
+      "compaction_cost_share": null,
+      "cost_per_resolved": 0.2063050676923077,
+      "cost_per_task": {
+        "mean": 0.16091795279999999,
+        "p50": 0.10751422000000002
+      },
+      "run_id": "B0",
+      "steps_mean": 41.72,
+      "subset": "verified_50",
+      "tasks": 50,
+      "tokens_in_mean": 1292961.38,
+      "tokens_out_mean": 17300.56,
+      "total_usd": 8.04589764
+    },
+    {
+      "cache_hit_rate": 0.9808897314823101,
+      "call_mix": {
+        "calls_per_response": 1.046335299073294,
+        "multi_call_share": 0.04296545914069082,
+        "per_task": {
+          "cleanup": 0.0,
+          "edit": 2.2,
+          "explore": 26.6,
+          "other": 0.84,
+          "reread_saved": 0.08,
+          "scratch": 0.76,
+          "script": 11.6,
+          "submit": 1.0,
+          "test": 4.56,
+          "todo": 2.04
+        },
+        "single_edit_tasks": 14,
+        "tasks": 25
+      },
+      "compaction_cost_share": null,
+      "cost_per_resolved": 0.17388495299999998,
+      "cost_per_task": {
+        "mean": 0.16692955488,
+        "p50": 0.12171473600000003
+      },
+      "run_id": "M0-r2",
+      "steps_mean": 47.48,
+      "subset": "verified_25",
+      "tasks": 25,
+      "tokens_in_mean": 1383917.76,
+      "tokens_out_mean": 18255.24,
+      "total_usd": 4.173238872
+    },
+    {
+      "cache_hit_rate": 0.9809248623405877,
+      "call_mix": {
+        "calls_per_response": 1.0022075055187638,
+        "multi_call_share": 0.002207505518763797,
+        "per_task": {
+          "cleanup": 0.04,
+          "edit": 2.04,
+          "explore": 28.76,
+          "other": 2.04,
+          "reread_saved": 0.0,
+          "scratch": 1.08,
+          "script": 13.44,
+          "submit": 0.96,
+          "test": 6.12,
+          "todo": 0.0
+        },
+        "single_edit_tasks": 13,
+        "tasks": 25
+      },
+      "compaction_cost_share": 0.0,
+      "cost_per_resolved": 0.22966342539130433,
+      "cost_per_task": {
+        "mean": 0.21129035136,
+        "p50": 0.14101692000000005
+      },
+      "run_id": "A2",
+      "steps_mean": 54.36,
+      "subset": "verified_25",
+      "tasks": 25,
+      "tokens_in_mean": 1846535.56,
+      "tokens_out_mean": 21489.48,
+      "total_usd": 5.282258784
+    },
+    {
+      "cache_hit_rate": 0.9802329597574597,
+      "call_mix": {
+        "calls_per_response": 1.0245139475908707,
+        "multi_call_share": 0.024513947590870666,
+        "per_task": {
+          "cleanup": 0.12,
+          "edit": 2.48,
+          "explore": 26.28,
+          "other": 1.88,
+          "reread_saved": 0.08,
+          "scratch": 0.6,
+          "script": 9.8,
+          "submit": 1.04,
+          "test": 6.2,
+          "todo": 0.0
+        },
+        "single_edit_tasks": 11,
+        "tasks": 25
+      },
+      "compaction_cost_share": null,
+      "cost_per_resolved": 0.190508456,
+      "cost_per_task": {
+        "mean": 0.16764744128,
+        "p50": 0.119658176
+      },
+      "run_id": "A5",
+      "steps_mean": 47.32,
+      "subset": "verified_25",
+      "tasks": 25,
+      "tokens_in_mean": 1418796.12,
+      "tokens_out_mean": 17533.96,
+      "total_usd": 4.191186032
+    },
+    {
+      "cache_hit_rate": 0.9236553367463972,
+      "call_mix": {
+        "calls_per_response": 1.0675133689839573,
+        "multi_call_share": 0.06016042780748663,
+        "per_task": {
+          "cleanup": 0.16,
+          "edit": 2.96,
+          "explore": 38.64,
+          "other": 0.76,
+          "reread_saved": 0.04,
+          "scratch": 0.76,
+          "script": 12.96,
+          "submit": 1.0,
+          "test": 4.92,
+          "todo": 1.68
+        },
+        "single_edit_tasks": 13,
+        "tasks": 25
+      },
+      "compaction_cost_share": 0.04156443571278733,
+      "cost_per_resolved": 0.2836846612727273,
+      "cost_per_task": {
+        "mean": 0.24964250192,
+        "p50": 0.17773025600000003
+      },
+      "run_id": "A6",
+      "steps_mean": 59.84,
+      "subset": "verified_25",
+      "tasks": 25,
+      "tokens_in_mean": 1132136.24,
+      "tokens_out_mean": 20161.68,
+      "total_usd": 6.241062548
+    },
+    {
+      "cache_hit_rate": 0.9578366244774604,
+      "call_mix": {
+        "calls_per_response": 1.1020689655172413,
+        "multi_call_share": 0.08827586206896551,
+        "per_task": {
+          "cleanup": 0.16,
+          "edit": 1.04,
+          "explore": 21.04,
+          "other": 0.6,
+          "reread_saved": 0.0,
+          "scratch": 0.24,
+          "script": 5.24,
+          "submit": 0.48,
+          "test": 2.08,
+          "todo": 1.08
+        },
+        "single_edit_tasks": 9,
+        "tasks": 25
+      },
+      "compaction_cost_share": null,
+      "cost_per_resolved": 0.13356158933333334,
+      "cost_per_task": {
+        "mean": 0.0801369536,
+        "p50": 0.08664365600000001
+      },
+      "run_id": "A6xA1",
+      "steps_mean": 29.0,
+      "subset": "verified_25",
+      "tasks": 25,
+      "tokens_in_mean": 469725.2,
+      "tokens_out_mean": 8635.76,
+      "total_usd": 2.00342384
+    }
+  ]
+}

@@ -248,6 +248,12 @@ def test_ablations_pair_with_the_base_on_their_own_tasks(setup):
     assert rows["A2"]["paired"]["steps"]["median_ratio"] == 2.0
     assert set(a["not_run"]) == {"A1", "A3", "A4", "A5"}
     assert a["run_to_run"]["other"] == "M" and a["run_to_run"]["tasks"] == 2
+    rev = a["run_to_run_reverse"]
+    assert (rev["base"], rev["other"]) == ("M", "R2")
+    # 2 tasks: medians are means of two ratios, so only check the direction flips
+    assert (rev["steps"]["median_ratio"] < 1) == (
+        a["run_to_run"]["steps"]["median_ratio"] > 1
+    )
     pr = a["pressure"]
     assert (pr["with"], pr["without"]) == ("A6", "A6xA1")
     assert pr["paired"]["resolved"]["only_other"] == 2  # A6 resolved both, A6xA1 none
