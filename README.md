@@ -8,7 +8,7 @@
 > **TL;DR**
 > - On a 50-task SWE-bench Verified subset, harness-lab resolves **{{X}}%** (95% CI {{…}}), compared with **{{Y}}%** for mini-SWE-agent on the same model, at **${{Z}}** per task.
 > - Under a 32K context budget, **{{strategy}}** cuts context-overflow failures from {{a}}% to {{b}}%.
-> - The permission guard lowers prompt-injection attack success from **{{d}}%** to **{{e}}%**, with a {{f}}% false-block rate.
+> - The permission guard's false-block rate on the main run: **{{f}}%** (every block reviewed by hand).
 
 ![demo]({{docs/img/demo.gif}})
 
@@ -23,7 +23,7 @@ Questions this project answers:
 1. How much does context management matter, and when does it matter? (Recent work suggests the benefit shows up mostly under tight context budgets.)
 2. Should the agent get only a bash tool, or a set of purpose-built tools?
 3. Does explicit planning improve accuracy, or mostly reduce cost?
-4. Can a lightweight permission layer stop prompt injection without blocking legitimate work?
+4. What does a lightweight, rule-based permission layer cost in legitimate work it blocks? (A prompt-injection suite is optional and not run yet.)
 
 {{One or two sentences on your own motivation, e.g. a systems-engineering background and why reliability and sandboxing matter to you.}}
 
@@ -33,7 +33,7 @@ Questions this project answers:
 
 ```mermaid
 flowchart LR
-    U[CLI / FastAPI] --> L[Agent Loop]
+    U[CLI · batch runner · FastAPI + SSE] --> L[Agent Loop]
     L --> CM[Context Manager<br/>none · truncate · summarize · hybrid]
     CM --> LLM[LLM Client<br/>LiteLLM · retry · cost · cache stats]
     L --> G[Permission Guard<br/>read · write · exec · deny rules]
@@ -48,11 +48,12 @@ flowchart LR
 | Decision | Choice | Why |
 |---|---|---|
 | No agent framework | Hand-written loop; LiteLLM used only to send requests | Every behavior is explicit and can be ablated |
-| KV-cache-friendly context | Stable prefix, append-only history, deterministic serialization, dynamic info at the tail | Agent workloads read far more tokens than they write, so prefix-cache hits drive both cost and latency. Measured cache hit rate: **{{c}}%** |
+| KV-cache-friendly context | Stable prefix, append-only history, deterministic serialization, dynamic info at the tail | Agent workloads read far more tokens than they write, so prefix-cache hits drive both cost and latency (cache hit rate per run: see the cost table) |
 | Recoverable truncation | Long tool output is saved inside the sandbox, and the model sees head, tail and the file path | Keeps the context small without losing information for good |
 | Sandbox | One Docker container per task (the official SWE-bench image), network off | Model-generated commands never run on the host |
 | Guard | Tiered policy plus deny patterns; `ask` becomes `deny` in batch mode | Destructive or exfiltrating actions are blocked before they run |
 | Replay LLM | Responses are recorded once and replayed in CI | Tests are deterministic and cost nothing |
+| Frozen experiments | Every comparison runs on a tagged commit; config hash, model, server fingerprint and git state are recorded in each trajectory | A result can be traced to the exact code and model that produced it |
 
 {{Optional: one paragraph on the hardest bug you hit and how you fixed it.}}
 
@@ -158,23 +159,28 @@ cp .env.example .env            # then add your API key(s) and choose models
 # run on a toy repo
 uv run harness run --config configs/default.yaml --repo tests/fixtures/toy_repo --task "fix the failing test"
 
-# run as a service
-docker compose -f docker/docker-compose.yml up
-curl -X POST localhost:8000/tasks -H 'content-type: application/json' \
-  -d '{"repo": "tests/fixtures/toy_repo", "task": "fix the failing test", "config": "default"}'
-curl -N localhost:8000/tasks/{{id}}/events     # SSE stream of spans
+# run as a service (keyless demo: the toy task answered from a recording)
+docker build -t harness-toy tests/fixtures/toy_image          # the sandbox image
+HARNESS_REPLAY=/app/tests/fixtures/replays/toy_fix.jsonl docker compose -f docker/docker-compose.yml up
+curl -X POST localhost:8000/tasks -H 'content-type: application/json' -d '{"repo_path": "toy_repo", "config": "toy",
+  "task": "The unit tests of this library fail: add() returns a wrong result. Fix the bug in the library code."}'
+curl -N localhost:8000/tasks/<id>/events      # SSE: one event per trajectory span, then `end` with the patch
 ```
 
 ## Reproduce the experiments
 
 ```bash
-uv run python eval/swebench/pull_images.py --subsets configs/subsets/verified_50.txt
-uv run python eval/swebench/run_agent.py --config configs/default.yaml --subset configs/subsets/verified_50.txt --workers {{4}} --run-id m0
-uv run python eval/swebench/score.py --run-id m0
-# baseline: see eval/baselines/mini_swe_agent.md
-uv run python eval/security/run_security.py --guard off && uv run python eval/security/run_security.py --guard on
-uv run python eval/report/make_tables.py
+uv run python eval/swebench/pull_images.py --subsets configs/subsets/verified_50.txt --verify
+uv run python eval/swebench/run_agent.py --config configs/default.yaml --subset configs/subsets/verified_50.txt --workers 3 --run-id M0
+uv run python eval/swebench/score.py --run-id M0
+uv run python eval/baselines/run_b0.py run --config configs/default.yaml --subset configs/subsets/verified_50.txt --run-id B0
+uv run python eval/swebench/score.py --run-id B0
+# ablations: the same two commands with configs/ablations/<name>.yaml on configs/subsets/verified_25.txt
+uv run python eval/report/make_tables.py       # every table in this README
+uv run python eval/report/plots.py             # the two figures
 ```
+
+Every batch run prints its expected cost and asks before spending; it resumes where it stopped (by instance id) and refuses to mix two configurations in one run id.
 
 Requirements: x86_64 machine with Python 3.12, uv and Docker, about {{150}} GB of free disk, and an estimated API cost of ${{…}} for the full matrix.
 
@@ -193,8 +199,11 @@ results/       per-run trajectories (gitignored) and committed summaries
 
 - 50 tasks and a single model, so results may not generalize to other models or task distributions.
 - The injection suite is small and hand-built, so it is not a replacement for AgentDojo-scale evaluation.
-- The service mounts `docker.sock` to create sandboxes. That is fine for local use, but it is **not** a production security boundary.
-- {{Anything else you observed}}
+- The service mounts `docker.sock` to create sandboxes, which gives the service container root-equivalent power on the host. Bind it to localhost and use it on machines you control; it is **not** a production security boundary.
+- One run per configuration; the ablations use 25 of the 50 tasks. Run-to-run variation on the same tasks is measured once (the main configuration rerun) and used as the yardstick.
+- The permission guard matches command text with regular expressions. Its test-file rule cannot tell creating a new scratch file under `tests/` from editing an existing test, which is where all its blocks on the main run came from; the policy is frozen with the main run, so this is reported, not fixed.
+- The model provider can change a model behind an unchanged name (it happened to the summarizer model during this project). Trajectories record the server's model name and fingerprint since `v0.2-exp`; results made before that rely on the baseline's stored fingerprints.
+- Known harness issues found in the runs (a 120 s command timeout that is tight for one test suite, a `submit` tool that rejects a free-text note) are listed in `docs/notes.md` §25 and not fixed during the experiments.
 
 ## Roadmap
 
@@ -204,8 +213,8 @@ results/       per-run trajectories (gitignored) and committed summaries
 
 ## References
 
-- SWE-bench / SWE-bench Verified: {{link}}
-- mini-SWE-agent: {{link}}
+- SWE-bench / SWE-bench Verified: https://www.swebench.com
+- mini-SWE-agent: https://github.com/SWE-agent/mini-swe-agent
 - *An Empirical Study of Harness Design for Coding Agents* (2026): https://huggingface.co/papers/2609.20804
 - AgentDojo: https://arxiv.org/abs/2406.13352
 - Manus, *Context Engineering for AI Agents* (2025): {{link}}
