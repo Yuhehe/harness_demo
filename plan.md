@@ -307,20 +307,20 @@
 
 ## 第 4 天：误拦率、服务化、CI
 
-- [ ] 从 M0 的轨迹里统计 `false_block_rate`，抽 20 条拦截记录人工复核（零花费，不依赖注入用例；verified_25 上 M0 只有 2 次拦截，都已复核为误拦，见 2026-10-15 日志，拦截不足 20 条时全部复核）
-- [ ] `service/`：
+- [x] （2026-10-20：7 次拦截全部复核为误拦，0.25%（全部调用）/ 0.37%（bash），由 `make_tables.py` 的安全表生成）从 M0 的轨迹里统计 `false_block_rate`，抽 20 条拦截记录人工复核（零花费，不依赖注入用例；verified_25 上 M0 只有 2 次拦截，都已复核为误拦，见 2026-10-15 日志，拦截不足 20 条时全部复核）
+- [x] `service/`（2026-10-20：`service/{api,worker,store}.py`，另有一个配置 `HARNESS_REPLAY` 用录制回答、不需要 API key；24 个单元测试 + 1 个端到端测试）：
   - `POST /tasks`：提交仓库路径或 git URL、任务描述、配置名
   - `GET /tasks/{id}`：查询状态和结果
   - `GET /tasks/{id}/events`：用 SSE 流式推送 span
   - 后台用 asyncio 队列加 worker 执行；任务状态存 SQLite
-- [ ] `docker/Dockerfile` 和 `docker-compose.yml`：Dockerfile 基于 `python:3.12-slim`，复制官方 uv 二进制，用 `uv sync --frozen --no-dev` 装依赖（不用 pip）；服务通过挂载宿主机的 `docker.sock` 创建沙箱容器；README 里要说明这样做的安全影响
-- [ ] `.github/workflows/ci.yml`：用 `astral-sh/setup-uv` 装 uv，`uv sync` 后 `uv run` 跑 ruff 检查和 pytest（含回放端到端测试），不需要任何密钥
+- [x] （2026-10-20：镜像 2GB；验收见下）`docker/Dockerfile` 和 `docker-compose.yml`：Dockerfile 基于 `python:3.12-slim`，复制官方 uv 二进制，用 `uv sync --frozen --no-dev` 装依赖（不用 pip）；服务通过挂载宿主机的 `docker.sock` 创建沙箱容器；README 里要说明这样做的安全影响
+- [~] （2026-10-20 已写好，本地无法运行 GitHub Actions；等你决定 push 后第一次真正运行。回放补写 `llm_call` span 也已完成）`.github/workflows/ci.yml`：用 `astral-sh/setup-uv` 装 uv，`uv sync` 后 `uv run` 跑 ruff 检查和 pytest（含回放端到端测试），不需要任何密钥
   - 第 1 天遗留给这一项的事：CI 要先构建 `harness-toy` 镜像（`tests/fixtures/toy_image/Dockerfile`，本机网络下 apt 用了约 9 分钟，CI 网络通常快得多，但仍要留出时间，最好缓存），沙箱的集成测试和回放的端到端测试都需要它；`ReplayClient` 目前不写 `llm_call` span，回放的轨迹只有 `run_end` 的合计，见 `docs/notes.md` §10
 - [ ] 跑完剩下的 P1 消融实验；如果预算允许，跑 M0'
 
 **验收**
-- `docker compose up` 后，用 curl 提交 toy_repo 任务，能收到 SSE 事件和补丁
-- CI 通过
+- `docker compose up` 后，用 curl 提交 toy_repo 任务，能收到 SSE 事件和补丁（**2026-10-20 通过**：回放模式，36 个事件、从 `run_start` 到 `run_end`，含 5 个 `llm_call`，最终补丁把 `a - b` 改成 `a + b`）
+- CI 通过（未验证：还没 push）
 - 误拦率已统计（原为"安全评测表生成"，注入评测改为可选）
 
 ---
@@ -827,3 +827,5 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
   - 与下一步（误拦率复核、表格）不冲突，那些零花费的工作在运行期间做。
 - **A5 完成**（$4.19，22/25；规划开关的效果无法区分）。sympy-13031 的空补丁核实为模型判断"不需要修改"，不是 harness 的问题。
 - **发现并记录了一个方法问题**：随机波动区间的方向是任意的，两个方向下主比较的成本区间一个在外、一个重叠；之前"超出随机波动"的说法因此不稳健（`docs/dev_log.md` 的更正一节）。判定规则怎么改等你决定。
+- **第 4 天工程部分完成**（零 API 花费）：服务（`4e04d2e`）、Dockerfile / compose / CI、回放写 `llm_call` span（`afbf733`）；Docker 镜像构建和 compose 验收在 A5 跑完、提示词实验开始之前做（构建会和沙箱抢 CPU，A5 的测试命令有 120 秒超时）。CI 未 push（你的决定）。
+- **你的决定**：提示词实验按计划跑；先不 push。三组（D、A2、B0）各补 17 题，同时开跑。
