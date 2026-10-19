@@ -165,9 +165,11 @@ async def run_one(
             else None
         )
         if replay:
-            llm = ReplayClient(cfg.llm, replay)
+            llm = ReplayClient(cfg.llm, replay, tracer=tracer)
             if summary_cfg:
-                summarizer = ReplayClient(summary_cfg, replay)
+                summarizer = ReplayClient(
+                    summary_cfg, replay, tracer=tracer, purpose="summary"
+                )
         else:
             llm = LiteLLMClient(cfg.llm, tracer)
             if summary_cfg:

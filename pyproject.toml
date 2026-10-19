@@ -56,3 +56,7 @@ markers = [
 # ruff 0.16 also formats Python code blocks inside Markdown. Our docs (CLAUDE.md, plan.md,
 # docs/**) contain illustrative snippets, so keep ruff to real Python sources.
 extend-exclude = ["*.md"]
+
+[tool.ruff.lint.isort]
+# docker/ (Dockerfile, compose) at the repository root is not the `docker` SDK
+known-third-party = ["docker"]

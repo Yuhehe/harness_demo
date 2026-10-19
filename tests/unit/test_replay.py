@@ -210,3 +210,31 @@ async def test_an_empty_recording_is_reported(tmp_path):
     path.write_text("")
     with pytest.raises(ReplayMiss, match="empty"):
         await ReplayClient(CFG, path).complete(convo(), TOOLS)
+
+
+async def test_with_a_tracer_each_replayed_answer_writes_an_llm_call_span(tmp_path):
+    from harness.llm import cost
+    from harness.tracing.tracer import MemoryTracer
+
+    path = tmp_path / "r.jsonl"
+    recorded = resp("first")
+    await RecordingClient(ScriptedLLM([recorded]), CFG, path).complete(
+        convo()[:2], TOOLS
+    )
+    tracer = MemoryTracer()
+    out = await ReplayClient(CFG, path, tracer=tracer, purpose="summary").complete(
+        convo()[:2], TOOLS
+    )
+    (span,) = tracer.of("llm_call")
+    assert (
+        span["replay"] is True
+        and span["purpose"] == "summary"
+        and span["outcome"] == "ok"
+    )
+    assert (span["prompt_tokens"], span["completion_tokens"]) == (10, 5)
+    assert span["cost_usd"] == pytest.approx(
+        cost.cost_usd(CFG.resolved_model(), out.usage)
+    )
+    assert span["served_model"] == "deepseek-flash" and span["latency_s"] == 0.0
+    # without a tracer nothing is written (and nothing breaks)
+    assert (await ReplayClient(CFG, path).complete(convo()[:2], TOOLS)) == out

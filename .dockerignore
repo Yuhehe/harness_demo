@@ -1,0 +1,12 @@
+# The build context is the repository root (docker/docker-compose.yml). Keep it small, and keep
+# secrets and run data out of the image.
+.git
+.venv
+.env
+.mswea
+results
+docs
+eval
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache

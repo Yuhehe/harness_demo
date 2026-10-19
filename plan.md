@@ -442,7 +442,8 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 | 2026-10-18 | `llm_call` span 新字段 `served_model`、`system_fingerprint`（服务端实际回答的模型） | §5.7 `llm_call` 一条 |[x] 2026-10-19 |
 | 2026-10-18 | 新配置 `configs/ablations/prompt_lite.yaml`、`prompt_mini_bash.yaml`；新子集 `configs/subsets/pilot_8.txt`（阶段 1） | §4 目录树 |[x] 2026-10-19 |
 | 待办 | CLI 交互确认（`ask`）实现后 | §5.6 删掉"尚未实现" | [ ] |
-| 待办 | 回放补写 `llm_call` span 后（第 4 天） | §5.8 删掉"待做" | [ ] |
+| 2026-10-20 | 回放补写 `llm_call` span（已实现：`ReplayClient` 带 tracer 时按录制的 usage 写，`replay: true`） | §5.8 删掉"待做" | [ ] |
+| 2026-10-20 | 新文件 `.dockerignore`（仓库根目录）；服务的启动命令 `uvicorn --factory harness.service.api:create_app`；服务的环境变量（`HARNESS_*`，见 `service/worker.py` 模块说明） | §4 目录树、§7 命令 | [ ] |
 | 待办 | `score.py` 写好后：`resolved.json` 约定（现在只在 `docs/notes.md` §12.6） | §6 或 §7 | [x] 2026-10-16（判定为不进 CLAUDE.md，约定在 `score.py`、`aggregate.py` 的模块说明里） |
 | 待办 | 冻结前定下 `default.yaml` 的步数 / 成本 / 墙钟上限（现在是临时值） | 不进 CLAUDE.md，只记 plan.md | [x] 2026-10-12（150 步 / $2 / 1800 秒，依据在 `default.yaml` 注释） |
 | 2026-10-13 | 提示词估计的误差：有锚时约 ±8% 仍成立（实测更小），压缩过程中没有锚；回传的推理计入 `prompt_tokens`，本地计数也计入（`docs/notes.md` §17.2–17.3） | §5.3 不变量里"约 ±8% 的误差（§11.3）" | [x] 2026-10-14 |

@@ -1,0 +1,41 @@
+# Lint and tests on every push and pull request. No secrets and no API cost: the end-to-end
+# tests answer from the recording in tests/fixtures/replays (CLAUDE.md section 5.8).
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      # same tool and the same commands as locally (CLAUDE.md section 3.1)
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.9.13"
+          enable-cache: true
+
+      - name: Install (Python 3.12 from .python-version, locked dependencies)
+        run: uv sync --frozen
+
+      - name: Lint
+        run: uv run ruff check . && uv run ruff format --check .
+
+      # the sandbox image the Docker and replay tests need; apt dominates the build, so the
+      # layers are cached between runs
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the toy sandbox image
+        uses: docker/build-push-action@v6
+        with:
+          context: tests/fixtures/toy_image
+          tags: harness-toy:latest
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Tests (unit, sandbox, replay end to end, service)
+        run: uv run pytest -q

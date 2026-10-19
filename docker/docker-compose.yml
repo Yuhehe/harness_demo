@@ -1,0 +1,31 @@
+# One command: docker compose -f docker/docker-compose.yml up
+#
+# The service starts sandboxes through the host's Docker daemon (docker.sock is mounted). That
+# gives the service container the power of root on the host: run it only on a machine you
+# control, never expose port 8000 beyond localhost. The sandboxes themselves keep their limits
+# (no network, memory / CPU / pid caps; CLAUDE.md section 5.5).
+#
+# Without an API key, answer from the toy recording:
+#   HARNESS_REPLAY=/app/tests/fixtures/replays/toy_fix.jsonl docker compose -f docker/docker-compose.yml up
+# The sandbox image for repository tasks must exist on the host:
+#   docker build -t harness-toy tests/fixtures/toy_image
+services:
+  harness:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: harness-lab:latest
+    ports:
+      - "127.0.0.1:8000:8000"
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      HARNESS_RESULTS_DIR: /app/results/service
+      HARNESS_REPOS_ROOT: /app/tests/fixtures
+      HARNESS_IMAGE: ${HARNESS_IMAGE:-harness-toy:latest}
+      HARNESS_REPLAY: ${HARNESS_REPLAY:-}
+      HARNESS_WORKERS: ${HARNESS_WORKERS:-1}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ../results/service:/app/results/service

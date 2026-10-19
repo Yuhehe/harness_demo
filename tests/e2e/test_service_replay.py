@@ -56,4 +56,9 @@ def test_the_service_runs_the_recorded_toy_task(docker_client, tmp_path):
     types = [s["type"] for s in spans]
     assert types[0] == "run_start" and types[-1] == "run_end"
     assert spans[0]["config"]["prompt_variant"] == "v1"
+    # replayed calls leave the same llm_call spans a live run does (recorded usage)
+    calls = [x for x in spans if x["type"] == "llm_call"]
+    assert len(calls) == 5 and all(
+        c["replay"] and c["prompt_tokens"] > 0 for c in calls
+    )
     assert body.rstrip().split("\n\n")[-1].startswith("event: end")

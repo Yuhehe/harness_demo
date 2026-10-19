@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.config import LLMConfig
+from harness.llm import cost
 from harness.llm.client import LLMClient
 from harness.llm.types import CallStats, LLMResponse, Message
 
@@ -146,9 +147,19 @@ class RecordingClient:
 
 class ReplayClient:
     def __init__(
-        self, cfg: LLMConfig, path: str | Path, *, strict_tool_outputs: bool = False
+        self,
+        cfg: LLMConfig,
+        path: str | Path,
+        *,
+        strict_tool_outputs: bool = False,
+        tracer: Any = None,
+        purpose: str = "agent",
     ) -> None:
+        """With a `tracer`, every replayed answer writes the `llm_call` span a live call
+        would (recorded usage, the same cost formula, latency 0, `replay: true`), so a replayed
+        trajectory has the shape `aggregate.py` reads."""
         self.cfg = cfg
+        self.tracer, self.purpose = tracer, purpose
         self.strict_tool_outputs = strict_tool_outputs
         self.stats = CallStats()
         self.mismatches: list[
@@ -175,7 +186,29 @@ class ReplayClient:
         self._compare_tool_outputs(rec, digests, previews)
         self.stats.calls += 1
         self.stats.attempts += 1
-        return LLMResponse.from_dict(rec["response"])
+        resp = LLMResponse.from_dict(rec["response"])
+        if self.tracer is not None:
+            model = self.cfg.resolved_model()
+            self.tracer.emit(
+                "llm_call",
+                attempt=1,
+                outcome="ok",
+                purpose=self.purpose,
+                model=model,
+                finish_reason=resp.finish_reason,
+                latency_s=0.0,
+                prompt_tokens=resp.usage.prompt_tokens,
+                cached_tokens=resp.usage.cached_tokens,
+                completion_tokens=resp.usage.completion_tokens,
+                reasoning_tokens=resp.usage.reasoning_tokens,
+                cost_usd=cost.cost_usd(model, resp.usage),
+                response_id=resp.response_id,
+                served_model=resp.model,
+                system_fingerprint=resp.system_fingerprint,
+                retries=0,
+                replay=True,
+            )
+        return resp
 
     def _compare_tool_outputs(
         self, rec: dict[str, Any], digests: list[str], previews: list[str]
