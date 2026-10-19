@@ -805,3 +805,9 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - 核对哪些结果用到了 flash（各运行 `llm_call` 的 `model`、`purpose`）：A6 有 17 次摘要调用、压缩冒烟各有 1–4 次；M0、M0-r2、A2、A6×A1 只调用了 v4-pro，B0 不经过我们的客户端。
 - 阶段 0 完成（`a01bcbc`，tag `v0.2-exp`，worktree `../harness_demo-v02`）；阶段 1 开跑（两边同时，各 1 个 worker），中间有一次误启动，见阶段 1 的偏差记录。LiteLLM 的"assistant message is missing `reasoning_content`，注入占位符"警告在 v0.1 的所有运行日志里都有（每次几千条），不是新问题，各配置一样，不影响这次对照；记入待查。
 - 阶段 3 完成（`v0.2.1-exp`，提交 `05054b1`）：D（只用 bash + mini 的提示词）对同期 A2、B0，按事先的规则刚好判为"提示词是主因"，但证据弱（8 题、区间宽、成本没降）。累计花费 $35.31（全部 `run_end` 合计 $35.28，加上被丢弃的半截尝试 $0.04），离 80% 线（$40）约 $4.7。
+
+### 2026-10-19
+
+- **你的决定**：CLAUDE.md 按确认的 diff 同步（`e8224d7`，待同步清单 3 行勾掉）；预算提高到 $80（三个 `.env` 都已改，80% 线 $64）；执行步骤 A：在 `v0.1.1` 冻结 worktree 上补跑 verified_50 剩下的 25 题（M0、B0）。
+- **步骤 A 的做法**（与原计划"依次跑、3 个 worker"的差别）：M0（2 个 worker）和 B0（1 个 worker）**同时**跑，共 3 个沙箱，好处是两者在同一时段、同一服务端版本下运行；沿用 run-id `M0`、`B0` 续跑（配置哈希 `6ea20eaecc69` 不变）。开跑前核对：M0 的运行器显示 50 题、已完成 25、待跑 25、预计 $4.03；B0 的 `run_b0.py` 打印的是 50 题的最坏花费（$100），mini-swe-agent 会跳过 `preds.json` 里已有的 25 题，实际最坏 $50；按 verified_25 的单题成本估 B0 约 $3.2。续跑前把 M0、B0 的 `preds.jsonl`、`status.jsonl`、`run_meta.json` 和 B0 的 `mini/preds.json` 备份到 `results/runs/_backup_2026-10-19/`。
+- 已知限制：`v0.1.1` 没有 `served_model` / `system_fingerprint` 字段，M0 后半的版本一致性只能靠同时跑的 B0（mini 存原始响应）间接核对；前半是串行、后半 M0 是 2 个 worker，耗时按两半分开说明。
