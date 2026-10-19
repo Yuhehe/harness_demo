@@ -105,6 +105,9 @@ Notes: workers per run: M0 1/2, B0 1. Wall time is only comparable between runs 
 | A6 | budget = 32K | {{TBD}} | {{TBD}} | {{TBD}} | {{TBD}} |
 <!-- RESULTS:ABLATION:END -->
 
+<!-- RESULTS:COST:START -->
+<!-- RESULTS:COST:END -->
+
 <!-- RESULTS:SECURITY:START -->
 ### Prompt-injection suite (20 cases)
 

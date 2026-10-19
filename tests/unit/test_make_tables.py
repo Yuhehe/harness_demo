@@ -15,8 +15,16 @@ old table
 <!-- RESULTS:MAIN:END -->
 
 <!-- RESULTS:ABLATION:START -->
-untouched
+old ablations
 <!-- RESULTS:ABLATION:END -->
+
+untouched
+
+<!-- RESULTS:COST:START -->
+<!-- RESULTS:COST:END -->
+
+<!-- RESULTS:SECURITY:START -->
+<!-- RESULTS:SECURITY:END -->
 """
 
 
@@ -60,11 +68,13 @@ def setup(tmp_path):
     runs = tmp_path / "runs"
     make_run(runs, "M", {"a": (10, 0.2), "b": (20, 0.4)}, {"a"})
     make_run(runs, "B", {"a": (5, 0.1), "b": (10, 0.2)}, {"a", "b"})
+    make_run(runs, "R2", {"a": (12, 0.25), "b": (18, 0.35)}, {"a"})
     readme = tmp_path / "README.md"
     readme.write_text(README)
     args = [
         "--main", "M", "--baseline", "B", "--results-dir", str(runs),
         "--summary-dir", str(tmp_path / "summary"), "--readme", str(readme),
+        "--ablation-base", "R2", "--review", str(tmp_path / "review.md"),
     ]  # fmt: skip
     return tmp_path, runs, readme, args
 
@@ -75,6 +85,11 @@ def test_writes_summary_and_readme_and_is_stable(setup):
     assert main(args) == 0
     text = readme.read_text()
     assert "old table" not in text and "intro stays" in text and "untouched" in text
+    assert (
+        "old ablations" not in text
+        and "### Cost" in text
+        and "### Permission guard" in text
+    )
     table = (tmp / "summary" / "main.md").read_text()
     assert table in text
     s = json.loads((tmp / "summary" / "main.json").read_text())
@@ -137,9 +152,11 @@ def test_an_unfinished_task_is_refused(tmp_path):
     make_run(runs, "B", {"a": (5, 0.1), "b": (10, 0.2)}, {"a"})
     readme = tmp_path / "README.md"
     readme.write_text(README)
+    make_run(runs, "R2", {"a": (5, 0.1), "b": (10, 0.2)}, {"a"})
     with pytest.raises(SystemExit, match="no run_end"):
         main(["--main", "M", "--baseline", "B", "--results-dir", str(runs),
-              "--summary-dir", str(tmp_path / "s"), "--readme", str(readme)])  # fmt: skip
+              "--summary-dir", str(tmp_path / "s"), "--readme", str(readme),
+              "--ablation-base", "R2"])  # fmt: skip
 
 
 def test_subset_name_matches_the_exact_set(tmp_path):
@@ -215,3 +232,87 @@ def test_the_setup_line_says_whether_config_and_model_match(setup):
     assert (
         "configs h1 vs h2, models m vs m" in (tmp / "summary" / "main.md").read_text()
     )
+
+
+# ---- ablations, cost, security ------------------------------------------------------------------
+def test_ablations_pair_with_the_base_on_their_own_tasks(setup):
+    tmp, runs, _, args = setup
+    make_run(runs, "A2", {"a": (24, 0.5)}, {"a"})  # one task of the base's two
+    make_run(runs, "A6", {"a": (12, 0.25), "b": (18, 0.35)}, {"a", "b"})
+    make_run(runs, "A6xA1", {"a": (6, 0.1), "b": (9, 0.2)}, set())
+    main(args)
+    a = json.loads((tmp / "summary" / "ablation.json").read_text())
+    rows = {r["id"]: r for r in a["rows"]}
+    assert set(rows) == {"A2", "A6", "A6xA1"} and a["base"] == "R2"
+    assert rows["A2"]["paired"]["tasks"] == 1  # paired on A2's tasks only
+    assert rows["A2"]["paired"]["steps"]["median_ratio"] == 2.0
+    assert set(a["not_run"]) == {"A1", "A3", "A4", "A5"}
+    assert a["run_to_run"]["other"] == "M" and a["run_to_run"]["tasks"] == 2
+    pr = a["pressure"]
+    assert (pr["with"], pr["without"]) == ("A6", "A6xA1")
+    assert pr["paired"]["resolved"]["only_other"] == 2  # A6 resolved both, A6xA1 none
+    md = (tmp / "summary" / "ablation.md").read_text()
+    assert "| A2 | action space = bash only | 1 (`custom`) | 1/1 (base 1) |" in md
+    assert "Not run: A1, A3, A4, A5." in md and "| (noise) |" in md
+
+
+def test_an_ablation_with_tasks_the_base_lacks_is_refused(setup):
+    _, runs, _, args = setup
+    make_run(runs, "A5", {"a": (1, 0.1), "zzz": (1, 0.1)}, set())
+    with pytest.raises(SystemExit, match="lacks"):
+        main(args)
+
+
+def test_cost_lists_main_baseline_base_then_ablations(setup):
+    tmp, runs, _, args = setup
+    make_run(runs, "A5", {"a": (3, 0.3)}, {"a"})
+    main(args)
+    c = json.loads((tmp / "summary" / "cost.json").read_text())
+    assert [r["run_id"] for r in c["rows"]] == ["M", "B", "R2", "A5"]
+    assert c["rows"][0]["total_usd"] == pytest.approx(0.6)
+
+
+def deny(rule="deny.test_edit_bash"):
+    return {"type": "guard_decision", "action": "deny", "tool": "bash", "rule_id": rule}
+
+
+def allow(tool="bash"):
+    return {"type": "guard_decision", "action": "allow", "tool": tool, "rule_id": None}
+
+
+def test_false_block_rate_from_spans_and_reviews(tmp_path):
+    runs = tmp_path / "runs"
+    d = make_run(runs, "M", {"a": (5, 0.2), "b": (5, 0.2)}, {"a"})
+    make_run(runs, "B", {"a": (5, 0.1), "b": (5, 0.1)}, {"a"})
+    make_run(runs, "R2", {"a": (5, 0.1), "b": (5, 0.1)}, {"a"})
+    spans = {"a": [allow(), allow("view"), deny(), deny()], "b": [allow(), deny()]}
+    for iid, extra in spans.items():
+        f = d / "trajectories" / f"{iid}.jsonl"
+        lines = f.read_text().splitlines()
+        f.write_text("\n".join(lines[:1] + [json.dumps(s) for s in extra] + lines[1:]))
+    review = tmp_path / "review.md"
+    review.write_text(
+        "## 权限层拦截的人工复核\n\n| M | a | deny.test_edit_bash | false_block | x |\n"
+        "| M | a | deny.test_edit_bash | true_block | y |\n| B | b | r | false_block | z |\n"
+        "\n## 之后的一节\n\n| M | b | r | false_block | outside the section |\n"
+    )
+    readme = tmp_path / "README.md"
+    readme.write_text(README)
+    main(["--main", "M", "--baseline", "B", "--results-dir", str(runs),
+          "--summary-dir", str(tmp_path / "s"), "--readme", str(readme),
+          "--ablation-base", "R2", "--review", str(review)])  # fmt: skip
+    s = json.loads((tmp_path / "s" / "security.json").read_text())
+    assert (s["decisions"], s["bash_decisions"], s["denies"]) == (6, 5, 3)
+    # b's block has no review row for run M (the B row belongs to another run)
+    assert (s["false_blocks"], s["true_blocks"], s["unreviewed"]) == (1, 1, 1)
+    assert s["false_block_rate"] == pytest.approx(1 / 6)
+    assert s["false_block_rate_bash"] == pytest.approx(1 / 5)
+
+
+def test_an_unknown_review_verdict_is_an_error(tmp_path):
+    from make_tables import load_reviews
+
+    p = tmp_path / "r.md"
+    p.write_text("## 权限层拦截的人工复核\n| M | a | r | maybe | x |\n")
+    with pytest.raises(SystemExit, match="maybe"):
+        load_reviews(p, "M")
