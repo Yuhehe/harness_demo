@@ -61,10 +61,10 @@ harness-lab/
 ├── pyproject.toml  uv.lock  .python-version   # uv 管理；uv.lock 必须提交
 ├── configs/
 │   ├── default.yaml            # 主配置
-│   ├── ablations/              # 每个文件只改一个因素
+│   ├── ablations/              # 每个文件只改一个因素；有意组合的例外和探索性配置在 tests/unit/test_config_files.py 的 EXPECTED 里逐个列明
 │   ├── smoke/                  # 冒烟用配置（不是消融，不被消融测试枚举）
 │   ├── policy.yaml             # 权限层规则
-│   └── subsets/{dev_5.txt, verified_50.txt, verified_25.txt, verified_25.meta.json}
+│   └── subsets/{dev_5.txt, verified_50.txt, verified_25.txt, verified_25.meta.json, pilot_8.txt, pilot_8.meta.json}
 ├── src/harness/
 │   ├── config.py               # pydantic 配置模型 + YAML 加载
 │   ├── agent/{loop.py, state.py, prompts.py, limits.py}
@@ -136,6 +136,7 @@ async def run_task(task: Task, cfg: AgentConfig, sandbox: Sandbox, llm: LLMClien
 | `llm.reasoning_effort` | `high` \| `max` | 思考强度；`thinking: disabled` 时不能设；进 `config_hash`、回放键和 `run_start` |
 | `context.budget_tokens` | 例如 `128000` / `32000` | 人为限制上下文预算，用来制造上下文压力（小预算下各策略的差异才能显现）。**只算发给模型的提示词（输入）**，不含输出上限 `max_tokens`，两者互不扣减 |
 | `planning` | `on` \| `off` | `on`：启用 todo 工具，并在 prompt 里提示先规划再执行 |
+| `prompt_variant` | `v1` \| `lite` \| `mini` | system prompt 与任务消息的版本。`v1` 是 v0.1 冻结的原文（测试按哈希钉住，改它就要换 tag 并重跑）；`lite`、`mini` 只用于探索性的提示词对照（`plan.md`），不进主实验矩阵 |
 | `guard.enabled` | `true` \| `false` | 权限层开关 |
 | `tool_output.max_chars` | 例如 `8000` | 超过就截断，只保留开头和结尾 |
 
@@ -179,7 +180,7 @@ async def run_task(task: Task, cfg: AgentConfig, sandbox: Sandbox, llm: LLMClien
 每次运行写到 `results/runs/<run_id>/trajectories/<instance_id>.jsonl`，一行一个 span，写完立即落盘，进程崩溃后仍留得下完整轨迹。span 类型：`run_start`、`llm_call`、`tool_call`、`guard_decision`、`compaction`、`compaction_skipped`、`message`、`truncation`、`run_end`。**字段以各发射处和 `tracing/tracer.py` 的模块说明为准**；必须满足的约定：
 
 - `run_start` 要记录足够复现这次运行的信息：config 的哈希、git commit 与是否有未提交改动（`git_dirty`）、模型名、随机种子、价格表的哈希、思考和输出上限设置、权限策略的哈希。
-- `llm_call` 记录输入、输出和缓存命中的 token 数、成本、延迟、重试次数和原因；失败的尝试也写（`usage` 为空）；摘要调用与 agent 调用用 `purpose` 区分。
+- `llm_call` 记录输入、输出和缓存命中的 token 数、成本、延迟、重试次数和原因；失败的尝试也写（`usage` 为空）；摘要调用与 agent 调用用 `purpose` 区分。成功的调用还要记录服务端实际返回的模型名和 `system_fingerprint`（`served_model`、`system_fingerprint`）：服务商可能在模型名不变的情况下换模型，同一组比较里 fingerprint 不一致必须说明（`docs/notes.md` §26）。
 - `message`：每条追加进历史的消息各写一个 span，供崩溃后还原对话和人工分析失败轨迹；`message` 和 `tool_call` 都带 `step`，`aggregate.py` 靠它划分压缩前后。
 - `compaction`：压缩前后的 token 数、动作、成本；摘要正文与代码生成的状态块分开存放。span 里的 token 数是估计值，报告里压缩后的大小用紧接着那次请求的服务端 `prompt_tokens`（`aggregate.py`）。什么都没做的尝试写 `compaction_skipped`（带原因），不计入压缩次数。
 - `run_end`：FailReason 或 submitted，总成本，总步数。

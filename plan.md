@@ -438,9 +438,9 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 | 2026-10-16 | 新文件 `docs/dev_log.md`：阶段性结论，数字从 `results/` 手抄（用户决定列为 §2.3 的例外，不得被 README、简历、`results/summary/` 引用） | §2.3 加例外；§4 目录树的 `docs/` | [x] 2026-10-16 |
 | 2026-10-16 | 运行器支持并行（`run_agent.py --workers`，`run_b0.py --workers`） | §7 `run_agent.py` 那行的注释"顺序运行，并行是 TODO" | [x] 2026-10-16 |
 | 2026-10-16 | 注入安全评测从必做改为可选（MVP 不再含"1 份安全评测"；误拦率仍做） | §1 第 3 条（安全评测列为项目的实验之一），措辞要改为"可选"或注明 | [x] 2026-10-16（你说直接改，没有先看 diff） |
-| 2026-10-18 | 新配置键 `prompt_variant`（`v1` / `lite` / `mini`），用于提示词对照实验 | §5.3 表（是否列入：它决定一个实验的设计） | [ ] |
-| 2026-10-18 | `llm_call` span 新字段 `served_model`、`system_fingerprint`（服务端实际回答的模型） | §5.7 `llm_call` 一条 | [ ] |
-| 2026-10-18 | 新配置 `configs/ablations/prompt_lite.yaml`、`prompt_mini_bash.yaml`；新子集 `configs/subsets/pilot_8.txt`（阶段 1） | §4 目录树 | [ ] |
+| 2026-10-18 | 新配置键 `prompt_variant`（`v1` / `lite` / `mini`），用于提示词对照实验 | §5.3 表（是否列入：它决定一个实验的设计） |[x] 2026-10-19 |
+| 2026-10-18 | `llm_call` span 新字段 `served_model`、`system_fingerprint`（服务端实际回答的模型） | §5.7 `llm_call` 一条 |[x] 2026-10-19 |
+| 2026-10-18 | 新配置 `configs/ablations/prompt_lite.yaml`、`prompt_mini_bash.yaml`；新子集 `configs/subsets/pilot_8.txt`（阶段 1） | §4 目录树 |[x] 2026-10-19 |
 | 待办 | CLI 交互确认（`ask`）实现后 | §5.6 删掉"尚未实现" | [ ] |
 | 待办 | 回放补写 `llm_call` span 后（第 4 天） | §5.8 删掉"待做" | [ ] |
 | 待办 | `score.py` 写好后：`resolved.json` 约定（现在只在 `docs/notes.md` §12.6） | §6 或 §7 | [x] 2026-10-16（判定为不进 CLAUDE.md，约定在 `score.py`、`aggregate.py` 的模块说明里） |
