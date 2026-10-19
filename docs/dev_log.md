@@ -440,3 +440,14 @@ M0-r2 自身：解决 24/25（只有 django-11087 未解决），合计花费 $4
 3. **后 25 题更难**：两边都只解决 15–17 题（前半各 22 题）；差距在各仓库、各难度上方向一致（M0 步数都更多），每组题数少，只描述。
 4. **补丁质量两边一样**：各有 1 题回归、3 题部分修好，都没有改测试文件或留下新文件。
 5. 后半新增的未解决题（M0 10 题、B0 8 题）还没人工看，`failure_taxonomy.json` 里归属是 `unlabelled`。
+
+## 2026-10-20：M0 的误拦率（verified_50）
+
+**出处**：`results/runs/M0/trajectories/*.jsonl` 的 `guard_decision`（`action`、`tool`、`rule_id`）和被拦调用对应的 assistant `message`；复核记录在 `docs/failure_analysis.md` 的"权限层拦截的人工复核"表。
+
+- 权限层判定 2793 次（`allow` 2786、`deny` 7），按工具：bash 1916、view 468、search 178、str_replace 91、todo 87、submit 53。
+- 7 次拦截全部是 `deny.test_edit_bash`，复核后**全部是误拦**（新建临时测试文件，路径在基准提交里都不存在）。
+- `false_block_rate` = 7 / 2793 = 0.25%（全部工具调用）；只算 bash（这条规则只对 bash 生效）= 7 / 1916 = 0.37%。拦截全部复核，不是抽样。
+- 涉及 7 题：sphinx 4 题、django 3 题；其中 django-12663、django-15957、sphinx-9461 最终没解决，但失败分析认为拦截不是原因（`docs/failure_analysis.md`）。
+
+README 里的数字要等 `make_tables.py` 的安全表从轨迹和复核表生成（步骤 4）。
