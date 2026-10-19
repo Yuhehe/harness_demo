@@ -2,55 +2,55 @@
   "paired": {
     "cost_usd": {
       "ci95": [
-        1.1889908963551723,
-        1.526134858977969
+        1.1783444135251906,
+        1.3847210746144527
       ],
-      "median_ratio": 1.3400943070010405,
-      "n": 25,
-      "other_higher": 20
+      "median_ratio": 1.250486019458009,
+      "n": 50,
+      "other_higher": 39
     },
     "resolved": {
-      "both": 22,
-      "only_base": 0,
-      "only_other": 0,
-      "sign_test_p": 1.0
+      "both": 36,
+      "only_base": 3,
+      "only_other": 1,
+      "sign_test_p": 0.625
     },
     "steps": {
       "ci95": [
-        1.2325581395348837,
-        1.510204081632653
+        1.2106227106227108,
+        1.4210526315789473
       ],
-      "median_ratio": 1.4210526315789473,
-      "n": 25,
-      "other_higher": 21
+      "median_ratio": 1.3188461538461538,
+      "n": 50,
+      "other_higher": 42
     },
-    "tasks": 25,
+    "tasks": 50,
     "wall_seconds": {
       "ci95": [
-        1.3220839485340643,
-        1.6738867620390894
+        1.1812041187443714,
+        1.4382656685691089
       ],
-      "median_ratio": 1.495596847109391,
-      "n": 25,
-      "other_higher": 22
+      "median_ratio": 1.3235206341048469,
+      "n": 50,
+      "other_higher": 39
     }
   },
-  "subset": "verified_25",
+  "subset": "verified_50",
   "systems": [
     {
-      "cache_hit_rate": 0.9816383535992955,
-      "cost_per_resolved": 0.198344116,
+      "cache_hit_rate": 0.982061275844705,
+      "cost_per_resolved": 0.27818656562162164,
       "cost_per_task": {
-        "mean": 0.17454282208,
-        "p50": 0.08721838400000001
+        "mean": 0.20585805856,
+        "p50": 0.115918088
       },
       "fail_taxonomy": {
-        "submitted": 22,
-        "submitted_but_failed": 3
+        "submitted": 37,
+        "submitted_but_failed": 13
       },
       "latency": {
-        "p50": 216.312,
-        "p95": 888.2426
+        "p50": 224.159,
+        "p95": 943.5570499999998
       },
       "name": "harness-lab",
       "provenance": {
@@ -58,44 +58,46 @@
           "6ea20eaecc69"
         ],
         "git_commits": [
+          "77f0d9e8979366067000edf32acb17b688365062",
           "ff11f3bdcf03bf4bfb6530a672fbd5a2fceb5245"
         ],
         "models": [
           "deepseek/deepseek-v4-pro"
         ],
         "workers": [
-          1
+          1,
+          2
         ]
       },
       "resolve_rate": {
-        "n": 25,
-        "rate": 0.88,
-        "resolved": 22,
+        "n": 50,
+        "rate": 0.74,
+        "resolved": 37,
         "wilson95": [
-          0.7004380781662651,
-          0.9583325864293191
+          0.6044657801100008,
+          0.8412862034863261
         ]
       },
       "role": "main",
       "run_id": "M0",
-      "steps_mean": 48.52,
-      "tokens_in_mean": 1560511.48,
-      "tokens_out_mean": 17504.64
+      "steps_mean": 53.36,
+      "tokens_in_mean": 1910180.44,
+      "tokens_out_mean": 19718.8
     },
     {
-      "cache_hit_rate": 0.9725583122664937,
-      "cost_per_resolved": 0.143432504,
+      "cache_hit_rate": 0.9784719169260879,
+      "cost_per_resolved": 0.2063050676923077,
       "cost_per_task": {
-        "mean": 0.12622060352,
-        "p50": 0.10675640800000002
+        "mean": 0.16091795279999999,
+        "p50": 0.10751422000000002
       },
       "fail_taxonomy": {
-        "submitted": 22,
-        "submitted_but_failed": 3
+        "submitted": 39,
+        "submitted_but_failed": 11
       },
       "latency": {
-        "p50": 197.011,
-        "p95": 622.8057999999996
+        "p50": 186.582,
+        "p95": 768.5502499999999
       },
       "name": "mini-SWE-agent",
       "provenance": {
@@ -113,20 +115,20 @@
         ]
       },
       "resolve_rate": {
-        "n": 25,
-        "rate": 0.88,
-        "resolved": 22,
+        "n": 50,
+        "rate": 0.78,
+        "resolved": 39,
         "wilson95": [
-          0.7004380781662651,
-          0.9583325864293191
+          0.6475818431054045,
+          0.8724621377569771
         ]
       },
       "role": "baseline",
       "run_id": "B0",
-      "steps_mean": 36.48,
-      "tokens_in_mean": 893980.0,
-      "tokens_out_mean": 14035.92
+      "steps_mean": 41.72,
+      "tokens_in_mean": 1292961.38,
+      "tokens_out_mean": 17300.56
     }
   ],
-  "tasks": 25
+  "tasks": 50
 }
