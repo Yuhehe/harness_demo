@@ -58,6 +58,33 @@ M0 和 B0 没解决的是**同样 3 道题**：`django__django-11087`、`scikit-
 
 **教训**：只凭一次运行的失败给题目下"题目有问题"的结论不可靠；同一配置多跑一次，就可能得到不同结果。
 
+## verified_50 的后 25 题（2026-10-20，M0 在 `v0.1.1`、B0 同时跑；判分见 `results/runs/{M0,B0}/score.json`）
+
+M0 后半没解决 10 题，B0 没解决 8 题。材料同上一节：题目、参考补丁与判分测试（数据集固定 revision）、两边的补丁（`results/runs/M0/preds.jsonl`、`results/runs/B0/preds.jsonl`）、判分报告（`logs/run_evaluation/.../<id>/report.json`）、M0 的完整轨迹。
+
+**先查 harness**：这一批 M0 的未解决题里，没有格式错误、模型输出截断、重试、压缩，也没有命令超时；结束方式都是正常提交。唯一的 harness 痕迹是权限层的误拦，见下面。
+
+**权限层误拦与失败的关系**（django-12663、django-15957、sphinx-9461）：三题里 M0 各被 `deny.test_edit_bash` 拦了 1 次，都是想在 `tests/` 下**新建**临时测试文件（如 `tests/queries/test_lazy_repro.py`），属误拦。被拦之后 agent 先用 `ls` 确认文件没写进去，再改成在 `/tmp` 写独立脚本，大约多花 1–2 步；之后仍然多次用项目自己的测试运行器（django-12663 被拦后又跑了 9 次）。B0 在这三题里从没往 `tests/` 写过临时文件，django-12663、django-15957 仍然解决了。所以**误拦增加了少量步数，但不是这三题失败的原因**。误拦本身按第 4 天的误拦率如实统计。
+
+**只有 B0 解决的 3 题**
+- **django-12663**（`SimpleLazyObject` 用在嵌套子查询里报错）：参考补丁改 `Query.output_field`，让它用所选列的 `target`；M0 在 `Subquery._resolve_output_field` 里加了一套从 WHERE 子句推断类型的启发式，没修到点上（目标测试 0/1）；B0 换了第三种做法（在 lookup 里把模型实例换成主键），通过了测试。**归属：模型**（定位到了错误的层）。
+- **django-15957**（Prefetch 支持切片的 queryset，参考补丁是新功能级的改动）：M0 的实现思路和参考补丁一样（`RowNumber` 窗口函数按分区取前 N 条），但 4 个目标测试错 1 个（`test_reverse_ordering`），还弄坏了 1 个原有测试（`test_attribute_error`）；B0 全部通过。**归属：模型**（实现细节，改动大、步数 133）。
+- **scikit-learn-14629**（`cross_val_predict(method='predict_proba')` 配 `MultiOutputClassifier` 报错）：题目正文明确指向 `_validation.py` 里用 `estimator.classes_` 的地方；M0 照着改了调用处，参考补丁和 B0 都改成给 `MultiOutputClassifier` 加上 `classes_` 属性，隐藏测试检查的正是这个属性。**归属：模型**（做法选择：照题目指的位置修，没有修到类本身）。
+
+**只有 M0 解决的 1 题**
+- **django-11433**（表单的 `cleaned_data` 允许覆盖字段默认值）：B0 的补丁目标测试没过，还弄坏了 1 个原有测试。**归属（B0）：模型**。
+
+**两边都没解决的 7 题**（两边改的文件大多与参考补丁有重叠，django-11477 例外：两边都改在调用方 `urls/base.py`；sphinx-9461 只部分重叠；都没有 harness 痕迹）
+- **django-11477**（`translate_url()` 遇到缺省的命名组）：参考补丁改 `urls/resolvers.py`，两边都改了 `urls/base.py`，3 个目标测试都只过 1 个。**模型**（修在调用方而不是根源）。
+- **django-11734**（`exclude()` / `~Q()` 里的 `OuterRef` 用错模型）：参考补丁改了 3 个文件，两边都只改了 `sql/query.py`，目标测试 0/1。**模型**（修得不完整）。
+- **django-12273**（子模型把主键设为 None 后保存）：两边都改了正确的文件，目标测试都是 0/2。**模型**。
+- **sphinx-7462**（空元组类型注解导致 `IndexError`）：参考补丁同时改 `domains/python.py` 和 `pycode/ast.py`，两边都只改了前者，2 个目标测试都过 1 个。**模型**（修得不完整）。
+- **sphinx-9461**（同时用 `@classmethod` 和 `@property` 的方法不被文档化；数据集标为"1-4 hours"）：参考补丁改 3 个文件，两边都改了其中一部分，目标测试都是 0/3。**模型**。
+- **sympy-13798**（`latex()` 允许自定义 `mul_symbol`）：两边都支持了自定义符号，但测试还规定了数字之间仍用 `\cdot`（`latex(1.5*3**x, mul_symbol='\\,')` 要得到 `1.5 \cdot 3^{x}`），两边都没做对。**模型**（没有照参考实现的细节处理数字的情况；题目没写这一点，接近规格不完整，但一次运行不下"题目问题"的结论，见上一节的教训）。
+- **sympy-21930**（`secondquant` 的 LaTeX 输出缺括号）：测试检查确切的字符串（外层加花括号）。B0 照这个思路加了括号，6 个目标测试过 5 个；M0 改用优先级加括号，输出格式不同，0/6。**模型**（做法选择）。
+
+**结论**：后半的 18 个失败（M0 10、B0 8）**都不是 harness 的问题**，不需要修 harness，不需要换版本重跑。权限层误拦在其中 3 题里多花了少量步数，计入误拦率，但没有决定结果。失败的主要类型：修在调用方或错误的层（django-11477、django-12663、scikit-learn-14629）、多文件修复只做了一部分（django-11734、sphinx-7462、sphinx-9461）、隐藏测试检查确切输出而做法不同（sympy-13798、sympy-21930）。
+
 ## 归属标注（机器可读，`eval/report/failure_taxonomy.py` 读这张表）
 
 每行一个"运行 × 未解决的题"，归属只能是 `harness`、`model`、`task` 之一；依据指向上文的分析。没有出现在表里的失败题，脚本记为 `unlabelled`。
@@ -71,3 +98,21 @@ M0 和 B0 没解决的是**同样 3 道题**：`django__django-11087`、`scikit-
 | B0 | scikit-learn__scikit-learn-14983 | model | 同 M0（更正后的归类） |
 | B0 | sphinx-doc__sphinx-9602 | model | 同 M0（更正后的归类） |
 | M0-r2 | django__django-11087 | model | 重跑仍未解决，归类不变 |
+| M0 | django__django-11477 | model | 修在 `urls/base.py`，根源在 `resolvers.py` |
+| M0 | django__django-11734 | model | 多文件修复只做了一部分 |
+| M0 | django__django-12273 | model | 改对了文件，没改对 |
+| M0 | django__django-12663 | model | 修在错误的层（`Subquery` 启发式）；误拦 1 次不是原因 |
+| M0 | django__django-15957 | model | 实现细节错 1 个目标测试、弄坏 1 个原有测试；误拦 1 次不是原因 |
+| M0 | scikit-learn__scikit-learn-14629 | model | 照题目指的调用处修，测试要的是类上的 `classes_` |
+| M0 | sphinx-doc__sphinx-7462 | model | 漏了 `pycode/ast.py` |
+| M0 | sphinx-doc__sphinx-9461 | model | 多文件修复只做了一部分；误拦 1 次不是原因 |
+| M0 | sympy__sympy-13798 | model | 数字之间的乘号没按测试处理 |
+| M0 | sympy__sympy-21930 | model | 用优先级加括号，输出格式与测试不同 |
+| B0 | django__django-11433 | model | 目标测试没过，弄坏 1 个原有测试 |
+| B0 | django__django-11477 | model | 同 M0 |
+| B0 | django__django-11734 | model | 同 M0 |
+| B0 | django__django-12273 | model | 同 M0 |
+| B0 | sphinx-doc__sphinx-7462 | model | 同 M0 |
+| B0 | sphinx-doc__sphinx-9461 | model | 同 M0 |
+| B0 | sympy__sympy-13798 | model | 同 M0 |
+| B0 | sympy__sympy-21930 | model | 加了括号，6 个目标测试过 5 个 |
