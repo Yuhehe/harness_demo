@@ -316,10 +316,10 @@
 - 每个实验组都报告每步推理 token、每步输出 token，作为机制是否起作用的旁证，不当原因
 
 **阶段 1：开关（零花费）**
-- [ ] 已有的键直接用：`guard.enabled: false`、`tool_output.max_chars: 10000`
-- [ ] 新开关（默认逐字节不变）：step 提示开关、mini 风格的工具结果包装和截断提示、mini 的 bash 工具描述；按阶段 0 的结果增减
-- [ ] 回归保护：v1 的提示词、任务消息、工具定义、渲染后的工具结果按哈希钉住；回放端到端测试照常通过
-- [ ] 打 tag `v0.3-exp`，记 CHANGELOG，登记待同步清单（新键改变所有配置哈希，与旧 tag 的比较是跨版本的）
+- [x] （2026-10-20，`configs/ablations/mech_aligned.yaml`）已有的键直接用：`guard.enabled: false`、`tool_output.max_chars: 10000`
+- [x] （2026-10-20：`tool_output.step_note`、`tool_output.format: mini`、`bash_tool: mini`、`llm.parallel_tool_calls`；顺带修了 `mini` system prompt 末尾多出的换行）新开关（默认逐字节不变）：step 提示开关、mini 风格的工具结果包装和截断提示、mini 的 bash 工具描述；按阶段 0 的结果增减
+- [x] （2026-10-20：`tests/unit/test_mini_mechanics.py` 16 项，mini 一侧直接对照 mini-swe-agent 的 `BASH_TOOL` 和 Jinja 模板渲染；四处变异检查均变红；全量 707 通过）回归保护：v1 的提示词、任务消息、工具定义、渲染后的工具结果按哈希钉住；回放端到端测试照常通过
+- [x] （2026-10-20）打 tag `v0.3-exp`，记 CHANGELOG，登记待同步清单（新键改变所有配置哈希，与旧 tag 的比较是跨版本的）
 
 **阶段 2：全部对齐的 D\*，与新 B0、新 D 同时跑（verified_25；开跑前打印花费、等你确认）**
 - D\* = D（只用 bash + mini 的提示词）+ step 提示关 + mini 风格结果和截断 + mini 的 bash 描述 + 权限层关 + 截断 10000；无法对齐的剩余差别明确列出（`submit` 工具与提交流程、`bash -lc`）
@@ -476,6 +476,7 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 | 2026-10-18 | 新配置 `configs/ablations/prompt_lite.yaml`、`prompt_mini_bash.yaml`；新子集 `configs/subsets/pilot_8.txt`（阶段 1） | §4 目录树 |[x] 2026-10-19 |
 | 2026-10-20 | 新文件 `LICENSE`（MIT）、`docs/resume_bullets.md`、`docs/img/` | §4 目录树 | [x] 2026-10-20 |
 | 待办 | CLI 交互确认（`ask`）实现后 | §5.6 删掉"尚未实现" | [ ] |
+| 2026-10-20 | 新配置键 `bash_tool`、`tool_output.format`、`tool_output.step_note`、`llm.parallel_tool_calls`（诊断用，默认逐字节不变）；新配置 `configs/ablations/mech_aligned.yaml` | §5.3 表（是否列入待定：只用于拆解实验，不进主实验矩阵，倾向于只在表下加一句指针） | [ ] |
 | 2026-10-20 | 回放补写 `llm_call` span（已实现：`ReplayClient` 带 tracer 时按录制的 usage 写，`replay: true`） | §5.8 删掉"待做" | [x] 2026-10-20 |
 | 2026-10-20 | 新文件 `.dockerignore`（仓库根目录）；服务的启动命令 `uvicorn --factory harness.service.api:create_app`；服务的环境变量（`HARNESS_*`，见 `service/worker.py` 模块说明）；`plots.py` 的命令；`make_tables.py` 的判定规则 B | §4 目录树、§7 命令 | [x] 2026-10-20 |
 | 待办 | `score.py` 写好后：`resolved.json` 约定（现在只在 `docs/notes.md` §12.6） | §6 或 §7 | [x] 2026-10-16（判定为不进 CLAUDE.md，约定在 `score.py`、`aggregate.py` 的模块说明里） |

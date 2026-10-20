@@ -63,9 +63,11 @@ _LITE_EDITS = (
 # installed file; braces doubled for str.format); the submission section is replaced,
 # because here the harness makes the patch with `git diff` and the agent calls the submit
 # tool, and the step note this harness appends to every tool result is explained, as v1 does.
+# no trailing newline: mini renders its templates with Jinja, which drops it (docs/notes.md
+# §28; up to v0.2.1-exp this string ended in "\n")
 _MINI_SYSTEM = (
     "You are a helpful assistant that can interact with a computer shell to solve "
-    "programming tasks.\n"
+    "programming tasks."
 )
 _MINI_HEAD = (
     "<pr_description>\n"
@@ -152,6 +154,23 @@ _MINI_SUBMISSION = (
     "tells you how much budget is left.\n"
     "</instructions>"
 )
+# what explains the step note, removed with it (tool_output.step_note: false)
+_NOTE_SENTENCES = (
+    (
+        "\nEvery tool result ends with a note like [step 3/50 | cost $0.0123 of $0.50]. It only "
+        "tells you how much budget is left."
+    ),
+    (
+        "\nEvery tool result ends with a note like [step 3/50 | cost $0.0123 of $0.50]. It only "
+        "tells you how much budget is left.\n"
+    ),
+)
+
+
+def _without_note(text: str, sentence: str) -> str:
+    if text.count(sentence) != 1:
+        raise ValueError("the step-note sentence is not where it should be")
+    return text.replace(sentence, "")
 
 
 def system_prompt(cfg: AgentConfig, workdir: str = "/testbed") -> str:
@@ -164,12 +183,17 @@ def system_prompt(cfg: AgentConfig, workdir: str = "/testbed") -> str:
             if text.count(old) != 1:
                 raise ValueError(f"lite prompt edit does not apply: {old!r}")
             text = text.replace(old, new)
+    if not cfg.tool_output.step_note:
+        text = _without_note(text, _NOTE_SENTENCES[0])
     return text
 
 
 def task_message(problem_statement: str, cfg: AgentConfig | None = None) -> str:
     if cfg is not None and cfg.prompt_variant == "mini":
-        return _MINI_HEAD.format(task=problem_statement) + _MINI_SUBMISSION
+        text = _MINI_HEAD.format(task=problem_statement) + _MINI_SUBMISSION
+        if not cfg.tool_output.step_note:
+            text = _without_note(text, _NOTE_SENTENCES[1])
+        return text
     return f"Resolve this issue:\n\n<issue>\n{problem_statement.strip()}\n</issue>"
 
 

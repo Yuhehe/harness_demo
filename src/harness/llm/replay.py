@@ -97,18 +97,19 @@ def fingerprint(
         {k: v for k, v in m.items() if k != "content"} if m.get("role") == "tool" else m
         for m in messages
     ]
-    key = _digest(
-        _dump(
-            {
-                "model": model,
-                "thinking": cfg.thinking,
-                "reasoning_effort": cfg.reasoning_effort,
-                "max_tokens": cfg.max_tokens,
-                "tools": sorted_tools,
-                "messages": path,
-            }
-        )
-    )
+    request: dict[str, Any] = {
+        "model": model,
+        "thinking": cfg.thinking,
+        "reasoning_effort": cfg.reasoning_effort,
+        "max_tokens": cfg.max_tokens,
+        "tools": sorted_tools,
+        "messages": path,
+    }
+    if (
+        cfg.parallel_tool_calls is not None
+    ):  # only when set: older recordings keep their keys
+        request["parallel_tool_calls"] = cfg.parallel_tool_calls
+    key = _digest(_dump(request))
     return key, digests, previews
 
 

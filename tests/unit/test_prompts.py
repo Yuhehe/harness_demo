@@ -90,11 +90,14 @@ def test_v1_task_message_is_the_frozen_one():
 
 
 def test_existing_config_hashes_do_not_move():
-    # M0-v02 and lite-v02 ran with these on v0.2-exp; adding `mini` must not change them
-    assert load_config(CONFIGS / "default.yaml").config_hash() == "af1871001292"
+    # v0.3-exp added config keys (bash_tool, tool_output.format / step_note,
+    # llm.parallel_tool_calls), so every hash moved once (results/CHANGELOG.md); within v0.3-exp
+    # they must not move. That the default requests did not change is pinned at the request
+    # level: the prompt and task hashes above, tests/unit/test_mini_mechanics.py, the replay e2e.
+    assert load_config(CONFIGS / "default.yaml").config_hash() == "fff4b25214bf"
     assert (
         load_config(CONFIGS / "ablations/prompt_lite.yaml").config_hash()
-        == "74d112cfe5ab"
+        == "1d7c45329897"
     )
 
 
@@ -110,7 +113,11 @@ def _mini_templates():
 def test_mini_is_mini_swe_agents_prompt_up_to_the_submission_section():
     agent = _mini_templates()
     cfg = AgentConfig(action_space="bash_only", prompt_variant="mini")
-    assert system_prompt(cfg) == agent["system_template"]
+    from jinja2 import StrictUndefined, Template
+
+    # what mini sends is the Jinja rendering, which drops the template's trailing newline
+    rendered = Template(agent["system_template"], undefined=StrictUndefined).render()
+    assert system_prompt(cfg) == rendered
     # braces must survive formatting; mini inserts the text as is (no strip)
     task = "\nMake `add` return a + b {not a - b}.\n"
     want_head = (

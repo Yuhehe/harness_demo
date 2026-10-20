@@ -1,0 +1,21 @@
+# D* (exploratory, plan.md "M0 比 B0 效率差的原因拆解", stage 2): D (bash only + mini-swe-agent's
+# prompt) with every mechanism that can be aligned set the way mini-swe-agent has it
+# (docs/notes.md §28): its bash tool description, its tool-result rendering and cut-off
+# (10 000 characters), no step note, no permission guard, parallel tool calls on. What stays
+# different: the submit tool and its flow, and `bash -lc`. A deliberate bundle, not one factor.
+extends: ../default.yaml
+
+action_space: bash_only
+prompt_variant: mini
+bash_tool: mini
+
+guard:
+  enabled: false
+
+tool_output:
+  max_chars: 10000
+  format: mini
+  step_note: false
+
+llm:
+  parallel_tool_calls: true

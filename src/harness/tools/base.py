@@ -80,6 +80,42 @@ class OutputLimiter:
         return text[:half] + f"\n{note}\n" + text[-half:], True
 
 
+# mini-swe-agent's observation for one command (2.4.6, config/benchmarks/swebench.yaml,
+# `observation_template`), reproduced in Python so the harness does not import it; the tests
+# render the real template and compare byte for byte (tests/unit/test_mini_mechanics.py).
+MINI_WARNING = (
+    "<warning>\n"
+    "The output of your last command was too long.\n"
+    "Please try a different command that produces less output.\n"
+    "If you're looking at a file you can try use head, tail or sed to view a smaller number "
+    "of lines selectively.\n"
+    "If you're using grep or find and it produced too much output, you can use a more "
+    "selective search pattern.\n"
+    "If you really need to see something from the full command's output, you can redirect "
+    "output to a file and then search in that file.\n"
+    "</warning>"
+)
+
+
+def mini_observation(
+    output: str, returncode: int, limit: int = 10000
+) -> tuple[str, bool]:
+    """(text, truncated) the way mini-swe-agent shows a command's result. Its template has the
+    limit fixed at 10 000 characters with 5000 kept at each end; here the limit is
+    `tool_output.max_chars`."""
+    head = f"<returncode>{returncode}</returncode>\n"
+    if len(output) < limit:
+        return head + f"<output>\n{output}</output>", False
+    half = limit // 2
+    return (
+        head
+        + MINI_WARNING
+        + f"<output_head>\n{output[:half]}\n</output_head>\n"
+        + f"<elided_chars>\n{len(output) - limit} characters elided\n</elided_chars>\n"
+        + f"<output_tail>\n{output[-half:]}\n</output_tail>"
+    ), True
+
+
 class Tool(ABC):
     name: str
     description: str

@@ -24,7 +24,12 @@ class Registry:
         submit_flag: SubmitFlag,
     ) -> None:
         tools: list[Tool] = [
-            BashTool(limiter, cfg.bash_timeout_s),
+            BashTool(
+                limiter,
+                cfg.bash_timeout_s,
+                variant=cfg.bash_tool,
+                output_format=cfg.tool_output.format,
+            ),
             SubmitTool(submit_flag),
         ]
         if cfg.action_space == "tools":

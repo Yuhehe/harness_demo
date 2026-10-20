@@ -40,6 +40,8 @@ class LLMConfig(_Strict):
     reasoning_effort: Literal["high", "max"] | None = None
     max_tokens: int | None = None  # None -> paired default for `thinking`
     timeout_s: float | None = None  # None -> paired default for `thinking`
+    # sent only when set; mini-swe-agent's SWE-bench config sends true (docs/notes.md §28)
+    parallel_tool_calls: bool | None = None
     max_attempts: int = 3
     backoff_base_s: float = 4.0
     backoff_factor: float = 3.0
@@ -238,6 +240,13 @@ class SandboxConfig(_Strict):
 
 class ToolOutputConfig(_Strict):
     max_chars: int = 8000
+    # how a bash result is shown to the model: v1 = output + "[exit code: N]", long outputs cut
+    # to head and tail with the full text saved in the sandbox; mini = mini-swe-agent's own
+    # rendering (<returncode>/<output>, and past `max_chars` its warning plus head and tail,
+    # nothing saved). For the M0 vs B0 mechanism experiments (plan.md); bash only.
+    format: Literal["v1", "mini"] = "v1"
+    # append "[step N/M | cost ...]" to the newest tool result (and explain it in the prompt)
+    step_note: bool = True
 
 
 class LimitsConfig(_Strict):
@@ -254,6 +263,8 @@ class AgentConfig(_Strict):
     # one; mini is mini-swe-agent's SWE-bench prompt, for a diagnostic run (agent/prompts.py,
     # docs/notes.md section 25.1, plan.md "M0 与 B0 差距的验证")
     prompt_variant: Literal["v1", "lite", "mini"] = "v1"
+    # the bash tool's description and parameter schema: v1, or mini-swe-agent's (tools/bash.py)
+    bash_tool: Literal["v1", "mini"] = "v1"
     context: ContextConfig = ContextConfig()
     guard: GuardConfig = GuardConfig()
     sandbox: SandboxConfig = SandboxConfig()

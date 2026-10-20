@@ -119,8 +119,11 @@ async def run_task(
     state.append(user_message(prompts.task_message(task.problem_statement, cfg)))
 
     def note() -> str:
+        """The step and budget note, with its leading newline; empty when switched off."""
+        if not cfg.tool_output.step_note:
+            return ""
         lim = cfg.limits
-        return prompts.step_note(
+        return "\n" + prompts.step_note(
             state.steps, lim.max_steps, state.cost_usd, lim.max_cost_per_task_usd
         )
 
@@ -226,9 +229,7 @@ async def _handle_response(
             state.finish(FailReason.format_error, "output_truncated")
             return
         state.append(
-            user_message(
-                prompts.truncation_feedback(cfg.llm.max_tokens or 0) + "\n" + note()
-            )
+            user_message(prompts.truncation_feedback(cfg.llm.max_tokens or 0) + note())
         )
         return
     state.truncated_consecutive = 0
@@ -249,7 +250,7 @@ async def _handle_response(
         if state.no_tool_consecutive >= MAX_CONSECUTIVE:
             state.finish(FailReason.no_submit, "no_tool_call")
             return
-        state.append(user_message(prompts.NO_TOOL_CALL_NUDGE + "\n" + note()))
+        state.append(user_message(prompts.NO_TOOL_CALL_NUDGE + note()))
         return
     state.no_tool_consecutive = 0
 
@@ -288,9 +289,7 @@ async def _handle_response(
     for i, (call_id, result) in enumerate(results):
         text = result.output
         if i == len(results) - 1:
-            text += (
-                "\n" + note()
-            )  # dynamic info goes in the newest message, once, permanently
+            text += note()  # dynamic info goes in the newest message, once, permanently
         state.append(tool_message(call_id, text))
     _count_format_errors(state, bad_calls)
     if state.submitted:

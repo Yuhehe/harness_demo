@@ -202,6 +202,8 @@ class LiteLLMClient:
         if tools:
             kwargs["tools"] = sorted(tools, key=lambda t: t["function"]["name"])
             kwargs["tool_choice"] = "auto"
+            if self.cfg.parallel_tool_calls is not None:
+                kwargs["parallel_tool_calls"] = self.cfg.parallel_tool_calls
         thinking = {"type": self.cfg.thinking}
         body: dict[str, Any] = {}
         if self.model.startswith("deepseek/"):

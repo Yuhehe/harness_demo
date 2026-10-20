@@ -69,3 +69,28 @@ texts are unchanged (system prompt and task message pinned by hash in
 `tests/unit/test_prompts.py`), and so are the config hashes of `default.yaml` (`af1871001292`)
 and `prompt_lite.yaml` (`74d112cfe5ab`), so M0-v02 and lite-v02 (run on v0.2-exp) stay
 comparable with runs on this tag.
+
+## v0.3-exp (2026-10-20)
+
+Mechanism switches for plan.md "M0 比 B0 效率差的原因拆解", stage 1 (request-level differences
+from mini-swe-agent: docs/notes.md §28). Every new key defaults to the old behaviour.
+
+- New config keys: `bash_tool` (`v1` | `mini`: mini-swe-agent's `BASH_TOOL` description and
+  schema), `tool_output.format` (`v1` | `mini`: mini's `<returncode>` / `<output>` rendering,
+  and its warning plus head / tail cut at `tool_output.max_chars`, nothing saved in the
+  sandbox), `tool_output.step_note` (the `[step i/N | cost ...]` note and the prompt sentences
+  that announce it) and `llm.parallel_tool_calls` (sent only when set). **Every config hash
+  changes** (`default.yaml` `af1871001292` → `fff4b25214bf`; `prompt_lite.yaml`
+  `74d112cfe5ab` → `1d7c45329897`; `prompt_mini_bash.yaml` → `82faaa793580`), so comparisons
+  with runs on earlier tags are across versions.
+- Default requests are unchanged byte for byte: the v1 system prompts and task message keep
+  their pinned hashes, the v1 bash schema and result rendering are pinned
+  (`tests/unit/test_mini_mechanics.py`), the replay key adds `parallel_tool_calls` only when it
+  is set, and the replay end-to-end test still finds every recorded request.
+- **Fix that changes D:** the `mini` system prompt ended in a newline that mini-swe-agent does
+  not send (its Jinja rendering drops the template's trailing newline). `prompt_mini_bash`
+  (D) on this tag differs from D on v0.2.1-exp by that one character, so stage 2 reruns D
+  instead of reusing it.
+- New config `configs/ablations/mech_aligned.yaml` (D\*, `d2c12544b369`): D plus every switch
+  set to mini's side, the guard off and the cut at 10000 characters. Remaining differences
+  that cannot be aligned: the `submit` tool and submission section, `bash -lc` vs `bash -c`.

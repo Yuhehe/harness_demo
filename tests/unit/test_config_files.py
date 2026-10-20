@@ -32,6 +32,17 @@ EXPECTED = {
     "prompt_lite": {"prompt_variant"},
     # diagnostic pair, v0.2.1-exp (plan.md stage 3): bash only + mini-swe-agent's prompt
     "prompt_mini_bash": {"action_space", "prompt_variant"},
+    # D*, v0.3-exp (plan.md "M0 比 B0 效率差的原因拆解"): every mechanism aligned with mini
+    "mech_aligned": {
+        "action_space",
+        "prompt_variant",
+        "bash_tool",
+        "guard.enabled",
+        "tool_output.max_chars",
+        "tool_output.format",
+        "tool_output.step_note",
+        "llm.parallel_tool_calls",
+    },
 }
 
 
