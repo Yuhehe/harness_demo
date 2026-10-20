@@ -869,4 +869,5 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - **你的决定（2026-10-20）**：不写动机、MIT 许可、不要演示 GIF。简历条目写好（`docs/resume_bullets.md`）。下一步：在干净的 clone 里按 README 走一遍。
 - **干净 clone 的最终检查完成**：发现并修了测试读开发者 `.env` 的问题（CI 也会因此失败）和 README 快速开始的顺序问题；快速开始、服务演示、复现命令都核对过。本次真实调用 $0.0058。
 - **CLAUDE.md 同步（2026-10-20，你确认了 diff）**：§4 目录树（`LICENSE`、`.dockerignore`、`docs/resume_bullets.md`、`docs/img/`）、§5.8 回放写 `llm_call` span、§6 新增"差别的判定"（方案 B）、§7 命令（`plots.py`、服务启动、`make_tables.py --check`）、§8 测试不得依赖 `.env`；待同步清单的 3 行勾掉。
-\n- **你的决定（2026-10-20）**：开始拆解 M0 比 B0 效率差的原因；按建议：阶段 2 用 25 题、加新的 D、先做零花费的阶段 0 和 1。计划见"插入：M0 比 B0 效率差的原因拆解"。
+
+- **你的决定（2026-10-20）**：开始拆解 M0 比 B0 效率差的原因；按建议：阶段 2 用 25 题、加新的 D、先做零花费的阶段 0 和 1。计划见"插入：M0 比 B0 效率差的原因拆解"。
