@@ -334,7 +334,11 @@
 - [x] （2026-10-20：全部填好；你的决定：不写动机、用 MIT 许可（新增 `LICENSE`）、不要演示 GIF；数字都由脚本生成，结论段不含数字、指向表格；提示词对照按你的决定没有写进 README）填写 README 里的所有 `{{}}`：动机、设计取舍、结论、局限性（没做注入评测时，局限性里写明权限层没有经过注入评测）
 - [-] 用 mermaid 画架构图（已有）；~~用 vhs 或 asciinema 录一段 30 秒以内的演示 GIF~~（2026-10-20 你的决定：不需要）
 - [x] （2026-10-20：3 条，13 个数字逐个核对过 `results/summary/` 里的字段；附了措辞限制：第 1 条不是"胜出"、第 2 条是 32K 人为压力、第 3 条不涉及注入、CI 未运行不写）从 `results/summary/` 提炼 3 条简历条目，写到 `docs/resume_bullets.md`，每个数字都注明出自哪个文件
-- [ ] 最终检查：在一个干净的 clone 里按 README 的复现步骤走一遍
+- [x] 最终检查：在一个干净的 clone 里按 README 的复现步骤走一遍（2026-10-20，clone 在 scratchpad 里，没有 `.venv`、`.env`、`results/runs`）
+  - `uv sync`（Python 3.12.12）、ruff 都通过；**pytest 第一次 16 个失败**：`run_agent.py`、`run_b0.py` 的入口会 `load_dotenv`，这些测试一直在读开发者自己的 `.env`（模型名，连带真实的 API key），干净的 clone 和 CI 都没有它。修法只改测试：`tests/conftest.py` 用固定的模型名、假 key、指向本机关闭端口的地址（`505de51`）；之后干净的 clone 里 689 通过、1 跳过
+  - README 的快速开始：沙箱镜像的构建原来排在 `harness run --repo` 之后（新用户第一步就会报镜像不存在），已挪到前面；补了"模型与 key"一段（结果用的是 DeepSeek；价格表只有两个模型，其他模型要先加价格）
+  - 快速开始的真实运行（toy 仓库，默认配置）：提交，8 步，$0.0058，补丁正确；服务的回放演示用 clone 自己构建的镜像：36 个事件、补丁正确、没有残留容器
+  - 复现实验的命令：每个脚本和参数都用 `--help` 核对存在；`make_tables.py` 在没有 `results/runs/` 时报"no trajectories"（运行数据不提交），README 已写明
 
 **可选任务**（只有 P0 和 P1 全部完成才做；按下面的顺序）
 - [ ] **注入安全评测**（2026-10-16 从第 3、4 天移来，排在 B1 之前；验收：20 个用例可以运行，安全表含 ASR 和 `utility_under_attack`）
@@ -836,3 +840,4 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - **你的决定（2026-10-20）**：判定规则采用方案 B（比值区间不含 1 才算差别，同配置重跑做校准），写进 `docs/notes.md` §22.9；`make_tables.py` 加了"Differs"列和自动校准检查。
 - **README 的数字和结论（2026-10-20）**：`make_tables.py` 新增 TL;DR、实验设置、失败分类、噪声说明四个生成段；结论段四条（不含数字，指向表格）；路线图、参考链接（Manus 的链接已核实）、一个"值得一提的 bug"段落；GitHub 路径取自 git remote。`plots.py` 修了一处分类：空补丁原来被算成"提前结束"，改为"提交了但没修好"。剩下要你写的：动机、许可证、演示 GIF。
 - **你的决定（2026-10-20）**：不写动机、MIT 许可、不要演示 GIF。简历条目写好（`docs/resume_bullets.md`）。下一步：在干净的 clone 里按 README 走一遍。
+- **干净 clone 的最终检查完成**：发现并修了测试读开发者 `.env` 的问题（CI 也会因此失败）和 README 快速开始的顺序问题；快速开始、服务演示、复现命令都核对过。本次真实调用 $0.0058。

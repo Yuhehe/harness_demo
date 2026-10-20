@@ -194,18 +194,20 @@ Prerequisites: **Python 3.12**, [**uv**](https://docs.astral.sh/uv/) (the only s
 ```bash
 git clone https://github.com/Yuhehe/harness_demo && cd harness_demo
 uv sync                         # creates .venv from uv.lock (Python 3.12)
-cp .env.example .env            # then add your API key(s) and choose models
+docker build -t harness-toy tests/fixtures/toy_image          # the sandbox image for local repositories
+cp .env.example .env            # then add your API key(s) and choose models (see below)
 
-# run on a toy repo
+# run on a toy repo (real API calls)
 uv run harness run --config configs/default.yaml --repo tests/fixtures/toy_repo --task "fix the failing test"
 
 # run as a service (keyless demo: the toy task answered from a recording)
-docker build -t harness-toy tests/fixtures/toy_image          # the sandbox image
 HARNESS_REPLAY=/app/tests/fixtures/replays/toy_fix.jsonl docker compose -f docker/docker-compose.yml up
 curl -X POST localhost:8000/tasks -H 'content-type: application/json' -d '{"repo_path": "toy_repo", "config": "toy",
   "task": "The unit tests of this library fail: add() returns a wrong result. Fix the bug in the library code."}'
 curl -N localhost:8000/tasks/<id>/events      # SSE: one event per trajectory span, then `end` with the patch
 ```
+
+**Models and keys.** The results here use DeepSeek through LiteLLM's `deepseek/` route: `MODEL_MAIN=deepseek/deepseek-v4-pro`, `MODEL_CHEAP=deepseek/deepseek-flash`, with `DEEPSEEK_API_KEY` and `DEEPSEEK_API_BASE=https://api.deepseek.com` in `.env`. `.env.example` shows the generic OpenAI-compatible form (`openai/<model>` with `OPENAI_API_KEY` / `OPENAI_API_BASE`). Costs come from a fixed price table (`src/harness/llm/cost.py`) that lists only those two DeepSeek models; the budget guard refuses to run a model without a price, so add an entry there before using any other model. `uv run pytest -q` needs no key: the tests use fakes and recordings and never read `.env`.
 
 ## Reproduce the experiments
 
@@ -220,7 +222,7 @@ uv run python eval/report/make_tables.py       # every table in this README
 uv run python eval/report/plots.py             # the two figures
 ```
 
-Every batch run prints its expected cost and asks before spending; it resumes where it stopped (by instance id) and refuses to mix two configurations in one run id.
+Every batch run prints its expected cost and asks before spending; it resumes where it stopped (by instance id) and refuses to mix two configurations in one run id. The run data (`results/runs/`, trajectories and logs) is not committed, so in a fresh clone `make_tables.py` stops at "no trajectories" until the runs are made again; every number in this README is kept with its source in the committed `results/summary/*.json`.
 
 Requirements: an x86_64 machine with Python 3.12, uv and Docker, disk space for the SWE-bench images (tens of GB for the 55 images used here; measurements in `docs/notes.md` §7), and an API budget; the setup above lists what the runs in these tables cost.
 
