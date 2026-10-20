@@ -1148,3 +1148,31 @@ plan §0 的最低标准，以及第 4 天的服务和 CI 验收。
 
 **还没做**（用户决定：放到后续，优先其他任务；见 `plan.md`"后续 TODO"）：逐个测机制因素，每个需要一个配置开关、新 tag 和约 $6–8。
 
+## 28. 我们和 mini-swe-agent 实际发出的请求有哪些不同（2026-10-20，阶段 0，零花费）
+
+**做法**：两个系统都走各自真实的代码路径，连到同一个本机假服务器（`tests/fakes.py` 的 `FakeLLMServer`），跑同一段脚本化对话：模型依次调用 `ls`、一条输出 12 000 多字符的命令、提交。我们这边是 `run_task` + `LiteLLMClient`，配置 `configs/ablations/prompt_mini_bash.yaml`（D）；mini 这边是 `DefaultAgent` + `LitellmModel`，配置是 `swebench.yaml` 合并 `run_b0.py` 生成的覆盖项（与 B0 实际运行相同）。命令由假环境返回固定输出，宿主机上不执行任何东西。脚本是一次性的，放在会话的 scratchpad 里，不提交；抓到的请求体逐字段比较。
+
+**相同的**：模型名、`thinking`、`reasoning_effort`、`max_tokens`；消息的角色顺序；之前的 assistant 消息怎么回传（`content` 为空，带 `reasoning_content`）；任务说明在 user 消息里、"## Submission"之前的部分逐字相同。
+
+**不同的**（D 已经用了 mini 的提示词，所以下面是提示词之外剩下的差别）
+
+| # | 项 | 我们（D） | mini（B0） |
+|---|---|---|---|
+| 1 | `parallel_tool_calls` | 不发 | `true`（`swebench.yaml` 的默认 `model_kwargs`） |
+| 2 | `tool_choice` | `"auto"` | 不发（服务端默认也是 auto，应当等价） |
+| 3 | 工具列表 | bash + `submit` | 只有 bash |
+| 4 | bash 工具的描述和参数 | 一段说明（沙箱、无网络、`cd` 不保留……），参数描述"The shell command to run."，`additionalProperties: false` | "Execute a bash command"，参数描述"The bash command to execute"，没有 `additionalProperties` |
+| 5 | system 消息 | 末尾多一个换行 | 没有（mini 用 Jinja 渲染，去掉了末尾换行） |
+| 6 | 任务说明的提交一节 | 调用 `submit` 工具，加一句 step 提示的说明 | `git diff > patch.txt`、检查、`echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT` 三步 |
+| 7 | 普通工具结果 | 原始输出 + `\n[exit code: N]` + `[step N/150 \| cost $… of $2.00]` | `<returncode>N</returncode>` + `<output>…</output>` |
+| 8 | 超长输出 | 超过 8000 字符：保留头尾各 4000，中间一行"[... N chars omitted; full output of M chars saved at /tmp/harness/out_K.txt ...]" | 超过 10 000 字符：先一段 `<warning>`（"输出太长，请换一条输出更少的命令，用 head、tail、sed，或更精确的 grep……"），再 `<output_head>` 头 5000、`<elided_chars>`、`<output_tail>` 尾 5000 |
+
+另外两项不在请求里，但属于机制：权限层（我们开，mini 没有）、shell（我们 `bash -lc`，mini `bash -c` + `BASH_ENV`，环境类报错比例相近）。
+
+**对阶段 1 的含义**：
+- 第 1、4、7、8 项和 step 提示、权限层都可以做成开关，与 mini 对齐。
+- 第 5 项是 `mini` 提示词变体本身的小偏差，在新版本里修掉。
+- 第 3、6 项（`submit` 工具和提交流程）无法对齐，列为剩余差别。mini 的提交流程多约一步，方向对我们有利。
+- 第 2 项应当等价，不处理。
+- 第 8 项值得注意：mini 截断时会明确提示模型"换一条输出更少的命令"，我们只给出落盘路径。这可能影响模型后面怎么探索，但目前只是推测。
+
