@@ -1,4 +1,13 @@
 {
+  "calibration": {
+    "passed": true,
+    "verdicts": {
+      "M0-r2/M0 cost_usd": "no",
+      "M0-r2/M0 steps": "no",
+      "M0/M0-r2 cost_usd": "no",
+      "M0/M0-r2 steps": "no"
+    }
+  },
   "paired": {
     "cost_usd": {
       "ci95": [

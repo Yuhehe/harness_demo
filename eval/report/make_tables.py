@@ -228,6 +228,7 @@ def summarize_ablations(
         }
         out["run_to_run"] = pair_on(base, m0_on_base)
         out["run_to_run_reverse"] = pair_on(m0_on_base, base)
+        out["calibration"] = calibration(out)
     if "A6" in runs and "A6xA1" in runs:
         out["pressure"] = {
             "with": "A6",
@@ -400,9 +401,9 @@ def render(s: dict[str, Any]) -> str:
         "",
         (
             f"| Measure | Median ratio {main['run_id']}/{base['run_id']} (95% CI) "
-            f"| Tasks where {main['run_id']} is higher |"
+            f"| Tasks where {main['run_id']} is higher | Differs |"
         ),
-        "|---|---|---|",
+        "|---|---|---|---|",
     ]
     for key, label in (
         ("cost_usd", "Cost"),
@@ -410,7 +411,10 @@ def render(s: dict[str, Any]) -> str:
         ("wall_seconds", "Wall time"),
     ):
         ratio, higher = _ratio(p.get(key))
-        lines.append(f"| {label} | {ratio} | {higher} |")
+        verdict = differs(p.get(key)) or "—"
+        if key == "wall_seconds" and verdict != "—":
+            verdict += " (descriptive only, see notes)"
+        lines.append(f"| {label} | {ratio} | {higher} | {verdict} |")
     res = p.get("resolved")
     if res:
         lines += [
@@ -425,6 +429,7 @@ def render(s: dict[str, Any]) -> str:
         f"{x['run_id']} {'/'.join(map(str, x['provenance']['workers']))}"
         for x in (main, base)
     )
+    lines += ["", RULE + " " + _calibration_note(s.get("calibration"))]
     lines += [
         "",
         (
@@ -441,6 +446,52 @@ def _ci(p: dict[str, Any] | None) -> str:
         return "—"
     lo, hi = p["ci95"]
     return f"{p['median_ratio']:.2f} ({lo:.2f}–{hi:.2f})"
+
+
+def differs(p: dict[str, Any] | None) -> str | None:
+    """Rule B (docs/notes.md section 22.9): a ratio differs from 1 when its 95% interval
+    excludes 1; "higher", "lower", or "no". None without data."""
+    if not p:
+        return None
+    lo, hi = p["ci95"]
+    return "higher" if lo > 1 else "lower" if hi < 1 else "no"
+
+
+def calibration(a: dict[str, Any]) -> dict[str, Any] | None:
+    """The check rule B rests on: the same configuration run twice must not "differ"."""
+    pairs = [a[k] for k in ("run_to_run", "run_to_run_reverse") if k in a]
+    if not pairs:
+        return None
+    verdicts = {
+        f"{p['other']}/{p['base']} {key}": differs(p.get(key))
+        for p in pairs
+        for key in ("cost_usd", "steps")
+    }
+    return {"verdicts": verdicts, "passed": all(v == "no" for v in verdicts.values())}
+
+
+def _calibration_note(c: dict[str, Any] | None) -> str:
+    if c is None:
+        return (
+            "No rerun of the main configuration is available to check the rule against."
+        )
+    if c["passed"]:
+        return (
+            "Check: the main configuration run twice does not differ by this rule (every "
+            "noise-row interval contains 1)."
+        )
+    bad = ", ".join(k for k, v in c["verdicts"].items() if v != "no")
+    return (
+        f"Check FAILED: the main configuration run twice differs by this rule ({bad}); "
+        "intervals here understate the run-to-run noise."
+    )
+
+
+RULE = (
+    "Rule: a cost or steps ratio counts as a difference when its 95% interval excludes 1 "
+    "(docs/notes.md section 22.9; adopted after the first results, replacing a rule that "
+    "compared intervals with the noise interval and depended on the ratio's direction)."
+)
 
 
 def _res(p: dict[str, Any]) -> str:
@@ -462,8 +513,8 @@ def render_ablation(a: dict[str, Any]) -> str:
             "the tasks only one side resolved, with an exact sign test."
         ),
         "",
-        "| ID | Change vs. M0 | Tasks | Resolved | Only abl / only base | $/task | Cost ratio | Steps ratio | Overflow rate |",
-        "|---|---|---|---|---|---|---|---|---|",
+        "| ID | Change vs. M0 | Tasks | Resolved | Only abl / only base | $/task | Cost ratio | Steps ratio | Differs (cost / steps) | Overflow rate |",
+        "|---|---|---|---|---|---|---|---|---|---|",
     ]
     for r in a["rows"]:
         rr, p = r["resolve_rate"], r["paired"]
@@ -471,7 +522,9 @@ def render_ablation(a: dict[str, Any]) -> str:
         lines.append(
             f"| {r['id']} | {r['change']} | {r['tasks']} (`{r['subset']}`) "
             f"| {rr['resolved']}/{rr['n']} (base {base_k}) | {_res(p)} | {_usd(r['cost_per_task']['mean'])} "
-            f"| {_ci(p.get('cost_usd'))} | {_ci(p.get('steps'))} | {_pct(r['overflow_rate'])} |"
+            f"| {_ci(p.get('cost_usd'))} | {_ci(p.get('steps'))} "
+            f"| {differs(p.get('cost_usd')) or '—'} / {differs(p.get('steps')) or '—'} "
+            f"| {_pct(r['overflow_rate'])} |"
         )
     for key in ("run_to_run", "run_to_run_reverse"):
         if key in a:
@@ -479,7 +532,8 @@ def render_ablation(a: dict[str, Any]) -> str:
             lines.append(
                 f"| (noise) | none: `{p['other']}` against `{p['base']}`, same config "
                 f"| {p['tasks']} | — | {_res(p)} | — | {_ci(p.get('cost_usd'))} "
-                f"| {_ci(p.get('steps'))} | — |"
+                f"| {_ci(p.get('steps'))} "
+                f"| {differs(p.get('cost_usd')) or '—'} / {differs(p.get('steps')) or '—'} | — |"
             )
     notes = []
     if a["not_run"]:
@@ -498,10 +552,12 @@ def render_ablation(a: dict[str, Any]) -> str:
             f"{_res(p)}; cost ratio {_ci(p.get('cost_usd'))}, steps ratio {_ci(p.get('steps'))} "
             "(runs that overflow stop early, so they are cheaper)."
         )
+    notes.append(RULE)
     notes.append(
         "The two noise rows are the same pair of runs of the main configuration, each way "
-        "round; the direction of a ratio is arbitrary, so both are shown. One run per "
-        "configuration."
+        "round (the direction of a ratio is arbitrary). "
+        + _calibration_note(a.get("calibration"))
+        + " One run per configuration."
     )
     lines += [""] + notes
     return "\n".join(lines) + "\n"
@@ -625,6 +681,7 @@ def main(argv: list[str] | None = None) -> int:
             main_run, main_run["tasks"], load_reviews(args.review, args.main)
         ),
     }
+    tables["main"]["calibration"] = tables["ablation"].get("calibration")
     renderers = {
         "main": render,
         "ablation": render_ablation,

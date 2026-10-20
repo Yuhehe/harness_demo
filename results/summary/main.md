@@ -9,12 +9,14 @@ Subset `verified_50`, 50 tasks; same model and config for both (config 6ea20eaec
 
 Task by task, M0 against B0 (50 tasks; median of the per-task ratio with a bootstrap 95% interval):
 
-| Measure | Median ratio M0/B0 (95% CI) | Tasks where M0 is higher |
-|---|---|---|
-| Cost | 1.25 (1.18–1.38) | 39/50 |
-| Steps | 1.32 (1.21–1.42) | 42/50 |
-| Wall time | 1.32 (1.18–1.44) | 39/50 |
+| Measure | Median ratio M0/B0 (95% CI) | Tasks where M0 is higher | Differs |
+|---|---|---|---|
+| Cost | 1.25 (1.18–1.38) | 39/50 | higher |
+| Steps | 1.32 (1.21–1.42) | 42/50 | higher |
+| Wall time | 1.32 (1.18–1.44) | 39/50 | higher (descriptive only, see notes) |
 
 Resolved by both: 36; only M0: 1; only B0: 3; exact sign test p = 0.625.
+
+Rule: a cost or steps ratio counts as a difference when its 95% interval excludes 1 (docs/notes.md section 22.9; adopted after the first results, replacing a rule that compared intervals with the noise interval and depended on the ratio's direction). Check: the main configuration run twice does not differ by this rule (every noise-row interval contains 1).
 
 Notes: workers per run: M0 1/2, B0 1. Wall time is only comparable between runs with the same worker count made in the same period; B0's wall time runs from its first to its last model response, so it misses the wait for the first one.

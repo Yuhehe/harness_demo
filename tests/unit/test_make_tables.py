@@ -322,3 +322,53 @@ def test_an_unknown_review_verdict_is_an_error(tmp_path):
     p.write_text("## 权限层拦截的人工复核\n| M | a | r | maybe | x |\n")
     with pytest.raises(SystemExit, match="maybe"):
         load_reviews(p, "M")
+
+
+# ---- rule B and its calibration (docs/notes.md section 22.9) ---------------------------------------
+def test_differs_reads_the_interval_against_1():
+    from make_tables import differs
+
+    assert differs({"ci95": [1.05, 1.4]}) == "higher"
+    assert differs({"ci95": [0.6, 0.95]}) == "lower"
+    assert differs({"ci95": [0.9, 1.2]}) == "no"
+    assert differs({"ci95": [1.0, 1.2]}) == "no"  # touching 1 is not excluding it
+    assert differs(None) is None
+
+
+def test_calibration_passes_only_if_no_noise_interval_excludes_1():
+    from make_tables import _calibration_note, calibration
+
+    ok = {"ci95": [0.9, 1.1]}
+    a = {
+        "run_to_run": {"other": "M", "base": "R", "cost_usd": ok, "steps": ok},
+        "run_to_run_reverse": {"other": "R", "base": "M", "cost_usd": ok, "steps": ok},
+    }
+    assert calibration(a)["passed"] and "does not differ" in _calibration_note(
+        calibration(a)
+    )
+    a["run_to_run"]["steps"] = {"ci95": [1.02, 1.3]}
+    c = calibration(a)
+    assert (
+        not c["passed"]
+        and "FAILED" in _calibration_note(c)
+        and "M/R steps" in _calibration_note(c)
+    )
+    assert calibration({}) is None and "No rerun" in _calibration_note(None)
+
+
+def test_tables_state_the_rule_and_the_check(setup):
+    tmp, runs, _, args = setup
+    make_run(
+        runs, "A2", {"a": (24, 0.5), "b": (36, 0.7)}, {"a"}
+    )  # twice the base everywhere
+    main(args)
+    abl = (tmp / "summary" / "ablation.md").read_text()
+    main_md = (tmp / "summary" / "main.md").read_text()
+    assert "| higher / higher |" in abl.split("| A2 |")[1].splitlines()[0]
+    assert "Rule: a cost or steps ratio counts as a difference" in abl
+    assert "Rule: a cost or steps ratio counts as a difference" in main_md
+    a = json.loads((tmp / "summary" / "ablation.json").read_text())
+    assert "calibration" in a and "verdicts" in a["calibration"]
+    assert "| Cost | 2.00 (2.00–2.00) | 2/2 | higher |" in main_md
+    # the rerun (M against R2) goes both ways across tasks, so the check passes
+    assert "Check: the main configuration run twice does not differ" in main_md
