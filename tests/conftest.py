@@ -8,6 +8,25 @@ os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 TOY_IMAGE = "harness-toy:latest"
 
+# The entry points load .env (python-dotenv never overrides a variable that is already set).
+# Tests must not depend on a developer's .env, which a clean clone and CI do not have, and must
+# never reach a real API with a real key: fix the models and point the keys and base URLs at a
+# closed local port. Tests that start a fake server set their own base URL on top.
+TEST_ENV = {
+    "MODEL_MAIN": "deepseek/deepseek-v4-pro",
+    "MODEL_CHEAP": "deepseek/deepseek-flash",
+    "DEEPSEEK_API_KEY": "test-key-not-real",
+    "DEEPSEEK_API_BASE": "http://127.0.0.1:9",
+    "OPENAI_API_KEY": "test-key-not-real",
+    "OPENAI_API_BASE": "http://127.0.0.1:9",
+}
+
+
+@pytest.fixture(autouse=True)
+def isolated_env(monkeypatch):
+    for key, value in TEST_ENV.items():
+        monkeypatch.setenv(key, value)
+
 
 @pytest.fixture(scope="session")
 def docker_client():
