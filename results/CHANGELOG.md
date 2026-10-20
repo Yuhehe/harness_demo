@@ -93,4 +93,5 @@ from mini-swe-agent: docs/notes.md §28). Every new key defaults to the old beha
   instead of reusing it.
 - New config `configs/ablations/mech_aligned.yaml` (D\*, `d2c12544b369`): D plus every switch
   set to mini's side, the guard off and the cut at 10000 characters. Remaining differences
-  that cannot be aligned: the `submit` tool and submission section, `bash -lc` vs `bash -c`.
+  that cannot be aligned: the `submit` tool and submission section, `bash -lc` vs `bash -c`,
+  and timeouts (exit code 124 and the output here; mini renders its `exception_info` instead).
