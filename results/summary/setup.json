@@ -1,0 +1,52 @@
+{
+  "budget_tokens": 128000,
+  "commits": [
+    {
+      "commit": "77f0d9e8979366067000edf32acb17b688365062",
+      "tags": [
+        "v0.1.1"
+      ]
+    },
+    {
+      "commit": "ff11f3bdcf03bf4bfb6530a672fbd5a2fceb5245",
+      "tags": [
+        "v0.1-frozen"
+      ]
+    }
+  ],
+  "config_hashes": [
+    "6ea20eaecc69"
+  ],
+  "cost_of_tables": 40.229970644,
+  "cost_runs": [
+    "M0",
+    "B0",
+    "M0-r2",
+    "A2",
+    "A5",
+    "A6",
+    "A6xA1"
+  ],
+  "dataset_revision": "78f471bf655a3137b2e8a75af1501690ec009ec3",
+  "harness_lines": 4363,
+  "limits": {
+    "max_cost_per_task_usd": 2.0,
+    "max_steps": 150,
+    "max_wall_seconds": 1800.0
+  },
+  "models": [
+    "deepseek/deepseek-v4-pro"
+  ],
+  "reasoning_effort": "high",
+  "repos": {
+    "django": 18,
+    "scikit-learn": 9,
+    "sphinx-doc": 9,
+    "sympy": 14
+  },
+  "seed": 42,
+  "subset": "verified_50",
+  "summary_model": "deepseek/deepseek-flash",
+  "tasks": 50,
+  "thinking": "enabled"
+}

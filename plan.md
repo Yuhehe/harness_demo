@@ -327,11 +327,11 @@
 
 ## 第 5 天：出结果、写 README、写简历条目
 
-- [ ] `make_tables.py`：生成主实验、消融、安全、成本四张表（主实验表的最小版已在第 3 天完成；其余三张待做），写入 README 的标记区之间（安全表在没做注入评测时只有误拦率一栏，README 的 `RESULTS:SECURITY` 模板到时按此改）
-- [ ] `plots.py`：两张图，保存到 `docs/img/`
+- [x] （2026-10-20：主比较、消融、成本、安全四张表，另有 TL;DR、实验设置、失败分类、噪声说明四段，全部由脚本生成；判定规则 B 和重跑校准写在表下）`make_tables.py`：生成主实验、消融、安全、成本四张表，写入 README 的标记区之间（安全表在没做注入评测时只有误拦率一栏，README 的 `RESULTS:SECURITY` 模板到时按此改）
+- [x] （2026-10-20：所有运行截到同样的 25 题）`plots.py`：两张图，保存到 `docs/img/`
   - 成本 vs 解决率散点图（每个配置一个点，基线也画进去）
   - 各配置的失败分类堆叠条形图
-- [ ] 填写 README 里的所有 `{{}}`：动机、设计取舍、结论、局限性（没做注入评测时，局限性里写明权限层没有经过注入评测）
+- [~] （2026-10-20：除动机、许可证、演示 GIF 三处要你写或决定外，全部填好；数字都由脚本生成，结论段不含数字、指向表格；提示词对照按你的决定没有写进 README）填写 README 里的所有 `{{}}`：动机、设计取舍、结论、局限性（没做注入评测时，局限性里写明权限层没有经过注入评测）
 - [ ] 用 mermaid 画架构图；用 vhs 或 asciinema 录一段 30 秒以内的演示 GIF
 - [ ] 从 `results/summary/` 提炼 3 条简历条目，写到 `docs/resume_bullets.md`，每个数字都注明出自哪个文件
 - [ ] 最终检查：在一个干净的 clone 里按 README 的复现步骤走一遍
@@ -445,7 +445,7 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 | 2026-10-18 | 新配置 `configs/ablations/prompt_lite.yaml`、`prompt_mini_bash.yaml`；新子集 `configs/subsets/pilot_8.txt`（阶段 1） | §4 目录树 |[x] 2026-10-19 |
 | 待办 | CLI 交互确认（`ask`）实现后 | §5.6 删掉"尚未实现" | [ ] |
 | 2026-10-20 | 回放补写 `llm_call` span（已实现：`ReplayClient` 带 tracer 时按录制的 usage 写，`replay: true`） | §5.8 删掉"待做" | [ ] |
-| 2026-10-20 | 新文件 `.dockerignore`（仓库根目录）；服务的启动命令 `uvicorn --factory harness.service.api:create_app`；服务的环境变量（`HARNESS_*`，见 `service/worker.py` 模块说明） | §4 目录树、§7 命令 | [ ] |
+| 2026-10-20 | 新文件 `.dockerignore`（仓库根目录）；服务的启动命令 `uvicorn --factory harness.service.api:create_app`；服务的环境变量（`HARNESS_*`，见 `service/worker.py` 模块说明）；`plots.py` 的命令；`make_tables.py` 的判定规则 B | §4 目录树、§7 命令 | [ ] |
 | 待办 | `score.py` 写好后：`resolved.json` 约定（现在只在 `docs/notes.md` §12.6） | §6 或 §7 | [x] 2026-10-16（判定为不进 CLAUDE.md，约定在 `score.py`、`aggregate.py` 的模块说明里） |
 | 待办 | 冻结前定下 `default.yaml` 的步数 / 成本 / 墙钟上限（现在是临时值） | 不进 CLAUDE.md，只记 plan.md | [x] 2026-10-12（150 步 / $2 / 1800 秒，依据在 `default.yaml` 注释） |
 | 2026-10-13 | 提示词估计的误差：有锚时约 ±8% 仍成立（实测更小），压缩过程中没有锚；回传的推理计入 `prompt_tokens`，本地计数也计入（`docs/notes.md` §17.2–17.3） | §5.3 不变量里"约 ±8% 的误差（§11.3）" | [x] 2026-10-14 |
@@ -833,3 +833,4 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - **提示词对照扩到 25 题完成**（D $4.86、A2 $4.08、B0 $3.29，25 题合计；本次补跑约 $8）：按事先的规则判为**说不清**（D / B0 = 1.19、D / A2 = 0.91）；"换提示词减少步数"不成立（区间 [0.81, 1.06]），成本没少；同期 A2 / B0 = 1.30，差距重现。阶段 3 试跑时的"提示词是主因"被 25 题推翻。大部分差距在提示词以外的 harness 机制上，没有拆。累计花费 $58.20（`run_end` 合计）。数字见 `docs/dev_log.md`。
 - **你的决定（2026-10-20）**：机制拆分放到后续（记入"后续 TODO"）；提示词对照的结论先记在 `docs/notes.md` §27，以后视实验情况再决定是否写进 README；噪声规则先听讲解再定。
 - **你的决定（2026-10-20）**：判定规则采用方案 B（比值区间不含 1 才算差别，同配置重跑做校准），写进 `docs/notes.md` §22.9；`make_tables.py` 加了"Differs"列和自动校准检查。
+- **README 的数字和结论（2026-10-20）**：`make_tables.py` 新增 TL;DR、实验设置、失败分类、噪声说明四个生成段；结论段四条（不含数字，指向表格）；路线图、参考链接（Manus 的链接已核实）、一个"值得一提的 bug"段落；GitHub 路径取自 git remote。`plots.py` 修了一处分类：空补丁原来被算成"提前结束"，改为"提交了但没修好"。剩下要你写的：动机、许可证、演示 GIF。

@@ -1,0 +1,1 @@
+> **Caveat:** the main configuration run twice on the same 25 tasks (`M0`, `M0-r2`) resolved 22 and 24; 2 tasks flipped. Differences of a few tasks are noise at this size; resolve rates are compared only with the sign test on the tasks one side resolved, and each configuration was run once.

@@ -8,7 +8,13 @@ from make_tables import main, provenance, render, replace_block, subset_name
 
 README = """# Title
 
+<!-- RESULTS:TLDR:START -->
+<!-- RESULTS:TLDR:END -->
+
 intro stays
+
+<!-- RESULTS:SETUP:START -->
+<!-- RESULTS:SETUP:END -->
 
 <!-- RESULTS:MAIN:START -->
 old table
@@ -25,6 +31,12 @@ untouched
 
 <!-- RESULTS:SECURITY:START -->
 <!-- RESULTS:SECURITY:END -->
+
+<!-- RESULTS:CAVEAT:START -->
+<!-- RESULTS:CAVEAT:END -->
+
+<!-- RESULTS:FAILURES:START -->
+<!-- RESULTS:FAILURES:END -->
 """
 
 
@@ -372,3 +384,64 @@ def test_tables_state_the_rule_and_the_check(setup):
     assert "| Cost | 2.00 (2.00–2.00) | 2/2 | higher |" in main_md
     # the rerun (M against R2) goes both ways across tasks, so the check passes
     assert "Check: the main configuration run twice does not differ" in main_md
+
+
+# ---- TL;DR, setup, failures, caveat -------------------------------------------------------------
+def test_tldr_wording_follows_the_data(setup):
+    tmp, _, _, args = setup
+    main(args)
+    t = (tmp / "summary" / "tldr.md").read_text()
+    # M resolved 1/2, B 2/2: one discordant task, sign test p = 1 -> indistinguishable
+    assert (
+        "harness-lab resolves **1/2 (50.0%" in t
+        and "indistinguishable (exact sign test p = 1)" in t
+    )
+    assert "**$0.300** per task against **$0.150**" in t
+    assert "rules that fired: none" in t
+
+
+def test_failures_block_lists_the_unresolved_tasks_with_owners(setup, tmp_path):
+    tmp, _, _, args = setup
+    labels = tmp_path / "labels.md"
+    labels.write_text("## 归属标注\n| M | b | model | why |\n")
+    main(args + ["--labels", str(labels)])
+    f = json.loads((tmp / "summary" / "failures.json").read_text())
+    assert f["failures"]["n"] == 1 and f["failures"]["by_owner"] == {"model": 1}
+    assert f["by_class"] == {"submitted_but_failed / unknown": ["b"]}
+    assert (
+        "Owner after manual review: model 1"
+        in (tmp / "summary" / "failures.md").read_text()
+    )
+
+
+def test_caveat_counts_the_rerun_flips(setup):
+    tmp, _, _, args = setup
+    main(args)
+    c = (tmp / "summary" / "caveat.md").read_text()
+    # M (main) resolved a; R2 resolved a: no flips on the two tasks
+    assert "resolved 1 and 1; 0 tasks flipped" in c
+
+
+def test_setup_names_limits_commits_and_cost(setup):
+    tmp, _, _, args = setup
+    main(args)
+    s = json.loads((tmp / "summary" / "setup.json").read_text())
+    assert s["tasks"] == 2 and s["commits"][0]["commit"] == "c1"
+    assert s["cost_of_tables"] == pytest.approx(0.6 + 0.3 + 0.6)  # M, B, R2
+    assert s["harness_lines"] > 1000
+
+
+def test_caveat_counts_flips_both_ways(tmp_path):
+    runs = tmp_path / "runs"
+    make_run(runs, "M", {"a": (5, 0.2), "b": (5, 0.2)}, {"a"})
+    make_run(runs, "B", {"a": (5, 0.1), "b": (5, 0.1)}, {"a"})
+    make_run(runs, "R2", {"a": (5, 0.2), "b": (5, 0.2)}, {"b"})  # the other task
+    readme = tmp_path / "README.md"
+    readme.write_text(README)
+    main(["--main", "M", "--baseline", "B", "--results-dir", str(runs),
+          "--summary-dir", str(tmp_path / "s"), "--readme", str(readme),
+          "--ablation-base", "R2", "--review", str(tmp_path / "none.md")])  # fmt: skip
+    assert (
+        "resolved 1 and 1; 2 tasks flipped"
+        in (tmp_path / "s" / "caveat.md").read_text()
+    )

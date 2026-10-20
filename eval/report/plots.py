@@ -33,7 +33,7 @@ RUNS = ("M0", "B0", "M0-r2", "A2", "A5", "A6", "A6xA1")
 SURFACE = "#fcfcfb"
 TEXT, TEXT_2, GRID = "#0b0b0b", "#52514e", "#e4e3df"
 SERIES = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100")  # reference order, slots 1-4
-CLASSES = ("resolved", "wrong fix", "partial or regression", "stopped early")
+CLASSES = ("resolved", "submitted, not fixed", "partial or regression", "stopped early")
 
 
 def ending(
@@ -42,15 +42,17 @@ def ending(
     """One of CLASSES for a task."""
     if iid in resolved:
         return "resolved"
-    end = end_category(iid, run_end["fail_reason"], resolved, score)
-    if end != "submitted_but_failed":
+    if run_end["fail_reason"]:
         return "stopped early"  # context_overflow, step_limit, ... (resolved already taken)
+    end = end_category(iid, run_end["fail_reason"], resolved, score)
+    if (
+        end != "submitted_but_failed"
+    ):  # an empty patch, or one the scorer could not judge
+        return "submitted, not fixed"
     tests = ((score or {}).get("tests") or {}).get(iid)
-    return (
-        "wrong fix"
-        if outcome_class(tests) == "target_fail"
-        else "partial or regression"
-    )
+    if outcome_class(tests) in ("target_fail", "unknown"):
+        return "submitted, not fixed"
+    return "partial or regression"
 
 
 def run_points(run_id: str, results_dir: Path, ids: set[str]) -> dict[str, Any] | None:

@@ -1,0 +1,87 @@
+{
+  "baseline": {
+    "cost_per_task": {
+      "mean": 0.16091795279999999,
+      "p50": 0.10751422000000002
+    },
+    "resolve_rate": {
+      "n": 50,
+      "rate": 0.78,
+      "resolved": 39,
+      "wilson95": [
+        0.6475818431054045,
+        0.8724621377569771
+      ]
+    },
+    "run_id": "B0"
+  },
+  "cost_ratio": {
+    "ci95": [
+      1.1783444135251906,
+      1.3847210746144527
+    ],
+    "median_ratio": 1.250486019458009,
+    "n": 50,
+    "other_higher": 39
+  },
+  "denies": 7,
+  "deny_rules": [
+    "deny.test_edit_bash"
+  ],
+  "false_block_rate": 0.002506265664160401,
+  "false_blocks": 7,
+  "main": {
+    "cache_hit_rate": 0.982061275844705,
+    "cost_per_task": {
+      "mean": 0.20585805856,
+      "p50": 0.115918088
+    },
+    "resolve_rate": {
+      "n": 50,
+      "rate": 0.74,
+      "resolved": 37,
+      "wilson95": [
+        0.6044657801100008,
+        0.8412862034863261
+      ]
+    },
+    "run_id": "M0"
+  },
+  "pressure": {
+    "overflow_with": 0.0,
+    "overflow_without": 0.6,
+    "resolved": {
+      "both": 15,
+      "only_base": 0,
+      "only_other": 7,
+      "sign_test_p": 0.015625
+    },
+    "tasks": 25
+  },
+  "rerun": {
+    "a": "M0",
+    "b": "M0-r2",
+    "flipped": 2,
+    "resolved_a": 22,
+    "resolved_b": 24,
+    "tasks": 25
+  },
+  "resolved_pairs": {
+    "both": 36,
+    "only_base": 3,
+    "only_other": 1,
+    "sign_test_p": 0.625
+  },
+  "steps_ratio": {
+    "ci95": [
+      1.2106227106227108,
+      1.4210526315789473
+    ],
+    "median_ratio": 1.3188461538461538,
+    "n": 50,
+    "other_higher": 42
+  },
+  "subset": "verified_50",
+  "tasks": 50,
+  "unreviewed": 0
+}

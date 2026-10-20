@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any
 
 from aggregate import aggregate, load_run, paired, task_metrics
+from failure_taxonomy import DEFAULT_LABELS, classify, load_labels
 
 ROOT = Path(__file__).resolve().parents[2]
 SUBSET_DIR = ROOT / "configs" / "subsets"
@@ -60,6 +61,8 @@ ABLATIONS = (
     ("A6xA1", "A6xA1", "context budget = 32k, context = none"),
 )
 REVIEW_HEADING = "## 权限层拦截的人工复核"
+SUBSETS_META = SUBSET_DIR / "subsets_meta.json"
+HARNESS_SRC = ROOT / "src" / "harness"
 REVIEW_PATH = ROOT / "docs" / "failure_analysis.md"
 
 
@@ -123,6 +126,7 @@ def load(run_id: str, results_dir: Path) -> dict[str, Any]:
         "ids": {i for i, t in tasks.items() if t.complete},
         "rows": [m for t in tasks.values() if (m := task_metrics(t))],
         "resolved": resolved,
+        "score": score,
         "metrics": metrics,
         "provenance": provenance(run_dir, tasks),
     }
@@ -293,6 +297,11 @@ def summarize_security(
         s for t in tasks.values() for s in t.spans if s["type"] == "guard_decision"
     ]
     bash = [s for s in decisions if s.get("tool") == "bash"]
+    by_rule: dict[str, int] = {}
+    for s in decisions:
+        if s.get("action") == "deny":
+            rule = s.get("rule_id") or "?"
+            by_rule[rule] = by_rule.get(rule, 0) + 1
     denies: dict[str, int] = {}
     for t in tasks.values():
         n = sum(
@@ -314,6 +323,7 @@ def summarize_security(
         "decisions": len(decisions),
         "bash_decisions": len(bash),
         "denies": sum(denies.values()),
+        "denies_by_rule": dict(sorted(by_rule.items())),
         "false_blocks": false,
         "true_blocks": true,
         "unreviewed": unreviewed,
@@ -321,6 +331,123 @@ def summarize_security(
         "false_block_rate_bash": false / len(bash) if bash else None,
         "injection_suite": "not run (optional, plan.md)",
     }
+
+
+def _git(*args: str) -> str:
+    import subprocess  # trusted host command (git metadata), not model output
+
+    r = subprocess.run(
+        ["git", *args], capture_output=True, text=True, check=False, cwd=ROOT
+    )
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def summarize_setup(main_run: dict[str, Any], cost: dict[str, Any]) -> dict[str, Any]:
+    start = next(
+        (
+            s
+            for t in main_run["tasks"].values()
+            for s in t.spans[:1]
+            if s.get("type") == "run_start"
+        ),
+        {},
+    )
+    cfg = start.get("config", {})
+    repos: dict[str, int] = {}
+    for iid in main_run["ids"]:
+        repo = iid.rsplit("-", 1)[0].split("__")[0]
+        repos[repo] = repos.get(repo, 0) + 1
+    meta = json.loads(SUBSETS_META.read_text()) if SUBSETS_META.exists() else {}
+    loc = sum(
+        1
+        for f in sorted(HARNESS_SRC.rglob("*.py"))
+        for line in f.read_text().splitlines()
+        if line.strip()
+    )
+    return {
+        "subset": subset_name(main_run["ids"]),
+        "tasks": len(main_run["ids"]),
+        "repos": dict(sorted(repos.items())),
+        "seed": meta.get("seed"),
+        "dataset_revision": meta.get("revision"),
+        "models": main_run["provenance"]["models"],
+        "summary_model": start.get("summary_model"),
+        "thinking": start.get("thinking"),
+        "reasoning_effort": start.get("reasoning_effort"),
+        "limits": cfg.get("limits"),
+        "budget_tokens": (cfg.get("context") or {}).get("budget_tokens"),
+        "config_hashes": main_run["provenance"]["config_hashes"],
+        "commits": [
+            {"commit": c, "tags": _git("tag", "--points-at", c).split()}
+            for c in main_run["provenance"]["git_commits"]
+        ],
+        "harness_lines": loc,
+        "cost_of_tables": sum(r["total_usd"] for r in cost["rows"]),
+        "cost_runs": [r["run_id"] for r in cost["rows"]],
+    }
+
+
+def summarize_failures(run: dict[str, Any], labels_path: Path) -> dict[str, Any]:
+    out = classify(
+        run["tasks"],
+        run["resolved"],
+        run["score"],
+        load_labels(labels_path, run["run_id"]),
+    )
+    by: dict[str, list[str]] = {}
+    for r in out["per_task"]:
+        if not r["resolved"]:
+            by.setdefault(f"{r['end']} / {r['tests']}", []).append(r["instance_id"])
+    return {
+        "run_id": run["run_id"],
+        "tasks": out["tasks"],
+        "failures": out["failures"],
+        "by_class": dict(sorted(by.items())),
+        "loop_suspects": out["loop_signal"]["suspect"],
+    }
+
+
+def summarize_tldr(t: dict[str, Any]) -> dict[str, Any]:
+    main = t["main"]
+    m, b = main["systems"]
+    sec = t["security"]
+    out: dict[str, Any] = {
+        "subset": main["subset"],
+        "tasks": main["tasks"],
+        "main": {
+            k: m[k]
+            for k in ("run_id", "resolve_rate", "cost_per_task", "cache_hit_rate")
+        },
+        "baseline": {k: b[k] for k in ("run_id", "resolve_rate", "cost_per_task")},
+        "resolved_pairs": main["paired"].get("resolved"),
+        "cost_ratio": main["paired"].get("cost_usd"),
+        "steps_ratio": main["paired"].get("steps"),
+        "false_block_rate": sec["false_block_rate"],
+        "false_blocks": sec["false_blocks"],
+        "denies": sec["denies"],
+        "unreviewed": sec["unreviewed"],
+        "deny_rules": list(sec["denies_by_rule"]),
+    }
+    pr = t["ablation"].get("pressure")
+    if pr:
+        out["pressure"] = {
+            "overflow_with": pr["overflow_with"],
+            "overflow_without": pr["overflow_without"],
+            "resolved": pr["paired"].get("resolved"),
+            "tasks": pr["paired"]["tasks"],
+        }
+    rr = t["ablation"].get("run_to_run")
+    if rr and rr.get("resolved"):
+        r = rr["resolved"]
+        out["rerun"] = {
+            "a": rr["other"],
+            "b": rr["base"],
+            "resolved_a": r["both"] + r["only_other"],
+            "resolved_b": r["both"] + r["only_base"],
+            "flipped": r["only_other"] + r["only_base"],
+            "tasks": rr["tasks"],
+        }
+    return out
 
 
 # ---- rendering ------------------------------------------------------------------------------------
@@ -626,6 +753,134 @@ def render_security(s: dict[str, Any]) -> str:
     )
 
 
+def _rate(r: dict[str, Any]) -> str:
+    lo, hi = r["wilson95"]
+    return f"{r['resolved']}/{r['n']} ({_pct(r['rate'])}, 95% CI {_pct(lo)}–{_pct(hi)})"
+
+
+def render_tldr(t: dict[str, Any]) -> str:
+    m, b, rp = t["main"], t["baseline"], t["resolved_pairs"] or {}
+    p = rp.get("sign_test_p")
+    same = (
+        f"indistinguishable (exact sign test p = {p:.3g})"
+        if p is not None and p >= 0.05
+        else f"different (exact sign test p = {p:.3g})"
+    )
+    cr, sr = t["cost_ratio"], t["steps_ratio"]
+    lines = [
+        "> **TL;DR** (every number here is generated by `eval/report/make_tables.py`)",
+        (
+            f"> - On {t['tasks']} SWE-bench Verified tasks (`{t['subset']}`), harness-lab "
+            f"resolves **{_rate(m['resolve_rate'])}** and mini-SWE-agent "
+            f"**{_rate(b['resolve_rate'])}** with the same model and limits: {same}. "
+            f"harness-lab costs **{_usd(m['cost_per_task']['mean'])}** per task against "
+            f"**{_usd(b['cost_per_task']['mean'])}** (task-by-task cost ratio {_ci(cr)}, "
+            f"steps ratio {_ci(sr)})."
+        ),
+    ]
+    if "pressure" in t:
+        pr = t["pressure"]
+        r = pr["resolved"] or {}
+        lines.append(
+            "> - Under a 32K context budget, compaction (hybrid) takes context-overflow "
+            f"failures from **{_pct(pr['overflow_without'])}** (no compaction) to "
+            f"**{_pct(pr['overflow_with'])}**, and resolves {r.get('only_other', 0)} tasks "
+            f"the run without it misses ({r.get('only_base', 0)} the other way; p = "
+            f"{r.get('sign_test_p', 1):.2g}; {pr['tasks']} tasks)."
+        )
+    lines.append(
+        f"> - Prompt-cache hit rate on the main run: **{_pct(m['cache_hit_rate'])}** of "
+        "input tokens."
+    )
+    rules = ", ".join(f"`{x}`" for x in t["deny_rules"]) or "none"
+    lines.append(
+        "> - Permission guard false-block rate on the main run: "
+        f"**{_pct2(t['false_block_rate'])}** of tool calls ({t['false_blocks']} of "
+        f"{t['denies']} blocks judged false after review, {t['unreviewed']} unreviewed; "
+        f"rules that fired: {rules})."
+    )
+    return "\n".join(lines) + "\n"
+
+
+def render_setup(s: dict[str, Any]) -> str:
+    lim = s["limits"] or {}
+    repos = ", ".join(f"{k} {v}" for k, v in s["repos"].items())
+    commits = "; ".join(
+        f"`{c['commit'][:7]}`" + (f" ({', '.join(c['tags'])})" if c["tags"] else "")
+        for c in s["commits"]
+    )
+    wall = lim.get("max_wall_seconds")
+    return "\n".join(
+        [
+            "**Setup**",
+            "",
+            (
+                f"- Model: `{', '.join(s['models'])}` (thinking {s['thinking']}, effort "
+                f"{s['reasoning_effort']}); summarizer: `{s['summary_model']}` (called only "
+                "when a context strategy writes a summary)"
+            ),
+            (
+                f"- Tasks: `{s['subset']}`, {s['tasks']} tasks from SWE-bench Verified across "
+                f"{len(s['repos'])} repos ({repos}); seed {s['seed']}, dataset revision "
+                f"`{(s['dataset_revision'] or '')[:12]}`. The ablations use `verified_25`, "
+                "half of these drawn by repo"
+            ),
+            (
+                f"- Limits per task: {lim.get('max_steps')} steps, "
+                f"{_usd(lim.get('max_cost_per_task_usd'))}, "
+                f"{'—' if wall is None else f'{wall:.0f} s'}; context budget "
+                f"{s['budget_tokens']} tokens"
+            ),
+            f"- Main run: commits {commits}; config hash {', '.join(s['config_hashes'])}",
+            f"- Harness size: {s['harness_lines']} non-blank lines of Python in `src/harness`",
+            (
+                f"- API cost of the runs in these tables ({', '.join(s['cost_runs'])}): "
+                f"{_usd(s['cost_of_tables'])} at standard prices"
+            ),
+            "",
+        ]
+    )
+
+
+def render_failures(f: dict[str, Any]) -> str:
+    fl = f["failures"]
+    lines = [
+        (
+            f"How the unresolved tasks of `{f['run_id']}` ended ({fl['n']} of {f['tasks']}; "
+            "classes from the run and the official test report, owners from a manual "
+            "review):"
+        ),
+        "",
+        "| Ending / tests | Count | Tasks |",
+        "|---|---|---|",
+    ]
+    for cls, ids in f["by_class"].items():
+        lines.append(f"| {cls} | {len(ids)} | {', '.join(f'`{i}`' for i in ids)} |")
+    owners = ", ".join(f"{k} {v}" for k, v in fl["by_owner"].items())
+    lines += [
+        "",
+        (
+            f"Owner after manual review: {owners}. Loop suspects (the same call repeated "
+            f"several times in a row): {len(f['loop_suspects'])}."
+        ),
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def render_caveat(t: dict[str, Any]) -> str:
+    rr = t.get("rerun")
+    if not rr:
+        return "> **Caveat:** no rerun of the main configuration is available to size the noise.\n"
+    return (
+        f"> **Caveat:** the main configuration run twice on the same {rr['tasks']} tasks "
+        f"(`{rr['a']}`, `{rr['b']}`) resolved {rr['resolved_a']} and {rr['resolved_b']}; "
+        f"{rr['flipped']} tasks flipped. Differences of a few tasks are noise at this size; "
+        "resolve rates are compared only with the sign test on the tasks one side resolved, "
+        "and each configuration was run once.\n"
+    )
+
+
 def replace_block(text: str, name: str, body: str) -> str:
     start, end = (
         MARK.format(name=name, edge="START"),
@@ -655,6 +910,9 @@ def main(argv: list[str] | None = None) -> int:
         help="run id the ablations are paired with",
     )
     ap.add_argument(
+        "--labels", type=Path, default=DEFAULT_LABELS, help="failure owner labels"
+    )
+    ap.add_argument(
         "--check", action="store_true", help="write nothing; exit 1 if stale"
     )
     args = ap.parse_args(argv)
@@ -682,11 +940,19 @@ def main(argv: list[str] | None = None) -> int:
         ),
     }
     tables["main"]["calibration"] = tables["ablation"].get("calibration")
+    tables["setup"] = summarize_setup(main_run, tables["cost"])
+    tables["failures"] = summarize_failures(main_run, args.labels)
+    tables["tldr"] = summarize_tldr(tables)
+    tables["caveat"] = tables["tldr"]
     renderers = {
         "main": render,
         "ablation": render_ablation,
         "cost": render_cost,
         "security": render_security,
+        "setup": render_setup,
+        "failures": render_failures,
+        "tldr": render_tldr,
+        "caveat": render_caveat,
     }
     readme = args.readme.read_text()
     outputs = {}

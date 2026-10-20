@@ -1,0 +1,40 @@
+{
+  "by_class": {
+    "submitted_but_failed / partial_fix": [
+      "django__django-11477",
+      "sphinx-doc__sphinx-7462"
+    ],
+    "submitted_but_failed / regression": [
+      "django__django-15957"
+    ],
+    "submitted_but_failed / target_fail": [
+      "django__django-11087",
+      "django__django-11734",
+      "django__django-12273",
+      "django__django-12663",
+      "scikit-learn__scikit-learn-14629",
+      "scikit-learn__scikit-learn-14983",
+      "sphinx-doc__sphinx-9461",
+      "sphinx-doc__sphinx-9602",
+      "sympy__sympy-13798",
+      "sympy__sympy-21930"
+    ]
+  },
+  "failures": {
+    "by_end": {
+      "submitted_but_failed": 13
+    },
+    "by_owner": {
+      "model": 13
+    },
+    "by_tests": {
+      "partial_fix": 2,
+      "regression": 1,
+      "target_fail": 10
+    },
+    "n": 13
+  },
+  "loop_suspects": [],
+  "run_id": "M0",
+  "tasks": 50
+}

@@ -30,7 +30,7 @@ T = {"f2p_pass": 0, "f2p_total": 1, "p2p_fail": 0, "p2p_total": 3}
     ("iid", "end", "tests", "want"),
     [
         ("a", run_end(), None, "resolved"),
-        ("b", run_end(), T, "wrong fix"),
+        ("b", run_end(), T, "submitted, not fixed"),
         ("b", run_end(), {**T, "p2p_fail": 1}, "partial or regression"),
         ("b", run_end(), {**T, "f2p_pass": 1, "f2p_total": 2}, "partial or regression"),
         ("b", run_end("context_overflow"), None, "stopped early"),
@@ -40,6 +40,11 @@ T = {"f2p_pass": 0, "f2p_total": 1, "p2p_fail": 0, "p2p_total": 3}
 def test_ending(iid, end, tests, want):
     score = {"tests": {iid: tests}} if tests else None
     assert ending(iid, end, {"a"}, score) == want
+
+
+def test_an_empty_patch_is_submitted_not_stopped_early():
+    score = {"empty_patch": ["b"], "tests": {}}
+    assert ending("b", run_end(), {"a"}, score) == "submitted, not fixed"
 
 
 def test_points_are_cut_to_the_subset(tmp_path):
