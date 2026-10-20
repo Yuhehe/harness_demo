@@ -13,8 +13,6 @@
 > - Permission guard false-block rate on the main run: **0.25%** of tool calls (7 of 7 blocks judged false after review, 0 unreviewed; rules that fired: `deny.test_edit_bash`).
 <!-- RESULTS:TLDR:END -->
 
-<!-- demo GIF: {{TBD}} (plan.md day 5, not recorded yet) -->
-
 ---
 
 ## Why this project
@@ -27,8 +25,6 @@ Questions this project answers:
 2. Should the agent get only a bash tool, or a set of purpose-built tools?
 3. Does explicit planning improve accuracy, or mostly reduce cost?
 4. What does a lightweight, rule-based permission layer cost in legitimate work it blocks? (A prompt-injection suite is optional and not run yet.)
-
-{{One or two sentences on your own motivation, e.g. a systems-engineering background and why reliability and sandboxing matter to you.}}
 
 ---
 
@@ -267,4 +263,4 @@ results/       per-run trajectories (gitignored) and committed summaries
 
 ## License
 
-{{MIT}}
+MIT. See [`LICENSE`](LICENSE).

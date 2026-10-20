@@ -331,9 +331,9 @@
 - [x] （2026-10-20：所有运行截到同样的 25 题）`plots.py`：两张图，保存到 `docs/img/`
   - 成本 vs 解决率散点图（每个配置一个点，基线也画进去）
   - 各配置的失败分类堆叠条形图
-- [~] （2026-10-20：除动机、许可证、演示 GIF 三处要你写或决定外，全部填好；数字都由脚本生成，结论段不含数字、指向表格；提示词对照按你的决定没有写进 README）填写 README 里的所有 `{{}}`：动机、设计取舍、结论、局限性（没做注入评测时，局限性里写明权限层没有经过注入评测）
-- [ ] 用 mermaid 画架构图；用 vhs 或 asciinema 录一段 30 秒以内的演示 GIF
-- [ ] 从 `results/summary/` 提炼 3 条简历条目，写到 `docs/resume_bullets.md`，每个数字都注明出自哪个文件
+- [x] （2026-10-20：全部填好；你的决定：不写动机、用 MIT 许可（新增 `LICENSE`）、不要演示 GIF；数字都由脚本生成，结论段不含数字、指向表格；提示词对照按你的决定没有写进 README）填写 README 里的所有 `{{}}`：动机、设计取舍、结论、局限性（没做注入评测时，局限性里写明权限层没有经过注入评测）
+- [-] 用 mermaid 画架构图（已有）；~~用 vhs 或 asciinema 录一段 30 秒以内的演示 GIF~~（2026-10-20 你的决定：不需要）
+- [x] （2026-10-20：3 条，13 个数字逐个核对过 `results/summary/` 里的字段；附了措辞限制：第 1 条不是"胜出"、第 2 条是 32K 人为压力、第 3 条不涉及注入、CI 未运行不写）从 `results/summary/` 提炼 3 条简历条目，写到 `docs/resume_bullets.md`，每个数字都注明出自哪个文件
 - [ ] 最终检查：在一个干净的 clone 里按 README 的复现步骤走一遍
 
 **可选任务**（只有 P0 和 P1 全部完成才做；按下面的顺序）
@@ -443,6 +443,7 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 | 2026-10-18 | 新配置键 `prompt_variant`（`v1` / `lite` / `mini`），用于提示词对照实验 | §5.3 表（是否列入：它决定一个实验的设计） |[x] 2026-10-19 |
 | 2026-10-18 | `llm_call` span 新字段 `served_model`、`system_fingerprint`（服务端实际回答的模型） | §5.7 `llm_call` 一条 |[x] 2026-10-19 |
 | 2026-10-18 | 新配置 `configs/ablations/prompt_lite.yaml`、`prompt_mini_bash.yaml`；新子集 `configs/subsets/pilot_8.txt`（阶段 1） | §4 目录树 |[x] 2026-10-19 |
+| 2026-10-20 | 新文件 `LICENSE`（MIT）、`docs/resume_bullets.md`、`docs/img/` | §4 目录树 | [ ] |
 | 待办 | CLI 交互确认（`ask`）实现后 | §5.6 删掉"尚未实现" | [ ] |
 | 2026-10-20 | 回放补写 `llm_call` span（已实现：`ReplayClient` 带 tracer 时按录制的 usage 写，`replay: true`） | §5.8 删掉"待做" | [ ] |
 | 2026-10-20 | 新文件 `.dockerignore`（仓库根目录）；服务的启动命令 `uvicorn --factory harness.service.api:create_app`；服务的环境变量（`HARNESS_*`，见 `service/worker.py` 模块说明）；`plots.py` 的命令；`make_tables.py` 的判定规则 B | §4 目录树、§7 命令 | [ ] |
@@ -834,3 +835,4 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - **你的决定（2026-10-20）**：机制拆分放到后续（记入"后续 TODO"）；提示词对照的结论先记在 `docs/notes.md` §27，以后视实验情况再决定是否写进 README；噪声规则先听讲解再定。
 - **你的决定（2026-10-20）**：判定规则采用方案 B（比值区间不含 1 才算差别，同配置重跑做校准），写进 `docs/notes.md` §22.9；`make_tables.py` 加了"Differs"列和自动校准检查。
 - **README 的数字和结论（2026-10-20）**：`make_tables.py` 新增 TL;DR、实验设置、失败分类、噪声说明四个生成段；结论段四条（不含数字，指向表格）；路线图、参考链接（Manus 的链接已核实）、一个"值得一提的 bug"段落；GitHub 路径取自 git remote。`plots.py` 修了一处分类：空补丁原来被算成"提前结束"，改为"提交了但没修好"。剩下要你写的：动机、许可证、演示 GIF。
+- **你的决定（2026-10-20）**：不写动机、MIT 许可、不要演示 GIF。简历条目写好（`docs/resume_bullets.md`）。下一步：在干净的 clone 里按 README 走一遍。
