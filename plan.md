@@ -447,10 +447,10 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 | 2026-10-18 | 新配置键 `prompt_variant`（`v1` / `lite` / `mini`），用于提示词对照实验 | §5.3 表（是否列入：它决定一个实验的设计） |[x] 2026-10-19 |
 | 2026-10-18 | `llm_call` span 新字段 `served_model`、`system_fingerprint`（服务端实际回答的模型） | §5.7 `llm_call` 一条 |[x] 2026-10-19 |
 | 2026-10-18 | 新配置 `configs/ablations/prompt_lite.yaml`、`prompt_mini_bash.yaml`；新子集 `configs/subsets/pilot_8.txt`（阶段 1） | §4 目录树 |[x] 2026-10-19 |
-| 2026-10-20 | 新文件 `LICENSE`（MIT）、`docs/resume_bullets.md`、`docs/img/` | §4 目录树 | [ ] |
+| 2026-10-20 | 新文件 `LICENSE`（MIT）、`docs/resume_bullets.md`、`docs/img/` | §4 目录树 | [x] 2026-10-20 |
 | 待办 | CLI 交互确认（`ask`）实现后 | §5.6 删掉"尚未实现" | [ ] |
-| 2026-10-20 | 回放补写 `llm_call` span（已实现：`ReplayClient` 带 tracer 时按录制的 usage 写，`replay: true`） | §5.8 删掉"待做" | [ ] |
-| 2026-10-20 | 新文件 `.dockerignore`（仓库根目录）；服务的启动命令 `uvicorn --factory harness.service.api:create_app`；服务的环境变量（`HARNESS_*`，见 `service/worker.py` 模块说明）；`plots.py` 的命令；`make_tables.py` 的判定规则 B | §4 目录树、§7 命令 | [ ] |
+| 2026-10-20 | 回放补写 `llm_call` span（已实现：`ReplayClient` 带 tracer 时按录制的 usage 写，`replay: true`） | §5.8 删掉"待做" | [x] 2026-10-20 |
+| 2026-10-20 | 新文件 `.dockerignore`（仓库根目录）；服务的启动命令 `uvicorn --factory harness.service.api:create_app`；服务的环境变量（`HARNESS_*`，见 `service/worker.py` 模块说明）；`plots.py` 的命令；`make_tables.py` 的判定规则 B | §4 目录树、§7 命令 | [x] 2026-10-20 |
 | 待办 | `score.py` 写好后：`resolved.json` 约定（现在只在 `docs/notes.md` §12.6） | §6 或 §7 | [x] 2026-10-16（判定为不进 CLAUDE.md，约定在 `score.py`、`aggregate.py` 的模块说明里） |
 | 待办 | 冻结前定下 `default.yaml` 的步数 / 成本 / 墙钟上限（现在是临时值） | 不进 CLAUDE.md，只记 plan.md | [x] 2026-10-12（150 步 / $2 / 1800 秒，依据在 `default.yaml` 注释） |
 | 2026-10-13 | 提示词估计的误差：有锚时约 ±8% 仍成立（实测更小），压缩过程中没有锚；回传的推理计入 `prompt_tokens`，本地计数也计入（`docs/notes.md` §17.2–17.3） | §5.3 不变量里"约 ±8% 的误差（§11.3）" | [x] 2026-10-14 |
@@ -841,3 +841,4 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - **README 的数字和结论（2026-10-20）**：`make_tables.py` 新增 TL;DR、实验设置、失败分类、噪声说明四个生成段；结论段四条（不含数字，指向表格）；路线图、参考链接（Manus 的链接已核实）、一个"值得一提的 bug"段落；GitHub 路径取自 git remote。`plots.py` 修了一处分类：空补丁原来被算成"提前结束"，改为"提交了但没修好"。剩下要你写的：动机、许可证、演示 GIF。
 - **你的决定（2026-10-20）**：不写动机、MIT 许可、不要演示 GIF。简历条目写好（`docs/resume_bullets.md`）。下一步：在干净的 clone 里按 README 走一遍。
 - **干净 clone 的最终检查完成**：发现并修了测试读开发者 `.env` 的问题（CI 也会因此失败）和 README 快速开始的顺序问题；快速开始、服务演示、复现命令都核对过。本次真实调用 $0.0058。
+- **CLAUDE.md 同步（2026-10-20，你确认了 diff）**：§4 目录树（`LICENSE`、`.dockerignore`、`docs/resume_bullets.md`、`docs/img/`）、§5.8 回放写 `llm_call` span、§6 新增"差别的判定"（方案 B）、§7 命令（`plots.py`、服务启动、`make_tables.py --check`）、§8 测试不得依赖 `.env`；待同步清单的 3 行勾掉。

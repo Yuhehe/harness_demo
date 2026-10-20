@@ -57,7 +57,7 @@
 
 ```
 harness-lab/
-├── CLAUDE.md  plan.md  README.md  .env.example
+├── CLAUDE.md  plan.md  README.md  LICENSE  .env.example  .dockerignore
 ├── pyproject.toml  uv.lock  .python-version   # uv 管理；uv.lock 必须提交
 ├── configs/
 │   ├── default.yaml            # 主配置
@@ -81,7 +81,7 @@ harness-lab/
 │   ├── baselines/{mini_swe_agent.md, run_b0.py, codex_exec.py}
 │   ├── security/{cases/, build_cases.py, run_security.py}
 │   └── report/{aggregate.py, summary_probe.py, failure_taxonomy.py, make_tables.py, plots.py}
-├── docs/{notes.md, dev_log.md, failure_analysis.md, learning/}  # notes.md：外部接口核实记录；dev_log.md：阶段性结论（§2.3 的例外）；failure_analysis.md：失败分析；learning/：学习笔记
+├── docs/{notes.md, dev_log.md, failure_analysis.md, resume_bullets.md, img/, learning/}  # notes.md：外部接口核实记录；dev_log.md：阶段性结论（§2.3 的例外）；failure_analysis.md：失败分析；resume_bullets.md：简历条目（数字注明 results/summary 的出处）；img/：plots.py 生成的图；learning/：学习笔记
 ├── results/            # runs/ 目录 gitignore；summary/ 提交
 ├── tests/{unit/, e2e/, fixtures/toy_repo/, fixtures/replays/}
 ├── docker/{Dockerfile, docker-compose.yml}
@@ -192,7 +192,7 @@ async def run_task(task: Task, cfg: AgentConfig, sandbox: Sandbox, llm: LLMClien
 - **请求哈希不含工具结果的内容**：它由模型、`thinking`、`reasoning_effort`、`max_tokens`、工具定义和除工具结果内容外的全部消息决定。原因：沙箱输出里有耗时、临时路径、`ls` 日期，`find`/`ls` 的顺序还取决于宿主机文件系统，换机器（如 CI）就会变。工具输出另做规范化摘要比对，不一致只记入 `ReplayClient.mismatches`，设 `HARNESS_STRICT_REPLAY=1` 才报错；端到端测试靠断言沙箱里项目自己的测试从失败变成通过来兜底。
 - 摘要模型的输入是把工具输出拼进一条 user 消息，请求哈希“不含工具结果”的规则管不到它：**CI 的回放必须用不压缩的配置**（`context.strategy: none`），不要录制带摘要的运行。
 - 录制必须用显式设了 `llm.model` 的配置（键里用的是 `cfg.model or $MODEL_MAIN`，CI 没有 `.env`）。
-- 回放的轨迹目前不写 `llm_call` span，只有 `run_end` 的合计；`aggregate.py` 或 CI 冒烟如要与真实运行同形状，需由回放按录制的 usage 补写（待做）。
+- 回放客户端带 tracer 时，按录制的 usage 写与真实调用同形状的 `llm_call` span（`replay: true`），所以回放的轨迹也能被 `aggregate.py` 读。
 
 ## 6. 指标定义（报告里统一用这些名字）
 
@@ -214,6 +214,8 @@ async def run_task(task: Task, cfg: AgentConfig, sandbox: Sandbox, llm: LLMClien
 | `utility_under_attack` | 注入用例中良性任务仍然完成的比例 |
 | `false_block_rate` | SWE-bench 运行中被拦截的合法命令数 / 总命令数（抽样人工复核） |
 
+**差别的判定**：两个配置的成本、步数比较，看逐题比值中位数的 bootstrap 95% 区间，**区间不含 1 才算有差别**；解决率用只看分歧题的符号检验。同一配置重跑一次作为校准（它的区间必须包含 1），`make_tables.py` 自动检查并写在表下。规则、计算方法和它是看到第一批结果后才定下的这件事，见 `docs/notes.md` §22.9。
+
 ## 7. 常用命令（实现后保持可用）
 
 ```bash
@@ -225,7 +227,9 @@ uv run python eval/swebench/score.py --run-id dev
 uv run python eval/baselines/run_b0.py run --config configs/default.yaml --subset configs/subsets/dev_5.txt --run-id B0-dev
 uv run python eval/report/aggregate.py --run-id dev [--baseline A1]   # 写 results/runs/<id>/metrics.json
 uv run python eval/report/summary_probe.py --trajectory <trajectory.jsonl> --patch <patch.diff>   # 强制压缩一次看摘要留了什么（几分钱）
-uv run python eval/report/make_tables.py        # 更新 README 里 RESULTS 标记之间的表格
+uv run python eval/report/make_tables.py        # 更新 README 里 RESULTS 标记之间的表格（--check 只核对不写）
+uv run python eval/report/plots.py              # 生成 docs/img/ 的两张图
+uv run uvicorn --factory harness.service.api:create_app --port 8000   # 本地起服务；环境变量 HARNESS_*（含 HARNESS_REPLAY）见 service/worker.py
 docker compose -f docker/docker-compose.yml up
 ```
 
@@ -233,7 +237,7 @@ docker compose -f docker/docker-compose.yml up
 
 - 开始工作前先读 `plan.md`，找到当天的任务，做完就勾选并写上完成日期。
 - 以小步提交为主。提交信息格式：`feat(context): hybrid strategy` 或 `exp: run main config on verified_50`。
-- 做完一个模块就补对应的单元测试；外部依赖（Docker、LLM）都用假对象或回放代替。
+- 做完一个模块就补对应的单元测试；外部依赖（Docker、LLM）都用假对象或回放代替。测试不得依赖开发者的 `.env`（干净的 clone 和 CI 都没有它）：`tests/conftest.py` 固定了模型名、假 key 和不可达的接口地址。
 - 批量任务要**支持断点续跑**：已完成的题目跳过，按 `instance_id` 判断。
 - 遇到文档里没写清楚的外部接口（swebench、mini-swe-agent、codex 的命令和参数），先用 `--help` 或看源码核实，把核实结果记到 `docs/notes.md`，**不要凭记忆写**。
 - 每天结束时在 `plan.md` 的"日志"一节追加：完成了什么、花了多少钱、遇到什么问题、明天先做什么。
