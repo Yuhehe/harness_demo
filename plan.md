@@ -391,13 +391,13 @@
   - `GET /tasks/{id}/events`：用 SSE 流式推送 span
   - 后台用 asyncio 队列加 worker 执行；任务状态存 SQLite
 - [x] （2026-10-20：镜像 2GB；验收见下）`docker/Dockerfile` 和 `docker-compose.yml`：Dockerfile 基于 `python:3.12-slim`，复制官方 uv 二进制，用 `uv sync --frozen --no-dev` 装依赖（不用 pip）；服务通过挂载宿主机的 `docker.sock` 创建沙箱容器；README 里要说明这样做的安全影响
-- [~] （2026-10-20 已写好，本地无法运行 GitHub Actions；等你决定 push 后第一次真正运行。回放补写 `llm_call` span 也已完成）`.github/workflows/ci.yml`：用 `astral-sh/setup-uv` 装 uv，`uv sync` 后 `uv run` 跑 ruff 检查和 pytest（含回放端到端测试），不需要任何密钥
+- [x] （2026-10-21：GitHub Actions 两次运行都通过——`d5ca357` 的 [39546572584](https://github.com/Yuhehe/harness_demo/actions/runs/39546572584)、`0698f91` 的 [39629927498](https://github.com/Yuhehe/harness_demo/actions/runs/39629927498)，每次约 1 分 40 秒，所有步骤成功；唯一的提示是几个 action 依赖的 Node.js 20 已弃用）（2026-10-20 已写好，本地无法运行 GitHub Actions；等你决定 push 后第一次真正运行。回放补写 `llm_call` span 也已完成）`.github/workflows/ci.yml`：用 `astral-sh/setup-uv` 装 uv，`uv sync` 后 `uv run` 跑 ruff 检查和 pytest（含回放端到端测试），不需要任何密钥
   - 第 1 天遗留给这一项的事：CI 要先构建 `harness-toy` 镜像（`tests/fixtures/toy_image/Dockerfile`，本机网络下 apt 用了约 9 分钟，CI 网络通常快得多，但仍要留出时间，最好缓存），沙箱的集成测试和回放的端到端测试都需要它；`ReplayClient` 目前不写 `llm_call` span，回放的轨迹只有 `run_end` 的合计，见 `docs/notes.md` §10
 - [ ] 跑完剩下的 P1 消融实验；如果预算允许，跑 M0'
 
 **验收**
 - `docker compose up` 后，用 curl 提交 toy_repo 任务，能收到 SSE 事件和补丁（**2026-10-20 通过**：回放模式，36 个事件、从 `run_start` 到 `run_end`，含 5 个 `llm_call`，最终补丁把 `a - b` 改成 `a + b`）
-- CI 通过（未验证：还没 push）
+- CI 通过（**2026-10-21 通过**：`0698f91`，运行 39629927498）
 - 误拦率已统计（原为"安全评测表生成"，注入评测改为可选）
 
 ---
@@ -945,3 +945,4 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - **CLAUDE.md 同步（2026-10-21，你确认了 diff）**：§4 目录树加 `gap_breakdown.py`、`guard_replay.py`；§5.6 测试规则的语义（policy v2）和冻结规则（改策略可以不重跑 M0，但要注明误拦率是旧策略的实测值）。待同步清单 2 行勾掉。
 - **当天花费**：$0（累计 $70.39，`run_agent.spent_so_far`）。
 - **下一步**：push（本地领先远端 10 个提交；tag `v0.3-exp`、`v0.4-exp` 本机无法确认是否已推送，用 `git push origin master --tags` 一并推）并看第一次 CI；仓库公开前再看一遍公开内容。
+- **CI 通过（2026-10-21）**：仓库已公开；你推送后，`0698f91`（含 v0.4-exp 的权限层修复）的 CI 全部步骤通过（运行 39629927498）。公开仓库的运行状态、步骤和报错摘要不登录就能读，之后的 CI 我可以自己查；完整日志下载要登录，推送仍要你来做。远端还没有 tag（`v0.3-exp`、`v0.4-exp` 未推上去）。简历第 3 条按措辞限制加上了 CI。
