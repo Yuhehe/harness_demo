@@ -4,7 +4,7 @@ Every number below comes from a file in `results/summary/`, which `eval/report/m
 
 ```text
 harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, FastAPI, SWE-bench | 2026 | github.com/Yuhehe/harness_demo
-- Built a framework-free coding-agent harness (~4.4k lines of Python; LiteLLM only for transport) with Docker-sandboxed execution and config-switchable components; on a 50-task SWE-bench Verified subset it resolved 74% (95% CI 60–84%) vs. 78% for mini-SWE-agent on the same model, a difference that is not statistically distinguishable (sign test p = 0.63), at $0.21 vs. $0.16 per task.
+- Built a framework-free coding-agent harness (~4.5k lines of Python; LiteLLM only for transport) with Docker-sandboxed execution and config-switchable components; on a 50-task SWE-bench Verified subset it resolved 74% (95% CI 60–84%) vs. 78% for mini-SWE-agent on the same model, a difference that is not statistically distinguishable (sign test p = 0.63), at $0.21 vs. $0.16 per task.
 - Ran single-factor ablations with task-paired bootstrap intervals and a rerun calibration check: under a 32K context budget, rule-based output clearing plus LLM summarization cut context-overflow failures from 60% to 0% and resolved 7 more of 25 tasks (p = 0.016); in a single-run ablation, bash alone cost more than purpose-built edit tools (×1.29, 95% CI 1.05–1.41), though the gap did not hold up when repeated runs were pooled; an append-only, KV-cache-friendly context layout kept a 98.2% prompt-cache hit rate.
 - Designed a tiered, regex-based permission guard over a network-isolated sandbox, with a 0.25% false-block rate across 2,793 tool calls (every block reviewed by hand); shipped the harness as a FastAPI + SSE service with Docker Compose and replay-based end-to-end tests that need no API key.
 ```
@@ -13,7 +13,7 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 
 | Bullet | Number | File | Field |
 |---|---|---|---|
-| 1 | ~4.4k lines | `results/summary/setup.json` | `harness_lines` (4363) |
+| 1 | ~4.5k lines | `results/summary/setup.json` | `harness_lines` (4468) |
 | 1 | 50 tasks | `results/summary/tldr.json` | `tasks` |
 | 1 | 74% (95% CI 60–84%) | `results/summary/tldr.json` | `main.resolve_rate.rate` (0.74), `.wilson95` (0.604, 0.841) |
 | 1 | 78% | `results/summary/tldr.json` | `baseline.resolve_rate.rate` (0.78) |
