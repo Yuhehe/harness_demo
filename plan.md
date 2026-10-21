@@ -337,11 +337,11 @@
 
 规则在算出任何合并结果之前写定（各次运行的单独结果此前已经看过，合并结果没有算过）。只读已有轨迹，不调用 LLM、不起容器。
 
-- [ ] 写定本节（本条）
-- [ ] `eval/report/gap_breakdown.py` + 单元测试（合成数据：两层 bootstrap、阶段划分、多调用回复平分）；登记待同步清单（§4 目录树）
-- [ ] 1：合并重复运行的配对比较
-- [ ] 2：多出来的步数花在哪（分类与阶段）
-- [ ] 结果写进 `docs/dev_log.md`，定性结论补进 `docs/notes.md` §29
+- [x] （2026-10-21，`b4e22fc`）写定本节（本条）
+- [x] （2026-10-21：9 个单元测试，3 处变异检查均变红）`eval/report/gap_breakdown.py` + 单元测试（合成数据：两层 bootstrap、阶段划分、多调用回复平分）；登记待同步清单（§4 目录树）
+- [x] （2026-10-21：校准两组都含 1；A2 / B0 1.30 不含 1；D / B0 1.04 含 1 → 规则 2 收尾；D / A2 0.85 不含 1 → 提示词有可测作用）1：合并重复运行的配对比较
+- [x] （2026-10-21：只有 A2 / B0 的"探索"合格（61%）；剩余差距没有合格的块）2：多出来的步数花在哪（分类与阶段）
+- [x] （2026-10-21）结果写进 `docs/dev_log.md`，定性结论补进 `docs/notes.md` §29
 
 **数据**（verified_25，每组的运行都覆盖全部 25 题）：B0 = `B0`、`B0-v021`、`B0-v03`（3 次）；M0 = `M0`、`M0-r2`（2 次）；A2 = `A2`、`A2-v021`（2 次）；D = `D-v021`、`D-v03`（2 次，只差 system prompt 末尾一个换行）；D\* = `Dstar-v03`（1 次）。D 与 D\* 不合并（那等于先假设机制无作用），合并只做敏感性分析。限定：v0.1 的我们自己的运行没有记 fingerprint（同期 B0 存的一致）；运行跨 10-15 到 10-20；A2、D 有个别题触发过清理型压缩（无摘要调用），去掉这些题再算一遍作敏感性分析。
 
@@ -510,6 +510,7 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 | 2026-10-18 | 新配置 `configs/ablations/prompt_lite.yaml`、`prompt_mini_bash.yaml`；新子集 `configs/subsets/pilot_8.txt`（阶段 1） | §4 目录树 |[x] 2026-10-19 |
 | 2026-10-20 | 新文件 `LICENSE`（MIT）、`docs/resume_bullets.md`、`docs/img/` | §4 目录树 | [x] 2026-10-20 |
 | 待办 | CLI 交互确认（`ask`）实现后 | §5.6 删掉"尚未实现" | [ ] |
+| 2026-10-21 | 新文件 `eval/report/gap_breakdown.py`（合并重复运行的配对比较、多出步数的分类与阶段；输出到 `results/runs/_analysis/`） | §4 目录树的 `eval/report/`；§7 是否加命令待定（探索性分析，倾向不加） | [ ] |
 | 2026-10-20 | 新配置键 `bash_tool`、`tool_output.format`、`tool_output.step_note`、`llm.parallel_tool_calls`（诊断用，默认逐字节不变）；新配置 `configs/ablations/mech_aligned.yaml` | §5.3 表（是否列入待定：只用于拆解实验，不进主实验矩阵，倾向于只在表下加一句指针） | [ ] |
 | 2026-10-20 | 回放补写 `llm_call` span（已实现：`ReplayClient` 带 tracer 时按录制的 usage 写，`replay: true`） | §5.8 删掉"待做" | [x] 2026-10-20 |
 | 2026-10-20 | 新文件 `.dockerignore`（仓库根目录）；服务的启动命令 `uvicorn --factory harness.service.api:create_app`；服务的环境变量（`HARNESS_*`，见 `service/worker.py` 模块说明）；`plots.py` 的命令；`make_tables.py` 的判定规则 B | §4 目录树、§7 命令 | [x] 2026-10-20 |
@@ -911,3 +912,10 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - **你的决定（2026-10-20）**：阶段 3 不跑，判分后写进 dev_log。
 - **遇到的问题**：后台等待任务随会话结束被停掉一次（运行进程本身不受影响）。
 - **下一步**：见对话里给出的下一步计划，等你选择。
+
+### 2026-10-21
+
+- **你的决定**：定位差距来源前先做零花费的 1（合并重复运行）和 2（多出的步数花在哪）；脚本放 `eval/report/` 并提交。
+- **完成**：规则先写进本文件（`b4e22fc`）再计算；`eval/report/gap_breakdown.py` + 9 个测试。结果：提示词约占只用 bash 时差距的一半（D / A2 0.85，合并后区间不含 1）；剩余按事先规则测不出（D / B0 1.04 [0.98, 1.28]），事后核对约 +10–15%、在边上；没有合格的块可做付费实验 → 按规则收尾。成本差距（D / B0 1.19，不含 1）比步数差距稳，没拆。花费 $0。数字见 `docs/dev_log.md`。
+- **遇到的问题**：补丁覆盖核对一开始全部"无法核对"——两边都用 Python heredoc（`Path('x.py')`）改文件，原来的目标提取认不出，补上后 250 次里 248 次覆盖；`classify_call` 有两处已知误判（django-15525、sphinx-9602），没改它（已报告的 `call_mix` 也用它），去掉这两题的敏感性分析结论不变。
+- **下一步**：等你在 push / CI、README 是否加一句、注入评测、Codex 之间选择。
