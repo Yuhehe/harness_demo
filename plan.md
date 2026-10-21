@@ -919,3 +919,6 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - **完成**：规则先写进本文件（`b4e22fc`）再计算；`eval/report/gap_breakdown.py` + 9 个测试。结果：提示词约占只用 bash 时差距的一半（D / A2 0.85，合并后区间不含 1）；剩余按事先规则测不出（D / B0 1.04 [0.98, 1.28]），事后核对约 +10–15%、在边上；没有合格的块可做付费实验 → 按规则收尾。成本差距（D / B0 1.19，不含 1）比步数差距稳，没拆。花费 $0。数字见 `docs/dev_log.md`。
 - **遇到的问题**：补丁覆盖核对一开始全部"无法核对"——两边都用 Python heredoc（`Path('x.py')`）改文件，原来的目标提取认不出，补上后 250 次里 248 次覆盖；`classify_call` 有两处已知误判（django-15525、sphinx-9602），没改它（已报告的 `call_mix` 也用它），去掉这两题的敏感性分析结论不变。
 - **下一步**：等你在 push / CI、README 是否加一句、注入评测、Codex 之间选择。
+- **你的决定（2026-10-21）**：目标是通用 Agent 岗位；注入安全评测不做（可选项保留，不排期），先做 push / CI 和 README。简历第 2 条的工具一句改弱（单次比较，合并后没有重现）。
+- **README（2026-10-21，只改文字、不含数字）**：What we learned 第 1、3 条按拆解结果改写，局限性改为"注入评测没有做"，路线图第 1 项勾掉；`make_tables.py` 重新生成了 setup 块（`src/harness` 行数 4363 → 4468，来自 v0.3-exp 的开关），简历第 1 条同步为 ~4.5k。
+- **CI 准备**：干净 clone 里按 CI 的步骤（`uv sync --frozen`、ruff、pytest）全部通过（716 通过、1 跳过）；git 历史扫描没有密钥（只有 `.env.example` 的占位符），`.env` 从未提交，没有大于 1 MB 的文件。本机 WSL 里没有 GitHub 凭据，也没有 `gh`，所以 push 和查看 Actions 由你来做。仓库目前是私有的（公开 API 返回 Not Found）。
