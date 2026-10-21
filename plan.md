@@ -526,8 +526,8 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 | 2026-10-18 | 新配置 `configs/ablations/prompt_lite.yaml`、`prompt_mini_bash.yaml`；新子集 `configs/subsets/pilot_8.txt`（阶段 1） | §4 目录树 |[x] 2026-10-19 |
 | 2026-10-20 | 新文件 `LICENSE`（MIT）、`docs/resume_bullets.md`、`docs/img/` | §4 目录树 | [x] 2026-10-20 |
 | 待办 | CLI 交互确认（`ask`）实现后 | §5.6 删掉"尚未实现" | [ ] |
-| 2026-10-21 | 权限层 policy v2：两条测试规则只保护任务开始时被 git 跟踪的测试文件（`protect: tracked`）；loop 在开始时取 `git ls-files`，`run_start` 新字段 `guard_tracked_files`；新文件 `eval/report/guard_replay.py` | §5.6（"修改 `tests/` 里的断言"一句的语义、`policy.yaml` 冻结一条：v2 未重跑 M0）、§5.7 `run_start`、§4 目录树 | [ ] |
-| 2026-10-21 | 新文件 `eval/report/gap_breakdown.py`（合并重复运行的配对比较、多出步数的分类与阶段；输出到 `results/runs/_analysis/`） | §4 目录树的 `eval/report/`；§7 是否加命令待定（探索性分析，倾向不加） | [ ] |
+| 2026-10-21 | 权限层 policy v2：两条测试规则只保护任务开始时被 git 跟踪的测试文件（`protect: tracked`）；loop 在开始时取 `git ls-files`，`run_start` 新字段 `guard_tracked_files`；新文件 `eval/report/guard_replay.py` | §5.6（"修改 `tests/` 里的断言"一句的语义、`policy.yaml` 冻结一条：v2 未重跑 M0）、§5.7 `run_start`、§4 目录树 | [x] 2026-10-21（你确认了 diff：§5.6 两句、§4 目录树；§5.7 不加——`guard_tracked_files` 是字段细节，按 §8 的标准写在 `agent/loop.py` 的发射处和 `security/guard.py` 的模块说明里） |
+| 2026-10-21 | 新文件 `eval/report/gap_breakdown.py`（合并重复运行的配对比较、多出步数的分类与阶段；输出到 `results/runs/_analysis/`） | §4 目录树的 `eval/report/`；§7 是否加命令待定（探索性分析，倾向不加） | [x] 2026-10-21（§4 已加；§7 不加命令：两个脚本都是一次性的探索性分析，用法写在各自的模块说明里） |
 | 2026-10-20 | 新配置键 `bash_tool`、`tool_output.format`、`tool_output.step_note`、`llm.parallel_tool_calls`（诊断用，默认逐字节不变）；新配置 `configs/ablations/mech_aligned.yaml` | §5.3 表（是否列入待定：只用于拆解实验，不进主实验矩阵，倾向于只在表下加一句指针） | [ ] |
 | 2026-10-20 | 回放补写 `llm_call` span（已实现：`ReplayClient` 带 tracer 时按录制的 usage 写，`replay: true`） | §5.8 删掉"待做" | [x] 2026-10-20 |
 | 2026-10-20 | 新文件 `.dockerignore`（仓库根目录）；服务的启动命令 `uvicorn --factory harness.service.api:create_app`；服务的环境变量（`HARNESS_*`，见 `service/worker.py` 模块说明）；`plots.py` 的命令；`make_tables.py` 的判定规则 B | §4 目录树、§7 命令 | [x] 2026-10-20 |
@@ -941,3 +941,7 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - **CI 准备**：干净 clone 里按 CI 的步骤（`uv sync --frozen`、ruff、pytest）全部通过（716 通过、1 跳过）；git 历史扫描没有密钥（只有 `.env.example` 的占位符），`.env` 从未提交，没有大于 1 MB 的文件。本机 WSL 里没有 GitHub 凭据，也没有 `gh`，所以 push 和查看 Actions 由你来做。仓库目前是私有的（公开 API 返回 Not Found）。
 - **你的决定（2026-10-21）**：先不管 CI；查清误拦原因并修复，选方案 A（不重跑 M0）。
 - **误拦修复完成**（`v0.4-exp`，花费 $0）：原因是 `deny.test_edit_bash` 分不清在 `tests/` 下新建临时测试和改已有测试；policy v2 只保护任务开始时被 git 跟踪的测试文件。离线重放：v1 重建后与 11 个实验运行的记录逐次一致；v2 下原来的 21 次拦截只剩 1 次（`env`，符合策略本意），没有原来放行、现在被拦的调用。重放中发现并修了第一稿的一个切分 bug（`grep 'A\|B'`）。数字见 `docs/dev_log.md`。
+- **审查后的补充（2026-10-21）**：v2 第一稿放行了新建的 `conftest.py`（pytest 会自动加载，可能影响判分），改为任何 `conftest.py` 都拦；空的跟踪列表按读不到处理（退回 v1）。改后重放结果不变；通过 `DockerSandbox` 取的跟踪列表与重放一致（django、sphinx 各一个镜像）。`v0.4-exp` 移到 `07d6549`（本地、未推送、没有任何运行用过旧位置，已记 CHANGELOG）。
+- **CLAUDE.md 同步（2026-10-21，你确认了 diff）**：§4 目录树加 `gap_breakdown.py`、`guard_replay.py`；§5.6 测试规则的语义（policy v2）和冻结规则（改策略可以不重跑 M0，但要注明误拦率是旧策略的实测值）。待同步清单 2 行勾掉。
+- **当天花费**：$0（累计 $70.39，`run_agent.spent_so_far`）。
+- **下一步**：push（本地领先远端 10 个提交；tag `v0.3-exp`、`v0.4-exp` 本机无法确认是否已推送，用 `git push origin master --tags` 一并推）并看第一次 CI；仓库公开前再看一遍公开内容。

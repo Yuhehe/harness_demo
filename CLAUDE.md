@@ -80,7 +80,7 @@ harness-lab/
 │   ├── swebench/{select_subset.py, pull_images.py, run_agent.py, score.py}
 │   ├── baselines/{mini_swe_agent.md, run_b0.py, codex_exec.py}
 │   ├── security/{cases/, build_cases.py, run_security.py}
-│   └── report/{aggregate.py, summary_probe.py, failure_taxonomy.py, make_tables.py, plots.py}
+│   └── report/{aggregate.py, summary_probe.py, failure_taxonomy.py, make_tables.py, plots.py, gap_breakdown.py, guard_replay.py}
 ├── docs/{notes.md, dev_log.md, failure_analysis.md, resume_bullets.md, img/, learning/}  # notes.md：外部接口核实记录；dev_log.md：阶段性结论（§2.3 的例外）；failure_analysis.md：失败分析；resume_bullets.md：简历条目（数字注明 results/summary 的出处）；img/：plots.py 生成的图；learning/：学习笔记
 ├── results/            # runs/ 目录 gitignore；summary/ 提交
 ├── tests/{unit/, e2e/, fixtures/toy_repo/, fixtures/replays/}
@@ -169,11 +169,11 @@ async def run_task(task: Task, cfg: AgentConfig, sandbox: Sandbox, llm: LLMClien
 
 ### 5.6 权限层（`security/`）
 
-- `policy.yaml` 定义三个权限级别：`read`（cat/ls/grep 等）、`write`（编辑工具以及限定路径内的写操作）、`exec`（运行测试或脚本）。另有 `deny` 规则（黑名单，每条带 `rule_id`）和 `ask` 规则（需要确认），`deny` 例如 `curl|wget … | sh`、访问 `~/.ssh`、读取 `env`/`printenv` 中的令牌、`rm -rf /`、`git push`、修改 `tests/` 里的断言。
+- `policy.yaml` 定义三个权限级别：`read`（cat/ls/grep 等）、`write`（编辑工具以及限定路径内的写操作）、`exec`（运行测试或脚本）。另有 `deny` 规则（黑名单，每条带 `rule_id`）和 `ask` 规则（需要确认），`deny` 例如 `curl|wget … | sh`、访问 `~/.ssh`、读取 `env`/`printenv` 中的令牌、`rm -rf /`、`git push`、修改仓库原有的测试（policy v2：只保护任务开始时被 git 跟踪的测试文件和任何 `conftest.py`，新建测试文件放行；取不到跟踪列表时按旧规则拦）。
 - `guard.check` 返回 `allow | deny | ask`，并附带 `rule_id`。每次判定都要记录 span，用来统计**误拦率**。
 - 批量评测时 `ask` 按 `deny` 处理；CLI 交互模式下提示用户确认（尚未实现）。
 - 规则是对命令文本的正则匹配，是纵深防御而不是证明；真正的边界是沙箱。必须放行的日常命令也要有测试（防误拦）。
-- **`policy.yaml` 与 M0 一起冻结**：改它要换 tag 并重跑 M0（误拦率是从 M0 的轨迹里算的）。
+- **`policy.yaml` 与 M0 一起冻结**：改它要换 tag，并且要么重跑 M0，要么在报告里注明误拦率仍是旧策略的实测值、新策略只做了离线重放（`eval/report/guard_replay.py`）。v0.4-exp 的 v2 属于后者（`docs/notes.md` §30）。
 
 ### 5.7 追踪（`tracing/tracer.py`）
 
