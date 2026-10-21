@@ -657,4 +657,8 @@ README 里的数字要等 `make_tables.py` 的安全表从轨迹和复核表生�
 
 20 次由拦变放全部是 `deny.test_edit_bash` 拦下的"在 `tests/` 下新建文件"（Django 的 `tests/<app>/test_*.py`、Sphinx 的 `tests/test_*.py` 和 `tests/roots/.../target/*.py`）。剩下的 1 次是 M0-r2 scikit-learn-14983 的 `env | sort | head -100`（`deny.env_dump`，符合策略本意）。
 
+**审查后的修改**：v2 第一稿放行了新建的 `conftest.py`（v1 会拦）；改为任何 `conftest.py` 都拦，并把空的跟踪列表按读不到处理。改后重放结果不变（v2 hash `c6f439fefd28`；仍是 21 → 1、由拦变放 20、由放变拦 0）。
+
+**运行时路径核对**（`results/runs/_analysis/tracked_via_sandbox.txt`）：通过 `DockerSandbox`（`bash -lc`，会激活 conda）取的跟踪列表与重放用的 `docker run git ls-files` 完全相同：django-11087 6071 个文件，sphinx-8621 1466 个文件。
+
 **限定**：逐次调用的反事实，不是重跑；不给出 v2 下的误拦率。README 和简历里的 0.25%（v1、M0 实测）不变。

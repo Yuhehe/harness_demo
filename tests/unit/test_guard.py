@@ -387,3 +387,35 @@ def test_v2_keeps_every_v1_block_on_a_tracked_file(cmd, rule):
         },
     )
     assert tracked.check(bash(cmd)).rule_id == rule, cmd
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        bash("cat > tests/sub/conftest.py <<'PY'\nimport pytest\nPY"),
+        bash("cp /tmp/c.py tests/conftest.py"),
+        bash("printf x | tee sub/conftest.py"),
+        tool("str_replace", path="tests/sub/conftest.py", old_str="a", new_str="b"),
+    ],
+)
+def test_v2_a_new_conftest_is_still_denied(guard_v2, call):
+    # pytest loads any conftest.py by itself: a new one could skip or pass the hidden tests
+    d = guard_v2.check(call)
+    assert d.action == "deny" and d.rule_id in (
+        "deny.test_edit_bash",
+        "deny.test_edit_tool",
+    )
+    assert "conftest.py" in d.reason
+
+
+async def test_an_empty_or_failed_listing_keeps_the_v1_behaviour():
+    from fakes import FakeSandbox
+
+    from harness.security.guard import tracked_files
+
+    assert await tracked_files(FakeSandbox(tracked=[])) is None
+    assert await tracked_files(FakeSandbox()) is None  # not a git repository
+    assert await tracked_files(FakeSandbox(tracked=["a.py", "tests/t.py"])) == {
+        "a.py",
+        "tests/t.py",
+    }

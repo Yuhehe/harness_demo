@@ -232,8 +232,11 @@ class Policy:
     def protected_targets(
         self, rule: Rule, scope: str, text: str, tracked: frozenset[str]
     ) -> list[str] | None:
-        """For a `protect: tracked` rule that matched: the tracked test files the call would
-        write (empty: the rule does not hold), or None when the targets cannot be read."""
+        """For a `protect: tracked` rule that matched: the protected files the call would
+        write (empty: the rule does not hold), or None when the targets cannot be read.
+        Protected: a test file the repository tracked, and any `conftest.py` in the
+        repository, new or not (pytest loads it by itself, so a new one could skip or pass
+        the hidden tests)."""
         if scope == "bash":
             targets = self.write_targets(text)
             if targets is None:
@@ -243,6 +246,10 @@ class Policy:
         out = []
         for t in targets:
             rel = self.rel(t)
-            if rel is not None and rel in tracked and self._test_path.search(rel):
+            if rel is None:
+                continue
+            if posixpath.basename(rel) == "conftest.py" or (
+                rel in tracked and self._test_path.search(rel)
+            ):
                 out.append(rel)
         return out

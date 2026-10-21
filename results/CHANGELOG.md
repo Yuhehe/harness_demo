@@ -107,8 +107,11 @@ policy v1's, measured on M0; v2 is checked offline against the calls the runs re
   when the task started; a new scratch test under `tests/` is allowed. Write targets are read
   with a quote-aware split of the command (redirections, `tee`, `sed -i`, `perl -i`, and new:
   the destination of `cp` / `mv` / `install`); a target that cannot be read (a variable, a
-  glob, unparsable text) keeps the rule in force. Without a tracked list the rules behave as in
-  v1.
+  glob, unparsable text) keeps the rule in force. Any `conftest.py` in the repository stays
+  protected, new or not (pytest loads it by itself, so a new one could skip or pass the hidden
+  tests). Without a tracked list, or with an empty one, the rules behave as in v1.
+- The tag was first set on `5010c87` (local, not pushed, no run made with it) and moved to the
+  commit that adds the `conftest.py` and empty-list cases, found in review before any use.
 - The agent loop takes the tracked list once per task (`git ls-files -z` in the sandbox, a
   harness command) and records its size in `run_start` (`guard_tracked_files`).
 - Block messages end with "The call was not run."; the test-file rules name the protected file

@@ -54,11 +54,12 @@ _PATH_ARGS = {  # tool -> (argument holding a path, scope)
 
 async def tracked_files(sandbox: Any) -> frozenset[str] | None:
     """The files git tracks in the sandbox's repository (relative paths), or None when that
-    cannot be read. A harness command, not a model one; it runs in the sandbox."""
+    cannot be read. An empty list is treated as unreadable too, so that a wrong working
+    directory leaves the test-file rules in force (policy v1 behaviour) instead of turning
+    them off. A harness command, not a model one; it runs in the sandbox."""
     code, out = await sandbox.exec("git ls-files -z", timeout=60)
-    if code != 0:
-        return None
-    return frozenset(p for p in out.split("\0") if p.strip())
+    files = frozenset(p for p in out.split("\0") if p.strip())
+    return files if code == 0 and files else None
 
 
 class Guard:

@@ -109,7 +109,8 @@ deny:
     # is normal, and an existing test file outside tests/ is rare. Matching stays on one line,
     # so heredoc bodies are not scanned for paths, and /tmp targets are exempt. With `protect:
     # tracked` the rule holds only when one of the files the command writes (Policy.
-    # write_targets) is a tracked test file, or when the targets cannot be read from the text.
+    # write_targets) is a tracked test file or any conftest.py (pytest loads it by itself), or
+    # when the targets cannot be read from the text.
     regex: |-
       (>>?|\btee\b(\s+-a)?|\bsed\s+(-\w+\s+)*-i\S*|\bperl\s+-\w*i\w*)[ \t]*[^;&|\n]*?
       (^|[\s'"])(?!/tmp/)((\.{0,2}/)?([\w.-]+/)*tests/|(\S*/)?conftest\.py)
