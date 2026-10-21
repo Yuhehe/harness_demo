@@ -33,7 +33,7 @@ from harness.llm.types import (
     user_message,
 )
 from harness.sandbox.base import Sandbox
-from harness.security.guard import Guard
+from harness.security.guard import Guard, tracked_files
 from harness.tools.base import OutputLimiter, ToolResult
 from harness.tools.registry import Registry
 from harness.tracing.tracer import Tracer
@@ -94,6 +94,9 @@ async def run_task(
             else None,
         )
     guard = guard or Guard.from_config(cfg.guard, sandbox.workdir)
+    if guard.needs_tracked and guard.tracked is None:
+        # the repository's own files, before the agent touches anything (security/guard.py)
+        guard.tracked = await tracked_files(sandbox)
     deadline = state.started_at + cfg.limits.max_wall_seconds
 
     tracer.emit(
@@ -111,6 +114,9 @@ async def run_task(
         guard_enabled=cfg.guard.enabled,
         summary_model=context_mgr.summary_model,
         policy_hash=getattr(guard, "policy_hash", None),
+        guard_tracked_files=(
+            len(guard.tracked) if getattr(guard, "tracked", None) is not None else None
+        ),
         task=task.instance_id,
         **(meta or {}),
     )

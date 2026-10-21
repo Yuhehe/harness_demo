@@ -95,3 +95,26 @@ from mini-swe-agent: docs/notes.md §28). Every new key defaults to the old beha
   set to mini's side, the guard off and the cut at 10000 characters. Remaining differences
   that cannot be aligned: the `submit` tool and submission section, `bash -lc` vs `bash -c`,
   and timeouts (exit code 124 and the output here; mini renders its `exception_info` instead).
+
+## v0.4-exp (2026-10-21)
+
+Fix of the permission guard's false blocks (plan.md, "权限层误拦的修复"; docs/notes.md §30).
+**M0 is not rerun** (the user's decision): the reported false-block rate (README, résumé) is
+policy v1's, measured on M0; v2 is checked offline against the calls the runs recorded.
+
+- `configs/policy.yaml` version 2 (policy hash changes): the two test-file rules carry
+  `protect: tracked` and hold only when the call writes a test file the repository tracked
+  when the task started; a new scratch test under `tests/` is allowed. Write targets are read
+  with a quote-aware split of the command (redirections, `tee`, `sed -i`, `perl -i`, and new:
+  the destination of `cp` / `mv` / `install`); a target that cannot be read (a variable, a
+  glob, unparsable text) keeps the rule in force. Without a tracked list the rules behave as in
+  v1.
+- The agent loop takes the tracked list once per task (`git ls-files -z` in the sandbox, a
+  harness command) and records its size in `run_start` (`guard_tracked_files`).
+- Block messages end with "The call was not run."; the test-file rules name the protected file
+  and say that new files are allowed.
+- No config key changed, so config hashes are those of v0.3-exp; runs differ by
+  `policy_hash` in `run_start`.
+- Offline check (`eval/report/guard_replay.py`): a v1 guard rebuilt from `v0.1-frozen`
+  reproduces every recorded decision of the 11 experiment runs that had the guard on; a v2
+  guard on the same calls blocks only the one `env` call, which the policy means to block.

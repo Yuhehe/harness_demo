@@ -227,3 +227,30 @@ async def test_run_start_records_the_resolved_summary_model_and_the_deadline_rea
         TASK, cfg("hybrid"), big_sandbox(100), main, tracer, summarizer=summarizer
     )
     assert tracer.of("run_start")[0]["summary_model"] == MODEL
+
+
+async def test_the_guard_takes_the_tracked_files_once_and_allows_a_new_test_file():
+    config = AgentConfig(
+        llm=LLMConfig(model=MODEL, thinking="disabled"),
+        guard=GuardConfig(enabled=True),
+        limits=LimitsConfig(max_steps=5),
+    )
+    sb = FakeSandbox(tracked=["tests/test_ops.py", "src/calc.py"])
+    main = ScriptedLLM(
+        [
+            reply(
+                "bash", {"command": "cat > tests/test_repro.py <<'PY'\nx = 1\nPY"}, "c1"
+            ),
+            reply("bash", {"command": "sed -i 's/1/2/' tests/test_ops.py"}, "c2"),
+            reply("submit", {}, "c3"),
+        ]
+    )
+    tracer = MemoryTracer()
+    result = await run_task(TASK, config, sb, main, tracer)
+    assert result.submitted and sb.harness_calls == ["git ls-files -z"]
+    assert [c[0] for c in sb.exec_calls] == [
+        "cat > tests/test_repro.py <<'PY'\nx = 1\nPY"
+    ]
+    assert tracer.of("run_start")[0]["guard_tracked_files"] == 2
+    blocked = main.calls[2]["messages"][-1]["content"]
+    assert "deny.test_edit_bash" in blocked and "tests/test_ops.py" in blocked

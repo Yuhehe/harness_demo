@@ -371,12 +371,12 @@
 
 **原因**（逐条看过轨迹）：M0 / M0-r2 的 10 次拦截里 9 次是 `deny.test_edit_bash` 拦了"在 `tests/` 下**新建**临时测试文件"（Django 的 `from .models import`、Sphinx 的 testroot 都要求测试放在 `tests/` 里）。规则按命令文本匹配，分不清新建和覆盖已有测试。拦截提示说"existing tests must not be edited"，与实际动作不符，9 次里模型每次都先花一步查文件建没建成，再改写成 `/tmp` 下的独立脚本（多 2–7 步）。另 1 次是 `env | sort` 命中 `deny.env_dump`，符合策略本意，不在本次范围。
 
-- [ ] `policy.yaml` v2：两条测试规则加 `protect: tracked`——只保护任务开始时被 git 跟踪的测试文件，新建文件放行；写入目标取命令里所有的写入目标（`>`、`>>`、`tee`、`sed -i`、`perl -i`，新增 `cp` / `mv` / `install` 的目的路径）；目标无法确定（变量、通配符）时照旧拦；没有快照时退回 v1 行为
-- [ ] harness 在任务开始时于沙箱里取一次 `git ls-files`（harness 自己的命令），记入 `run_start`
-- [ ] 拦截提示写明"命令没有执行"，测试规则写明被保护的文件和可行的做法
-- [ ] 单元测试（放行新建、拦截覆盖已跟踪测试的各种写法、原有防误拦用例）；变异检查
-- [ ] 离线反事实重放 `eval/report/guard_replay.py`：所有开权限层的已有运行里的每次调用用新规则重判（每题的跟踪文件从题目镜像取，零 LLM 花费）；报告误拦有几次变放行、有没有原来放行的变成拦截。限定：逐次调用的反事实，不代表运行会怎么走
-- [ ] tag `v0.4-exp`、CHANGELOG、待同步清单（CLAUDE.md §5.6、§4）、notes、README 局限性；README 和简历的 0.25%（v1 策略、M0 实测）不变
+- [x] （2026-10-21） `policy.yaml` v2：两条测试规则加 `protect: tracked`——只保护任务开始时被 git 跟踪的测试文件，新建文件放行；写入目标取命令里所有的写入目标（`>`、`>>`、`tee`、`sed -i`、`perl -i`，新增 `cp` / `mv` / `install` 的目的路径）；目标无法确定（变量、通配符）时照旧拦；没有快照时退回 v1 行为
+- [x] （2026-10-21） harness 在任务开始时于沙箱里取一次 `git ls-files`（harness 自己的命令），记入 `run_start`
+- [x] （2026-10-21） 拦截提示写明"命令没有执行"，测试规则写明被保护的文件和可行的做法
+- [x] （2026-10-21） 单元测试（放行新建、拦截覆盖已跟踪测试的各种写法、原有防误拦用例）；变异检查
+- [x] （2026-10-21） 离线反事实重放 `eval/report/guard_replay.py`：所有开权限层的已有运行里的每次调用用新规则重判（每题的跟踪文件从题目镜像取，零 LLM 花费）；报告误拦有几次变放行、有没有原来放行的变成拦截。限定：逐次调用的反事实，不代表运行会怎么走
+- [x] （2026-10-21） tag `v0.4-exp`、CHANGELOG、待同步清单（CLAUDE.md §5.6、§4）、notes、README 局限性；README 和简历的 0.25%（v1 策略、M0 实测）不变
 
 **花费**：$0
 
@@ -526,6 +526,7 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 | 2026-10-18 | 新配置 `configs/ablations/prompt_lite.yaml`、`prompt_mini_bash.yaml`；新子集 `configs/subsets/pilot_8.txt`（阶段 1） | §4 目录树 |[x] 2026-10-19 |
 | 2026-10-20 | 新文件 `LICENSE`（MIT）、`docs/resume_bullets.md`、`docs/img/` | §4 目录树 | [x] 2026-10-20 |
 | 待办 | CLI 交互确认（`ask`）实现后 | §5.6 删掉"尚未实现" | [ ] |
+| 2026-10-21 | 权限层 policy v2：两条测试规则只保护任务开始时被 git 跟踪的测试文件（`protect: tracked`）；loop 在开始时取 `git ls-files`，`run_start` 新字段 `guard_tracked_files`；新文件 `eval/report/guard_replay.py` | §5.6（"修改 `tests/` 里的断言"一句的语义、`policy.yaml` 冻结一条：v2 未重跑 M0）、§5.7 `run_start`、§4 目录树 | [ ] |
 | 2026-10-21 | 新文件 `eval/report/gap_breakdown.py`（合并重复运行的配对比较、多出步数的分类与阶段；输出到 `results/runs/_analysis/`） | §4 目录树的 `eval/report/`；§7 是否加命令待定（探索性分析，倾向不加） | [ ] |
 | 2026-10-20 | 新配置键 `bash_tool`、`tool_output.format`、`tool_output.step_note`、`llm.parallel_tool_calls`（诊断用，默认逐字节不变）；新配置 `configs/ablations/mech_aligned.yaml` | §5.3 表（是否列入待定：只用于拆解实验，不进主实验矩阵，倾向于只在表下加一句指针） | [ ] |
 | 2026-10-20 | 回放补写 `llm_call` span（已实现：`ReplayClient` 带 tracer 时按录制的 usage 写，`replay: true`） | §5.8 删掉"待做" | [x] 2026-10-20 |
@@ -938,3 +939,5 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - **你的决定（2026-10-21）**：目标是通用 Agent 岗位；注入安全评测不做（可选项保留，不排期），先做 push / CI 和 README。简历第 2 条的工具一句改弱（单次比较，合并后没有重现）。
 - **README（2026-10-21，只改文字、不含数字）**：What we learned 第 1、3 条按拆解结果改写，局限性改为"注入评测没有做"，路线图第 1 项勾掉；`make_tables.py` 重新生成了 setup 块（`src/harness` 行数 4363 → 4468，来自 v0.3-exp 的开关），简历第 1 条同步为 ~4.5k。
 - **CI 准备**：干净 clone 里按 CI 的步骤（`uv sync --frozen`、ruff、pytest）全部通过（716 通过、1 跳过）；git 历史扫描没有密钥（只有 `.env.example` 的占位符），`.env` 从未提交，没有大于 1 MB 的文件。本机 WSL 里没有 GitHub 凭据，也没有 `gh`，所以 push 和查看 Actions 由你来做。仓库目前是私有的（公开 API 返回 Not Found）。
+- **你的决定（2026-10-21）**：先不管 CI；查清误拦原因并修复，选方案 A（不重跑 M0）。
+- **误拦修复完成**（`v0.4-exp`，花费 $0）：原因是 `deny.test_edit_bash` 分不清在 `tests/` 下新建临时测试和改已有测试；policy v2 只保护任务开始时被 git 跟踪的测试文件。离线重放：v1 重建后与 11 个实验运行的记录逐次一致；v2 下原来的 21 次拦截只剩 1 次（`env`，符合策略本意），没有原来放行、现在被拦的调用。重放中发现并修了第一稿的一个切分 bug（`grep 'A\|B'`）。数字见 `docs/dev_log.md`。

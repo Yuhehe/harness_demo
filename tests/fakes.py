@@ -152,16 +152,26 @@ class ScriptedLLM:
 
 
 class FakeSandbox:
-    """In-memory sandbox. `exec` answers from `handler(cmd)` (default: exit 0, no output)."""
+    """In-memory sandbox. `exec` answers from `handler(cmd)` (default: exit 0, no output).
+
+    The harness's own `git ls-files -z` (the guard's list of tracked files) is answered from
+    `tracked` and logged in `harness_calls`, not in `exec_calls`; without `tracked` the fake
+    is not a git repository, so the guard keeps its policy v1 behaviour."""
 
     def __init__(
-        self, files: dict[str, str] | None = None, handler=None, diff: str = ""
+        self,
+        files: dict[str, str] | None = None,
+        handler=None,
+        diff: str = "",
+        tracked: list[str] | None = None,
     ) -> None:
         self.workdir = "/testbed"
         self.files = dict(files or {})
         self.handler = handler
         self.diff = diff
+        self.tracked = tracked
         self.exec_calls: list[tuple[str, int]] = []
+        self.harness_calls: list[str] = []
         self.dirs: set[str] = set()
 
     def _abs(self, path: str) -> str:
@@ -170,6 +180,11 @@ class FakeSandbox:
     async def exec(self, cmd: str, timeout: int = 120):
         from harness.sandbox.base import ExecResult
 
+        if cmd == "git ls-files -z":
+            self.harness_calls.append(cmd)
+            if self.tracked is None:
+                return ExecResult(128, "fatal: not a git repository")
+            return ExecResult(0, "".join(f"{p}\0" for p in self.tracked))
         self.exec_calls.append((cmd, timeout))
         if self.handler:
             out = self.handler(cmd)

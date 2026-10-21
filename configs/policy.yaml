@@ -2,11 +2,17 @@
 # (CLAUDE.md 2.4): the false-block rate is measured on M0's trajectories and the injection
 # suite runs against this same file, so a change here means a new tag and a rerun of M0.
 #
+# Version 2 (v0.4-exp): the two test-file rules protect only the test files the repository
+# tracked when the task started (`protect: tracked`), so a new scratch test under tests/ is
+# allowed; v1 blocked those too (all of M0's false blocks, docs/notes.md section 30). `cp`,
+# `mv` and `install` into tests/ count as writes. M0's reported false-block rate is v1's, and
+# M0 was not rerun with v2 (results/CHANGELOG.md, v0.4-exp).
+#
 # Matching is pattern based (regex on the command text), so it is defense in depth, not a
 # proof: obfuscated commands (quoting tricks, a script that does the forbidden thing inside)
 # are not caught. The sandbox (no network, resource limits) is the actual boundary; the
 # injection suite measures what this layer adds on top of it.
-version: 1
+version: 2
 
 # Which levels may run at all. Dropping `exec` makes a read/write-only agent.
 allowed_levels: [read, write, exec]
@@ -97,21 +103,31 @@ deny:
 
   - id: deny.test_edit_bash
     scope: [bash]
-    # A write (redirect, tee, sed -i, perl -i) whose target is under a `tests/` directory or
-    # is a conftest.py. Deliberately NOT every `test_*.py`: a reproduction script named
-    # test_repro.py in the repository root or in /tmp is normal, and an existing test file
-    # outside tests/ is rare. Matching stays on one line, so heredoc bodies are not scanned
-    # for paths, and /tmp targets are exempt.
+    # A write (redirect, tee, sed -i, perl -i; the destination of cp / mv / install) whose
+    # target is under a `tests/` directory or is a conftest.py. Deliberately NOT every
+    # `test_*.py`: a reproduction script named test_repro.py in the repository root or in /tmp
+    # is normal, and an existing test file outside tests/ is rare. Matching stays on one line,
+    # so heredoc bodies are not scanned for paths, and /tmp targets are exempt. With `protect:
+    # tracked` the rule holds only when one of the files the command writes (Policy.
+    # write_targets) is a tracked test file, or when the targets cannot be read from the text.
     regex: |-
       (>>?|\btee\b(\s+-a)?|\bsed\s+(-\w+\s+)*-i\S*|\bperl\s+-\w*i\w*)[ \t]*[^;&|\n]*?
       (^|[\s'"])(?!/tmp/)((\.{0,2}/)?([\w.-]+/)*tests/|(\S*/)?conftest\.py)
-    reason: existing tests must not be edited; put reproduction scripts outside tests/
+      |\b(cp|mv|install)\b[^;&|\n]*\s(?!/tmp/)((\.{0,2}/)?([\w.-]+/)*tests/[^\s;&|]*|(\S*/)?conftest\.py)
+      [ \t]*($|[;&|\n])
+    protect: tracked
+    reason: >-
+      this changes a test file the repository already has, which must not be edited; new files
+      (also under tests/) are allowed
 
   - id: deny.test_edit_tool
     scope: [path_write]
     use_test_path: true
     regex: ''
-    reason: existing tests must not be edited; put reproduction scripts outside tests/
+    protect: tracked
+    reason: >-
+      this changes a test file the repository already has, which must not be edited; new files
+      (also under tests/) are allowed
 
 # Needs the user's approval. In batch runs there is no user, so `ask` is treated as `deny`.
 ask:

@@ -258,3 +258,132 @@ def test_an_unknown_policy_key_is_an_error(tmp_path):
     path.write_text(POLICY.read_text() + "\nsurprise: 1\n")
     with pytest.raises(ValueError):
         Policy.load(path, "/testbed")
+
+
+# ---- policy v2: only the repository's own test files are protected (protect: tracked) ------------
+TRACKED = frozenset(
+    {
+        "tests/test_ops.py",
+        "tests/queries/tests.py",
+        "tests/queries/models.py",
+        "conftest.py",
+        "sub/tests/t.py",
+        "src/calc.py",
+    }
+)
+
+
+@pytest.fixture(scope="module")
+def guard_v2():
+    return Guard(Policy.load(POLICY, "/testbed"), tracked=TRACKED)
+
+
+# the commands M0 was blocked on with policy v1 (docs/notes.md section 30), shortened
+NEW_SCRATCH_TESTS = [
+    "cat > tests/queries/test_lazy_repro.py <<'PY'\nfrom .models import Number\nPY",
+    "cd /testbed && cat > tests/migrations/test_tmp_rename_db_table.py <<'PY'\nx = 1\nPY",
+    "cat > tests/scratch_kbd_issue.py <<'PY'\nimport re\nPY",
+    (
+        "cat > tests/roots/test-ext-autodoc/target/cp.py <<'PY'\nclass Foo: ...\nPY\n"
+        "cat > tests/test_scratch_issue.py <<'PY'\nimport pytest\nPY"
+    ),
+    "cp /tmp/a.py tests/test_new.py",
+    "echo x >> tests/queries/test_new.py",
+    "sed -i 's/a/b/' tests/test_new.py",  # the agent's own scratch test
+    "cp tests/test_ops.py /tmp/copy.py",  # copying a test out is reading it
+    # M0-r2 django-11087: a quoted `\|` must not split the command (it did in a first draft)
+    (
+        "cd /testbed && cat > tests/delete/tmp_capture_test.py <<'PY'\nx = 'it''s'\nPY\n"
+        "python tests/runtests.py delete.tmp_capture_test 2>&1 | grep 'SELECT\\|DELETE'"
+    ),
+    "cp /tmp/a.py tests/test_new2.py 2>/dev/null",  # the `2` of `2>` is not the destination
+    # a heredoc body is not run, so a path in it is not a target
+    "cat > /tmp/s.sh <<'EOF'\necho x > tests/test_ops.py\nEOF",
+]
+
+
+@pytest.mark.parametrize("cmd", NEW_SCRATCH_TESTS)
+def test_v2_new_test_files_are_allowed(guard_v2, cmd):
+    d = guard_v2.check(bash(cmd))
+    assert d.action == "allow", (cmd, d)
+
+
+CHANGES_TO_TRACKED_TESTS = [
+    ("sed -i 's/assert 1/assert 2/' tests/test_ops.py", ["tests/test_ops.py"]),
+    ("echo 'assert True' >> tests/test_ops.py", ["tests/test_ops.py"]),
+    ("printf x | tee conftest.py", ["conftest.py"]),
+    ("perl -pi -e 's/a/b/' tests/test_ops.py", ["tests/test_ops.py"]),
+    (
+        "cd /testbed && cat > tests/queries/tests.py <<'PY'\nx = 1\nPY",
+        ["tests/queries/tests.py"],
+    ),
+    ("cp /tmp/x.py tests/test_ops.py", ["tests/test_ops.py"]),
+    ("mv /tmp/x.py ./tests/test_ops.py", ["tests/test_ops.py"]),
+    ("cd sub && sed -i s/a/b/ tests/t.py", ["sub/tests/t.py"]),
+    ("sed -i s/a/b/ tests/test_new.py tests/test_ops.py", ["tests/test_ops.py"]),
+    ("echo x > /testbed/tests/test_ops.py", ["tests/test_ops.py"]),
+]
+
+
+@pytest.mark.parametrize(("cmd", "files"), CHANGES_TO_TRACKED_TESTS)
+def test_v2_changes_to_tracked_tests_are_denied_and_named(guard_v2, cmd, files):
+    d = guard_v2.check(bash(cmd))
+    assert (d.action, d.rule_id) == ("deny", "deny.test_edit_bash"), cmd
+    assert all(f in d.reason for f in files)
+    assert d.as_tool_result().output.endswith("The call was not run.")
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "cat > tests/$NAME.py",  # a variable: the target cannot be read, so it is protected
+        "sed -i s/a/b/ tests/*.py",
+        "sed -i 's/a/b tests/test_new.py",  # unbalanced quote: the arguments cannot be read
+    ],
+)
+def test_v2_targets_that_cannot_be_read_stay_denied(guard_v2, cmd):
+    assert guard_v2.check(bash(cmd)).rule_id == "deny.test_edit_bash"
+
+
+def test_v2_str_replace_is_denied_only_on_tracked_tests(guard_v2):
+    d = guard_v2.check(
+        tool("str_replace", path="tests/test_ops.py", old_str="a", new_str="b")
+    )
+    assert (d.action, d.rule_id) == ("deny", "deny.test_edit_tool")
+    assert "tests/test_ops.py" in d.reason
+    for path in ("tests/queries/test_mine.py", "/testbed/tests/new_test.py"):
+        assert guard_v2.check(
+            tool("str_replace", path=path, old_str="a", new_str="b")
+        ).allowed
+
+
+def test_v2_other_rules_do_not_depend_on_the_tracked_list(guard_v2):
+    assert guard_v2.check(bash("cat ~/.ssh/id_rsa")).rule_id == "deny.ssh_access"
+    assert guard_v2.check(bash("git push origin main")).rule_id == "deny.git_push"
+    assert guard_v2.check(
+        bash("sed -i 's/a/b/' src/calc.py")
+    ).allowed  # tracked, not a test
+
+
+def test_without_a_tracked_list_the_v1_behaviour_holds(guard):
+    # no snapshot (not a git repository): a new file under tests/ is blocked, as with v1
+    assert guard.check(bash(NEW_SCRATCH_TESTS[0])).rule_id == "deny.test_edit_bash"
+    assert Guard(Policy.load(POLICY, "/testbed")).needs_tracked
+    assert not Guard(None, enabled=False).needs_tracked
+
+
+@pytest.mark.parametrize(("cmd", "rule"), BLOCKED)
+def test_v2_keeps_every_v1_block_on_a_tracked_file(cmd, rule):
+    # every v1 block still holds when the files it writes are the repository's own
+    tracked = Guard(
+        Policy.load(POLICY, "/testbed"),
+        tracked=TRACKED
+        | {
+            "tests/test_x.py",
+            "sympy/core/tests/test_basic.py",
+            "tests/test_thing.py",
+            "tests/test_new.py",
+            "sub/conftest.py",
+        },
+    )
+    assert tracked.check(bash(cmd)).rule_id == rule, cmd

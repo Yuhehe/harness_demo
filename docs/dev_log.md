@@ -640,3 +640,21 @@ README 里的数字要等 `make_tables.py` 的安全表从轨迹和复核表生�
 4. **M0 的差距里有一块是规划工具的固定开销**：每题约 1.8 步花在 `todo` 上（占 M0 / B0 差距的约 19%）；但 A5（不规划）对 M0-r2 测不出差别（2026-10-20 一节），这些步要么被别处替代，要么在噪声里。
 5. **成本差距比步数差距更稳**：D / B0 的成本区间不含 1（1.19），步数的不含 1 要看算法。成本差距来自步数多和每一步略贵两部分，没有拆开。
 6. **"工具反而省钱"在合并后没有重现**：A2 / M0 合并后步数 1.03 [0.96, 1.17]、成本 1.10 [0.94, 1.29]，区间都含 1（单次的 A2 / M0-r2 是成本 1.29 [1.05, 1.41]，即 README 消融表和简历第 2 条用的那一行）。"M0 多步不是因为工具"仍成立（M0 / B0 与 A2 / B0 相当），"工具省钱"在合并后测不出。
+
+## 2026-10-21：权限层误拦的修复——policy v2 的离线重放
+
+**做法**：`eval/report/guard_replay.py`。对 11 个开着权限层、用冻结的 v1 策略（hash `3100efbe34e8`）跑的实验运行（M0、M0-r2、A2、A2-v021、A5、A6、A6xA1、D-v021、D-v03、M0-v02、lite-v02），把每一次被权限层检查过的调用分别交给从 `v0.1-frozen` 重建的 v1 guard 和带有该题跟踪文件列表的 v2 guard（`configs/policy.yaml` v2）。跟踪文件从每题的 SWE-bench 镜像用 `git ls-files` 取。
+
+**出处**：`results/runs/_analysis/guard_replay.json`（`runs.<run>.calls`、`recorded_not_allowed`、`v1_not_allowed`、`v1_matches_recorded`、`v2_not_allowed`、`now_allowed`、`now_blocked`、`still_blocked`）。
+
+**校验**：v1 重建后的判定与记录的 `guard_decision` 逐次一致（11 个运行全部 `v1_matches_recorded: true`）；M0 的调用数 2793 与 `results/summary/security.json` 的 `decisions` 一致。
+
+| | 调用数 | v1 拦截（记录） | v2 拦截（重放） | 由拦变放 | 由放变拦 |
+|---|---|---|---|---|---|
+| M0（verified_50） | 2793 | 7 | 0 | 7 | 0 |
+| 其余 10 个运行合计 | 10 651 | 14 | 1 | 13 | 0 |
+| 合计 | 13 444 | 21 | 1 | 20 | 0 |
+
+20 次由拦变放全部是 `deny.test_edit_bash` 拦下的"在 `tests/` 下新建文件"（Django 的 `tests/<app>/test_*.py`、Sphinx 的 `tests/test_*.py` 和 `tests/roots/.../target/*.py`）。剩下的 1 次是 M0-r2 scikit-learn-14983 的 `env | sort | head -100`（`deny.env_dump`，符合策略本意）。
+
+**限定**：逐次调用的反事实，不是重跑；不给出 v2 下的误拦率。README 和简历里的 0.25%（v1、M0 实测）不变。
