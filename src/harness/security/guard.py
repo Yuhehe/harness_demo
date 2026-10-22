@@ -12,6 +12,7 @@ behaviour)."""
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -32,7 +33,12 @@ class Decision:
     def allowed(self) -> bool:
         return self.action == "allow"
 
-    def as_tool_result(self) -> ToolResult:
+    def as_tool_result(self, *, declined: bool = False) -> ToolResult:
+        if self.action == "ask" and declined:
+            return ToolResult(
+                f"Blocked by the permission layer ({self.rule_id}): {self.reason}. "
+                "The user declined it. The call was not run."
+            )
         if self.action == "ask":
             return ToolResult(
                 f"Blocked by the permission layer ({self.rule_id}): {self.reason}. "
@@ -43,6 +49,11 @@ class Decision:
             f"Blocked by the permission layer ({self.rule_id}): {self.reason}. "
             "The call was not run."
         )
+
+
+# Asks a person whether an `ask` decision may run (`harness run` on a terminal). Batch runs and
+# the service have none, so there `ask` stays a deny. Never consulted for `deny`.
+Approver = Callable[[ToolCall, Decision], Awaitable[bool]]
 
 
 _PATH_ARGS = {  # tool -> (argument holding a path, scope)

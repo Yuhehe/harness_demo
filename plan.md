@@ -396,7 +396,7 @@
   - 依赖：`opentelemetry-sdk`、`opentelemetry-exporter-otlp-proto-http`（`uv add`，先确认 3.12 可用）
   - 验证：单元测试用内存导出器；本地 Langfuse 收到一次 toy 回放运行的 trace，截图放 README
   - **待你决定**：Langfuse 自托管（docker，不用注册）还是 Langfuse Cloud（免费额度，key 放 `.env`）
-- [ ] **5. 人工确认（`ask`）**：CLI 交互模式下 `ask` 规则提示用户 y/N；批量运行和服务仍按拒绝处理；`guard_decision` span 记录是谁批准的（用户 / 批量默认拒绝）；测试用假输入。做完删掉 CLAUDE.md §5.6 的"尚未实现"
+- [x] （2026-10-22）**5. 人工确认（`ask`）**：CLI 交互模式下 `ask` 规则提示用户 y/N；批量运行和服务仍按拒绝处理；`guard_decision` span 记录是谁批准的（用户 / 批量默认拒绝）；测试用假输入。做完删掉 CLAUDE.md §5.6 的"尚未实现"
 - [ ] **3. MCP 客户端**
   - `tools/mcp.py`：从配置读 MCP server 列表（stdio），开始时取一次工具列表，按名字排序、名字加前缀 `mcp__<server>__<tool>`，之后不变（§5.2 前缀稳定）；调用结果走 `ToolResult`，协议错误和参数错误计入 `format_errors`
   - 权限：MCP 工具默认走 `ask`（批量运行即拒绝），在配置里逐个放行；不改 `policy.yaml`（它与 M0 一起冻结）
@@ -558,6 +558,7 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 | 2026-10-18 | 新配置 `configs/ablations/prompt_lite.yaml`、`prompt_mini_bash.yaml`；新子集 `configs/subsets/pilot_8.txt`（阶段 1） | §4 目录树 |[x] 2026-10-19 |
 | 2026-10-20 | 新文件 `LICENSE`（MIT）、`docs/resume_bullets.md`、`docs/img/` | §4 目录树 | [x] 2026-10-20 |
 | 待办 | CLI 交互确认（`ask`）实现后 | §5.6 删掉"尚未实现" | [ ] |
+| 2026-10-22 | 人工确认已实现：`run_task(approve=...)`，`harness run` 在终端上询问，批量运行和服务仍按拒绝处理；`guard_decision` 新字段 `approved` | §5.6 删掉"尚未实现"，写明终端询问、批量和服务按拒绝；§5.1 伪代码的注释（"批量模式下 ask 自动当作 deny"仍成立，可补"交互模式询问用户"）；§5.7 不加（字段细节在 `tracer.py` 的目录里） | [ ] |
 | 2026-10-22 | 新文件 `src/harness/tracing/otel.py`（已实现）；新依赖 `opentelemetry-sdk`、`opentelemetry-exporter-otlp-proto-http`；开关 `HARNESS_OTEL` 与标准 `OTEL_*` 变量 | §4 目录树去掉 otel.py 的"计划中"；§3.2 追踪一行（OTel 导出已实现、不再是"第 5 天之后的可选项"）；§7 是否加一行导出示例 | [ ] |
 | 2026-10-21 | 权限层 policy v2：两条测试规则只保护任务开始时被 git 跟踪的测试文件（`protect: tracked`）；loop 在开始时取 `git ls-files`，`run_start` 新字段 `guard_tracked_files`；新文件 `eval/report/guard_replay.py` | §5.6（"修改 `tests/` 里的断言"一句的语义、`policy.yaml` 冻结一条：v2 未重跑 M0）、§5.7 `run_start`、§4 目录树 | [x] 2026-10-21（你确认了 diff：§5.6 两句、§4 目录树；§5.7 不加——`guard_tracked_files` 是字段细节，按 §8 的标准写在 `agent/loop.py` 的发射处和 `security/guard.py` 的模块说明里） |
 | 2026-10-21 | 新文件 `eval/report/gap_breakdown.py`（合并重复运行的配对比较、多出步数的分类与阶段；输出到 `results/runs/_analysis/`） | §4 目录树的 `eval/report/`；§7 是否加命令待定（探索性分析，倾向不加） | [x] 2026-10-21（§4 已加；§7 不加命令：两个脚本都是一次性的探索性分析，用法写在各自的模块说明里） |
@@ -989,3 +990,4 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - **第 1 项完成**：CLAUDE.md §4 目录树已改（`otel.py` 标"计划中"、`codex_exec.py` 移出并注明未做、`eval/security/` 标"未做"、补 `litellm_registry.json`）。
 - **第 2 项完成（OTel 导出）**：`tracing/otel.py` + 11 个测试 + 7 处变异检查；全量 795 通过。本地 Jaeger 收到 toy 回放运行的完整 trace；这一步发现并修了 `run_one` 读 `tracer.path` 的崩溃（单元测试没覆盖到）。花费 $0。剩下的一步要你做：在 Langfuse Cloud 建项目，把 key 放进 `.env`，我跑一次 toy 回放并截图放 README。
 - **第 2 项的审查与修正（2026-10-22）**：审查发现三处问题，都已修并加测试和变异检查：(1) 每题结束时同步 flush 最多 10 秒，并行跑多题或在服务里会卡住事件循环——去掉按题 flush，交给后台的批量发送；(2) 测试没有和开发者的 OTel 设置隔离，`.env` 放了 Langfuse key 后测试运行会被发出去——`conftest` 固定 `HARNESS_OTEL=0` 并清掉 `OTEL_EXPORTER_OTLP_*`；(3) 用量重复计算推理 token——按 Langfuse 文档改成不重叠的分桶并显式给 `total`。评估：全量 797 通过（在设了 `HARNESS_OTEL=1` 和导出地址的环境里跑，Jaeger 收到 0 条 trace）；Jaeger 线上复查通过；服务镜像重建后 OTel 模块可导入。附带发现（不属于本项，没改）：镜像启动时 `uv run` 会重新构建一次项目。
+- **第 5 项完成（人工确认）**：`approve` 回调（`security/guard.py` 的 `Approver`）经 `run_one` 传到循环；只对 `ask` 询问，`deny` 从不询问；回调出错按"不同意"处理；拒绝时告诉模型"用户拒绝了"；`harness run` 只在终端上询问。13 个测试（含 `harness run` → `run_one` → 循环的接线）、7 处变异检查全部变红；全量 810 通过。没有做真实的交互式端到端运行（需要模型恰好发出一个 `ask` 命令，要花 API 费用），终端提示由单元测试覆盖。花费 $0。

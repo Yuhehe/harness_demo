@@ -141,6 +141,7 @@ async def run_one(
     record: Path | None = None,
     replay: Path | None = None,
     meta: dict[str, Any] | None = None,
+    approve: Any = None,
 ) -> RunOutcome:
     """Run one task end to end: trajectory, sandbox, LLM and summarizer clients, patch file.
 
@@ -203,6 +204,7 @@ async def run_one(
                 llm,
                 tracer,
                 summarizer=summarizer,
+                approve=approve,
                 meta=meta if meta is not None else {"run_id": run_id, **_git_meta()},
             )
     finally:
@@ -237,6 +239,25 @@ def print_outcome(task_id: str, outcome: RunOutcome) -> None:
         )
     print(f"  patch: {len(result.patch)} chars -> {outcome.patch_path}")
     print(f"  trajectory: {outcome.trajectory_path}")
+
+
+async def ask_user(call: Any, decision: Any) -> bool:
+    """Ask on the terminal whether an `ask` decision may run (security/guard.py, Approver).
+    The wait counts towards the task's wall time."""
+    try:
+        args = json.loads(call.arguments)
+    except (json.JSONDecodeError, TypeError):
+        args = call.arguments
+    shown = args.get("command", args) if isinstance(args, dict) else args
+    print(f"\n[permission] {decision.rule_id}: {decision.reason}")
+    print(f"[permission] {call.name}: {shown}")
+    answer = await asyncio.to_thread(input, "[permission] allow this call? [y/N] ")
+    return answer.strip().lower() in ("y", "yes")
+
+
+def approver_for_terminal() -> Any:
+    """`ask_user` when stdin is an interactive terminal, else None (`ask` stays a deny)."""
+    return ask_user if sys.stdin.isatty() else None
 
 
 async def _run(args: argparse.Namespace) -> int:
@@ -280,6 +301,7 @@ async def _run(args: argparse.Namespace) -> int:
         repo=args.repo,
         record=args.record,
         replay=args.replay,
+        approve=approver_for_terminal(),
     )
     print_outcome(task.instance_id, outcome)
     return 0 if outcome.result.submitted else 1

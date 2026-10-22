@@ -16,7 +16,8 @@ llm_call        one per attempt: attempt, outcome (ok | retry | fail), purpose (
                 retry / fail: retry_reason, status_code, usage (None), wasted_prompt_tokens_est,
                 error
 tool_call       step, tool, args_hash, exit_code, truncated, format_error, duration_s
-guard_decision  tool, action, rule_id, level
+guard_decision  tool, action, rule_id, level; approved (true / false) when a person was asked
+                about an `ask` decision (`harness run` on a terminal)
 compaction      step, strategy, actions, tokens_before, tokens_after, budget_tokens, plan_level,
                 target_unreachable, head_tokens, tail_tokens, room_tokens, ratio, ratio_unusual,
                 cost_usd, summary_tokens_in, summary_tokens_out, duration_s; truncate adds

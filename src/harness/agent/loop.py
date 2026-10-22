@@ -33,7 +33,7 @@ from harness.llm.types import (
     user_message,
 )
 from harness.sandbox.base import Sandbox
-from harness.security.guard import Guard, tracked_files
+from harness.security.guard import Approver, Guard, tracked_files
 from harness.tools.base import OutputLimiter, ToolResult
 from harness.tools.registry import Registry
 from harness.tracing.tracer import Tracer
@@ -69,6 +69,7 @@ async def run_task(
     context_mgr: ContextManager | None = None,
     summarizer: LLMClient | None = None,
     guard: Guard | None = None,
+    approve: Approver | None = None,
     clock: Callable[[], float] = time.monotonic,
     meta: dict[str, Any] | None = None,
 ) -> RunResult:
@@ -158,7 +159,9 @@ async def run_task(
                 state.finish(_llm_error_reason(e), f"{e.kind}: {e}"[:300])
                 break
             state.record_response(resp)
-            await _handle_response(resp, state, registry, guard, sandbox, tracer, note)
+            await _handle_response(
+                resp, state, registry, guard, sandbox, tracer, note, approve
+            )
     finally:
         patch, patch_error = await _final_patch(sandbox)
         if patch_error:
@@ -218,6 +221,7 @@ async def _handle_response(
     sandbox: Sandbox,
     tracer: Tracer,
     note: Callable[[], str],
+    approve: Approver | None = None,
 ) -> None:
     cfg = state.cfg
 
@@ -268,17 +272,24 @@ async def _handle_response(
             result = ToolResult("Not executed: the task was already submitted.")
         else:
             decision = guard.check(call, state)
+            approved: bool | None = None
+            if decision.action == "ask" and approve is not None:
+                try:
+                    approved = bool(await approve(call, decision))
+                except Exception:  # noqa: BLE001 - no answer is a no
+                    approved = False
             tracer.emit(
                 "guard_decision",
                 tool=call.name,
                 action=decision.action,
                 rule_id=decision.rule_id,
                 level=decision.level,
+                **({} if approved is None else {"approved": approved}),
             )
-            if decision.allowed:
+            if decision.allowed or approved:
                 result = await registry.run(call.name, call.arguments, sandbox)
             else:
-                result = decision.as_tool_result()
+                result = decision.as_tool_result(declined=approved is False)
         bad_calls += result.format_error
         tracer.emit(
             "tool_call",
