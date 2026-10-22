@@ -73,13 +73,13 @@ harness-lab/
 │   ├── sandbox/{base.py, docker_sandbox.py}
 │   ├── context/{manager.py, tokens.py, restore.py, strategies/{types.py, none.py, truncate.py, summarize.py, hybrid.py}}
 │   ├── security/{policy.py, guard.py}
-│   ├── tracing/{tracer.py, otel.py}
+│   ├── tracing/{tracer.py, otel.py}     # otel.py：OTel → Langfuse 导出，计划中（plan.md"补齐 harness 能力"第 2 项），未实现
 │   ├── service/{api.py, worker.py, store.py}
 │   └── cli.py
 ├── eval/
 │   ├── swebench/{select_subset.py, pull_images.py, run_agent.py, score.py}
-│   ├── baselines/{mini_swe_agent.md, run_b0.py, codex_exec.py}
-│   ├── security/{cases/, build_cases.py, run_security.py}
+│   ├── baselines/{mini_swe_agent.md, run_b0.py, litellm_registry.json}   # litellm_registry.json：让 B0 的成本按固定标准价算（docs/notes.md §5）；codex_exec.py（Codex 对比）为可选项，未做
+│   ├── security/{cases/, build_cases.py, run_security.py}   # 注入评测，可选项，未做（2026-10-21 你的决定：通用 Agent 岗位不做）
 │   └── report/{aggregate.py, summary_probe.py, failure_taxonomy.py, make_tables.py, plots.py, gap_breakdown.py, guard_replay.py}
 ├── docs/{notes.md, dev_log.md, failure_analysis.md, resume_bullets.md, img/, learning/}  # notes.md：外部接口核实记录；dev_log.md：阶段性结论（§2.3 的例外）；failure_analysis.md：失败分析；resume_bullets.md：简历条目（数字注明 results/summary 的出处）；img/：plots.py 生成的图；learning/：学习笔记
 ├── results/            # runs/ 目录 gitignore；summary/ 提交

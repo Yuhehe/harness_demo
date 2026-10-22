@@ -389,7 +389,7 @@
 
 **顺序**：1 → 2 → 5 → 3 → 4。1 最小；2 独立、零花费；5 是 3 的前置（MCP 工具默认要人工确认）；4 要 key 和花钱，放最后，开跑前在新 tag 上冻结。
 
-- [ ] **1. CLAUDE.md 目录树与代码对齐**：§4 的 `tracing/otel.py`、`eval/baselines/codex_exec.py`、`eval/security/` 不存在；`eval/baselines/litellm_registry.json` 存在但没列。先给你看 diff，确认后改
+- [x] （2026-10-22，你确认了 diff）**1. CLAUDE.md 目录树与代码对齐**：§4 的 `tracing/otel.py`、`eval/baselines/codex_exec.py`、`eval/security/` 不存在；`eval/baselines/litellm_registry.json` 存在但没列。先给你看 diff，确认后改
 - [ ] **2. OpenTelemetry → Langfuse 导出**（原"可选任务"里的一项，提前）
   - `tracing/otel.py`：把已有的 span 映射成 OTel span（每题一个根 span，`llm_call` / `tool_call` / `compaction` 为子 span，属性用 OTel 的 GenAI 语义约定 `gen_ai.*`）；JSONL 仍是唯一的数据来源，导出失败不影响运行
   - 默认关；开关和地址走环境变量（`OTEL_EXPORTER_OTLP_ENDPOINT` 等），不进 `config_hash`（不影响运行结果）
@@ -984,3 +984,5 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - CI 第三次运行（`9c3afa8`）通过；6 个 tag 都已推上去（`--follow-tags` 只推附注 tag，四个 `-exp` 是轻量 tag，要用 `--tags`；以后实验 tag 改用 `git tag -a`）。
 - **差距评估**（从完整 harness 和 Agent 岗位要求看）：核心已齐（从零写的循环、上下文工程、沙箱和权限层、可信的评测方法、服务 / Docker / CI）；欠缺 MCP、多模型验证、OTel 导出、流式输出、人工确认；CLAUDE.md §4 目录树有 3 处与代码不符。
 - **你的决定**：做"插入：补齐 harness 能力"的 1–5；不做多 Agent、跨任务记忆、代码检索、测试时扩展、流式输出、并行执行工具。
+- **你的决定（2026-10-22）**：应用目录树 diff；按推荐做（Langfuse Cloud、官方 `mcp` SDK + 集成层自己写、MCP server 跑在沙箱里）；第二家模型暂不选、第 4 项先不做；其余各项依次做，每项完整测试和评估通过才做下一项。
+- **第 1 项完成**：CLAUDE.md §4 目录树已改（`otel.py` 标"计划中"、`codex_exec.py` 移出并注明未做、`eval/security/` 标"未做"、补 `litellm_registry.json`）。
