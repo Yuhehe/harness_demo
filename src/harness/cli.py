@@ -152,11 +152,18 @@ async def run_one(
     from harness.llm.client import LiteLLMClient
     from harness.llm.replay import RecordingClient, ReplayClient
     from harness.sandbox.docker_sandbox import DockerSandbox
+    from harness.tracing.otel import maybe_otel
     from harness.tracing.tracer import JsonlTracer
 
     trajectory = run_dir / "trajectories" / f"{task.instance_id}.jsonl"
     retire_stale_trajectory(trajectory)
-    tracer = JsonlTracer(trajectory, run_id=run_id, instance_id=task.instance_id)
+    tracer = (
+        maybe_otel(  # HARNESS_OTEL=1: also export to OpenTelemetry (tracing/otel.py)
+            JsonlTracer(trajectory, run_id=run_id, instance_id=task.instance_id),
+            run_id=run_id,
+            instance_id=task.instance_id,
+        )
+    )
     try:
         summarizer = None
         summary_cfg = (

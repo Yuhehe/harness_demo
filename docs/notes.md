@@ -1222,3 +1222,19 @@ plan §0 的最低标准，以及第 4 天的服务和 CI 验收。
 - 模型留在 `tests/` 下的临时文件会进最终补丁；只有与官方测试补丁新增的文件同名时才会让补丁打不上。
 - 改 pytest 的配置（`setup.cfg`、`pytest.ini`、`tox.ini`、`pyproject.toml` 里的选项）不在规则范围内（v1 也一样）。
 - 验证是**逐次调用的反事实**：v2 放行之后真实运行会走向别处，所以它说明"这些调用会被怎么判"，不说明"运行会怎么走"，也不给出 v2 下的误拦率。README 和简历里的误拦率仍是 v1 在 M0 上的实测值。
+
+## 31. OpenTelemetry 导出与 Langfuse 的接口核实（2026-10-22，`tracing/otel.py`）
+
+**Langfuse 的 OTel 接入**（核实自官方文档 https://langfuse.com/integrations/native/opentelemetry ，2026-10-22）
+- 地址：`https://cloud.langfuse.com/api/public/otel`（EU）、`https://us.cloud.langfuse.com/api/public/otel`（US），自托管 `http://<host>:3000/api/public/otel`（v3.22.0 起）；只收 OTLP/HTTP（protobuf 或 JSON），**不支持 gRPC**。
+- 鉴权：`Authorization: Basic base64(public_key:secret_key)`；另加 `x-langfuse-ingestion-version: 4`，否则直接走 OTel 的数据可能延迟到 10 分钟。
+- 属性映射（只列用到的）：观测类型 `langfuse.observation.type`（`agent`、`generation`、`tool`、`span` 等）；输入输出 `langfuse.observation.input` / `output`；模型 `gen_ai.request.model`、`gen_ai.response.model`；用量 `langfuse.observation.usage_details`（优先）或 `gen_ai.usage.*`；成本 `langfuse.observation.cost_details` 或 `gen_ai.usage.cost`；trace 名 `langfuse.trace.name`；会话 `langfuse.session.id`；trace 元数据 `langfuse.trace.metadata.*`；级别 `langfuse.observation.level`、`status_message`。没映射的属性进 `metadata.attributes`。
+
+**OTLP 导出器怎么读环境变量**（核实自已装的 `opentelemetry-exporter-otlp-proto-http` 1.45.1 源码，`_common/__init__.py` 的 `_resolve_endpoint` / `_resolve_headers`）：`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` 原样使用；否则取 `OTEL_EXPORTER_OTLP_ENDPOINT` 并追加 `/v1/traces`；头先取 `..._TRACES_HEADERS` 再取 `OTEL_EXPORTER_OTLP_HEADERS`。所以接 Langfuse 只用标准变量，代码里不写任何 Langfuse 专用逻辑。
+
+**设计**
+- `HARNESS_OTEL=1` 才开；不进配置和 `config_hash`（不影响 agent 的行为）。`OtelTracer` 先把每个 span 原样交给 JSONL tracer，再映射成 OTel；映射出错就停掉这一题的导出，运行照常（测试覆盖：开导出时 JSONL 的内容与不开时逐条相同，只差计时字段）。
+- 一题一个 trace：根 span `harness.task`（`agent`）；成功的 agent 调用是 `generation`，它的输出是紧随其后的回复消息（内容、工具调用、推理），输入是上一个回复之后新加入历史的内容（工具结果、提示）。所以 generation 和 tool span 要先挂起，等后面的 `message` 到了再结束；结束时间用调用本身的时间，不是消息到达的时间。
+- 长文本按 `HARNESS_OTEL_MAX_CHARS`（默认 8000）截断。导出的内容包括任务文本、代码和模型回复：发到第三方（如 Langfuse Cloud）前要确认可以外发（SWE-bench 是公开数据；轨迹里没有密钥）。
+
+**验证**：单元测试 11 项（内存导出器；运行映射、父子关系与时间包含、权限拒绝的标注、失败尝试与截断、JSONL 不受影响、导出出错不影响运行、未结束的运行、开关、属性透传）；7 处变异检查均变红。线上路径：本地 Jaeger（`jaegertracing/all-in-one:1.62.0`，OTLP/HTTP 4318）收到 toy 回放运行的完整 trace（13 个 span，树形正确）。这一步发现了单元测试没覆盖的问题：`run_one` 结束时读 `tracer.path`，包装后取不到，已改为透传并加回归测试。回放模式下 LLM 延迟为 0，Jaeger 里 generation 和紧随的 tool span 起点相差不到 1 毫秒，排序会互换，属显示问题。

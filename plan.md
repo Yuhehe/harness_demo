@@ -390,7 +390,7 @@
 **顺序**：1 → 2 → 5 → 3 → 4。1 最小；2 独立、零花费；5 是 3 的前置（MCP 工具默认要人工确认）；4 要 key 和花钱，放最后，开跑前在新 tag 上冻结。
 
 - [x] （2026-10-22，你确认了 diff）**1. CLAUDE.md 目录树与代码对齐**：§4 的 `tracing/otel.py`、`eval/baselines/codex_exec.py`、`eval/security/` 不存在；`eval/baselines/litellm_registry.json` 存在但没列。先给你看 diff，确认后改
-- [ ] **2. OpenTelemetry → Langfuse 导出**（原"可选任务"里的一项，提前）
+- [x] （2026-10-22，代码和本地 Jaeger 线上验证完成；**Langfuse Cloud 的截图待你提供 key**）**2. OpenTelemetry → Langfuse 导出**（原"可选任务"里的一项，提前）
   - `tracing/otel.py`：把已有的 span 映射成 OTel span（每题一个根 span，`llm_call` / `tool_call` / `compaction` 为子 span，属性用 OTel 的 GenAI 语义约定 `gen_ai.*`）；JSONL 仍是唯一的数据来源，导出失败不影响运行
   - 默认关；开关和地址走环境变量（`OTEL_EXPORTER_OTLP_ENDPOINT` 等），不进 `config_hash`（不影响运行结果）
   - 依赖：`opentelemetry-sdk`、`opentelemetry-exporter-otlp-proto-http`（`uv add`，先确认 3.12 可用）
@@ -558,6 +558,7 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 | 2026-10-18 | 新配置 `configs/ablations/prompt_lite.yaml`、`prompt_mini_bash.yaml`；新子集 `configs/subsets/pilot_8.txt`（阶段 1） | §4 目录树 |[x] 2026-10-19 |
 | 2026-10-20 | 新文件 `LICENSE`（MIT）、`docs/resume_bullets.md`、`docs/img/` | §4 目录树 | [x] 2026-10-20 |
 | 待办 | CLI 交互确认（`ask`）实现后 | §5.6 删掉"尚未实现" | [ ] |
+| 2026-10-22 | 新文件 `src/harness/tracing/otel.py`（已实现）；新依赖 `opentelemetry-sdk`、`opentelemetry-exporter-otlp-proto-http`；开关 `HARNESS_OTEL` 与标准 `OTEL_*` 变量 | §4 目录树去掉 otel.py 的"计划中"；§3.2 追踪一行（OTel 导出已实现、不再是"第 5 天之后的可选项"）；§7 是否加一行导出示例 | [ ] |
 | 2026-10-21 | 权限层 policy v2：两条测试规则只保护任务开始时被 git 跟踪的测试文件（`protect: tracked`）；loop 在开始时取 `git ls-files`，`run_start` 新字段 `guard_tracked_files`；新文件 `eval/report/guard_replay.py` | §5.6（"修改 `tests/` 里的断言"一句的语义、`policy.yaml` 冻结一条：v2 未重跑 M0）、§5.7 `run_start`、§4 目录树 | [x] 2026-10-21（你确认了 diff：§5.6 两句、§4 目录树；§5.7 不加——`guard_tracked_files` 是字段细节，按 §8 的标准写在 `agent/loop.py` 的发射处和 `security/guard.py` 的模块说明里） |
 | 2026-10-21 | 新文件 `eval/report/gap_breakdown.py`（合并重复运行的配对比较、多出步数的分类与阶段；输出到 `results/runs/_analysis/`） | §4 目录树的 `eval/report/`；§7 是否加命令待定（探索性分析，倾向不加） | [x] 2026-10-21（§4 已加；§7 不加命令：两个脚本都是一次性的探索性分析，用法写在各自的模块说明里） |
 | 2026-10-20 | 新配置键 `bash_tool`、`tool_output.format`、`tool_output.step_note`、`llm.parallel_tool_calls`（诊断用，默认逐字节不变）；新配置 `configs/ablations/mech_aligned.yaml` | §5.3 表（是否列入待定：只用于拆解实验，不进主实验矩阵，倾向于只在表下加一句指针） | [ ] |
@@ -986,3 +987,4 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - **你的决定**：做"插入：补齐 harness 能力"的 1–5；不做多 Agent、跨任务记忆、代码检索、测试时扩展、流式输出、并行执行工具。
 - **你的决定（2026-10-22）**：应用目录树 diff；按推荐做（Langfuse Cloud、官方 `mcp` SDK + 集成层自己写、MCP server 跑在沙箱里）；第二家模型暂不选、第 4 项先不做；其余各项依次做，每项完整测试和评估通过才做下一项。
 - **第 1 项完成**：CLAUDE.md §4 目录树已改（`otel.py` 标"计划中"、`codex_exec.py` 移出并注明未做、`eval/security/` 标"未做"、补 `litellm_registry.json`）。
+- **第 2 项完成（OTel 导出）**：`tracing/otel.py` + 11 个测试 + 7 处变异检查；全量 795 通过。本地 Jaeger 收到 toy 回放运行的完整 trace；这一步发现并修了 `run_one` 读 `tracer.path` 的崩溃（单元测试没覆盖到）。花费 $0。剩下的一步要你做：在 Langfuse Cloud 建项目，把 key 放进 `.env`，我跑一次 toy 回放并截图放 README。
