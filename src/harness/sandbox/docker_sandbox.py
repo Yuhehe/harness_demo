@@ -153,6 +153,29 @@ class DockerSandbox:
             code = 124
         return ExecResult(code, text)
 
+    async def open_process(self, argv: list[str]) -> DockerProcessPipe:
+        """`argv` in the container with stdin attached (an MCP server, tools/mcp.py): the
+        Docker SDK's exec socket, not a host-side `docker exec`."""
+        if self._container is None:
+            raise SandboxError("sandbox is not running")
+        api = self._client.api
+
+        def start() -> Any:
+            exec_id = api.exec_create(
+                self._container.id,
+                argv,
+                stdin=True,
+                stdout=True,
+                stderr=True,
+                tty=False,
+                workdir=self.workdir,
+                environment=self.env,
+            )["Id"]
+            sock = api.exec_start(exec_id, socket=True)
+            return getattr(sock, "_sock", sock)  # SocketIO on a Unix socket
+
+        return DockerProcessPipe(await asyncio.to_thread(start))
+
     # ---- files ---------------------------------------------------------------------------
     def _abs(self, path: str) -> str:
         return path if path.startswith("/") else posixpath.join(self.workdir, path)
@@ -246,3 +269,73 @@ class DockerSandbox:
         code, out = await self.exec(script, timeout=60)
         if code != 0:
             raise SandboxError(f"git init failed: {out[:300]}")
+
+
+class FrameDemuxer:
+    """Docker's multiplexed exec stream without a TTY: frames of an 8-byte header (stream id:
+    1 stdout, 2 stderr; 3 bytes of zeros; a big-endian 4-byte length) and the payload. A
+    socket read can end anywhere, inside a header or a payload, so partial frames wait here."""
+
+    def __init__(self) -> None:
+        self._buf = b""
+
+    def feed(self, data: bytes) -> list[tuple[int, bytes]]:
+        self._buf += data
+        frames = []
+        while len(self._buf) >= 8:
+            size = int.from_bytes(self._buf[4:8], "big")
+            if len(self._buf) < 8 + size:
+                break
+            frames.append((self._buf[0], self._buf[8 : 8 + size]))
+            self._buf = self._buf[8 + size :]
+        return frames
+
+
+class DockerProcessPipe:
+    """sandbox.base.ProcessPipe over a Docker exec socket."""
+
+    STDERR_KEEP = 4000
+
+    def __init__(self, sock: Any) -> None:
+        self._sock = sock
+        self._demux = FrameDemuxer()
+        self._stdout: list[bytes] = []
+        self._stderr = ""
+        self._closed = False
+
+    async def send(self, data: bytes) -> None:
+        await asyncio.to_thread(self._sock.sendall, data)
+
+    async def read(self) -> bytes:
+        while not self._stdout:
+            if self._closed:
+                return b""
+            try:
+                data = await asyncio.to_thread(self._sock.recv, 65536)
+            except OSError:
+                data = b""
+            if not data:
+                return b""
+            for stream, payload in self._demux.feed(data):
+                if stream == 1:
+                    self._stdout.append(payload)
+                elif stream == 2:
+                    text = self._stderr + payload.decode("utf-8", errors="replace")
+                    self._stderr = text[-self.STDERR_KEEP :]
+        return self._stdout.pop(0)
+
+    def stderr_tail(self) -> str:
+        return self._stderr
+
+    async def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        import socket
+
+        try:
+            # shutdown wakes a recv blocked in another thread; close alone does not
+            self._sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        self._sock.close()

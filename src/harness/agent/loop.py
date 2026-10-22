@@ -14,6 +14,7 @@ import hashlib
 import sys
 import time
 from collections.abc import Callable
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from typing import Any
 
@@ -35,6 +36,13 @@ from harness.llm.types import (
 from harness.sandbox.base import Sandbox
 from harness.security.guard import Approver, Guard, tracked_files
 from harness.tools.base import OutputLimiter, ToolResult
+from harness.tools.mcp import (
+    MCPStartError,
+    MCPTool,
+    allowed_names,
+    start_servers,
+    tools_hash,
+)
 from harness.tools.registry import Registry
 from harness.tracing.tracer import Tracer
 
@@ -73,14 +81,57 @@ async def run_task(
     clock: Callable[[], float] = time.monotonic,
     meta: dict[str, Any] | None = None,
 ) -> RunResult:
+    # MCP sessions (tools/mcp.py) are opened and closed inside this one task: anyio's cancel
+    # scopes must be left in the task that entered them
+    async with AsyncExitStack() as mcp_stack:
+        return await _run_task(
+            task,
+            cfg,
+            sandbox,
+            llm,
+            tracer,
+            context_mgr=context_mgr,
+            summarizer=summarizer,
+            guard=guard,
+            approve=approve,
+            clock=clock,
+            meta=meta,
+            mcp_stack=mcp_stack,
+        )
+
+
+async def _run_task(
+    task: Task,
+    cfg: AgentConfig,
+    sandbox: Sandbox,
+    llm: LLMClient,
+    tracer: Tracer,
+    *,
+    context_mgr: ContextManager | None,
+    summarizer: LLMClient | None,
+    guard: Guard | None,
+    approve: Approver | None,
+    clock: Callable[[], float],
+    meta: dict[str, Any] | None,
+    mcp_stack: AsyncExitStack,
+) -> RunResult:
     model = cfg.llm.resolved_model()
     state = AgentState(task=task, cfg=cfg, model=model, started_at=clock())
     # Every message is traced as it is appended: a crash still leaves the whole conversation.
     # `step`: the number of LLM responses so far (0 for the system prompt and the task)
     state.on_append = lambda m: tracer.emit("message", step=state.steps, **m)
-    registry = Registry(
-        cfg, OutputLimiter(cfg.tool_output.max_chars), state.todo, state.submit_flag
-    )
+    limiter = OutputLimiter(cfg.tool_output.max_chars)
+    registry = Registry(cfg, limiter, state.todo, state.submit_flag)
+    mcp_tools: list[MCPTool] = []
+    mcp_error: str | None = None
+    if cfg.mcp.servers:
+        try:
+            mcp_tools = await start_servers(cfg.mcp, sandbox, mcp_stack, limiter)
+            registry.add(mcp_tools)
+        except (
+            MCPStartError
+        ) as e:  # the task ends with env_error, after a full run_start
+            mcp_error = str(e)[:300]
     tools = registry.schemas()
     if context_mgr is None:
         context_mgr = ContextManager(
@@ -95,6 +146,7 @@ async def run_task(
             else None,
         )
     guard = guard or Guard.from_config(cfg.guard, sandbox.workdir)
+    guard.mcp_allowed = allowed_names(cfg.mcp, mcp_tools)
     if guard.needs_tracked and guard.tracked is None:
         # the repository's own files, before the agent touches anything (security/guard.py)
         guard.tracked = await tracked_files(sandbox)
@@ -119,6 +171,11 @@ async def run_task(
             len(guard.tracked) if getattr(guard, "tracked", None) is not None else None
         ),
         task=task.instance_id,
+        **(
+            {"mcp_tools_hash": tools_hash(mcp_tools), "mcp_error": mcp_error}
+            if cfg.mcp.servers
+            else {}
+        ),
         **(meta or {}),
     )
 
@@ -135,6 +192,8 @@ async def run_task(
         )
 
     try:
+        if mcp_error:
+            state.finish(FailReason.env_error, mcp_error)
         while not state.done:
             wasted_cost = cost.prompt_cost_usd(
                 model, llm.stats.wasted_prompt_tokens_est

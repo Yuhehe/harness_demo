@@ -39,6 +39,14 @@ class Registry:
         # Sorted by name: a deterministic tool list keeps the prompt prefix identical (KV cache).
         self._tools = {t.name: t for t in sorted(tools, key=lambda t: t.name)}
 
+    def add(self, tools: list[Tool]) -> None:
+        """More tools (MCP, tools/mcp.py), added before the first request; names are unique."""
+        clash = sorted(set(self._tools) & {t.name for t in tools})
+        if clash:
+            raise ValueError(f"tool names already taken: {clash}")
+        merged = [*self._tools.values(), *tools]
+        self._tools = {t.name: t for t in sorted(merged, key=lambda t: t.name)}
+
     @property
     def names(self) -> list[str]:
         return list(self._tools)
@@ -61,7 +69,11 @@ class Registry:
                 f"Error: the arguments of {name} are not valid JSON ({e.msg} at position {e.pos}).",
                 format_error=True,
             )
-        problem = validate_args(tool.parameters, args)
+        problem = (
+            validate_args(tool.parameters, args) if tool.validate_locally else None
+        )
+        if not tool.validate_locally and not isinstance(args, dict):
+            problem = f"arguments must be a JSON object, got {type(args).__name__}"
         if problem:
             return ToolResult(f"Error calling {name}: {problem}.", format_error=True)
         return await tool.run(args, sandbox)

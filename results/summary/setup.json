@@ -28,7 +28,7 @@
     "A6xA1"
   ],
   "dataset_revision": "78f471bf655a3137b2e8a75af1501690ec009ec3",
-  "harness_lines": 5051,
+  "harness_lines": 5467,
   "limits": {
     "max_cost_per_task_usd": 2.0,
     "max_steps": 150,

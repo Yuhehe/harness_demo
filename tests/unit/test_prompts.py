@@ -90,14 +90,14 @@ def test_v1_task_message_is_the_frozen_one():
 
 
 def test_existing_config_hashes_do_not_move():
-    # v0.3-exp added config keys (bash_tool, tool_output.format / step_note,
-    # llm.parallel_tool_calls), so every hash moved once (results/CHANGELOG.md); within v0.3-exp
-    # they must not move. That the default requests did not change is pinned at the request
+    # Config keys added in v0.3-exp (bash_tool, tool_output.format / step_note,
+    # llm.parallel_tool_calls) and v0.5-exp (mcp) moved every hash (results/CHANGELOG.md);
+    # within a tag they must not move. That the default requests did not change is pinned at the request
     # level: the prompt and task hashes above, tests/unit/test_mini_mechanics.py, the replay e2e.
-    assert load_config(CONFIGS / "default.yaml").config_hash() == "fff4b25214bf"
+    assert load_config(CONFIGS / "default.yaml").config_hash() == "4df741d5f31e"
     assert (
         load_config(CONFIGS / "ablations/prompt_lite.yaml").config_hash()
-        == "1d7c45329897"
+        == "6886e20da64d"
     )
 
 

@@ -172,6 +172,7 @@ class FakeSandbox:
         self.tracked = tracked
         self.exec_calls: list[tuple[str, int]] = []
         self.harness_calls: list[str] = []
+        self.opened: list = []  # processes started with open_process
         self.dirs: set[str] = set()
 
     def _abs(self, path: str) -> str:
@@ -205,3 +206,56 @@ class FakeSandbox:
 
     async def git_diff(self) -> str:
         return self.diff
+
+    async def open_process(self, argv: list[str]):
+        """A local subprocess (tests only: the argv is a fixture of the test, e.g. the MCP
+        server in tests/fixtures/mcp_server.py, never model text)."""
+        pipe = await LocalProcessPipe.start(argv)
+        self.opened.append(pipe)
+        return pipe
+
+
+class LocalProcessPipe:
+    """sandbox.base.ProcessPipe over a local subprocess, for tests."""
+
+    def __init__(self, proc) -> None:
+        self.proc = proc
+        self._stderr = ""
+
+    @classmethod
+    async def start(cls, argv):
+        import asyncio
+
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        pipe = cls(proc)
+        pipe._task = asyncio.get_running_loop().create_task(pipe._drain_stderr())
+        return pipe
+
+    async def _drain_stderr(self):
+        while chunk := await self.proc.stderr.read(4096):
+            self._stderr = (self._stderr + chunk.decode(errors="replace"))[-4000:]
+
+    async def send(self, data: bytes) -> None:
+        self.proc.stdin.write(data)
+        await self.proc.stdin.drain()
+
+    async def read(self) -> bytes:
+        return await self.proc.stdout.read(65536)
+
+    def stderr_tail(self) -> str:
+        return self._stderr
+
+    async def close(self) -> None:
+        if self.proc.returncode is None:
+            self.proc.stdin.close()
+            try:
+                self.proc.kill()
+            except ProcessLookupError:
+                pass
+            await self.proc.wait()
+        self._task.cancel()

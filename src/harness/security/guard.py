@@ -84,6 +84,9 @@ class Guard:
             raise ValueError("an enabled guard needs a policy")
         self.policy, self.enabled = policy, enabled
         self.tracked = tracked
+        # MCP tools that run without asking (tools/mcp.py allowed_names); every other
+        # `mcp__*` tool is an `ask` decision
+        self.mcp_allowed: frozenset[str] = frozenset()
 
     @property
     def needs_tracked(self) -> bool:
@@ -111,6 +114,15 @@ class Guard:
             # a malformed call does not run: the registry reports the format error
             return Decision(level=policy.level_of_tool(call.name))
 
+        if call.name.startswith("mcp__"):
+            if call.name in self.mcp_allowed:
+                return Decision("allow", "allow.mcp", "", "exec")
+            return Decision(
+                "ask",
+                "ask.mcp_tool",
+                "this is a tool of an MCP server that is not on the server's allow list",
+                "exec",
+            )
         level = policy.level_of_tool(call.name)
         if call.name == "bash":
             command = args.get("command")

@@ -1240,3 +1240,32 @@ plan §0 的最低标准，以及第 4 天的服务和 CI 验收。
 - 长文本按 `HARNESS_OTEL_MAX_CHARS`（默认 8000）截断。导出的内容包括任务文本、代码和模型回复：发到第三方（如 Langfuse Cloud）前要确认可以外发（SWE-bench 是公开数据；轨迹里没有密钥）。
 
 **验证**：单元测试 13 项（慢收集端不阻塞、测试环境隔离；内存导出器；运行映射、父子关系与时间包含、权限拒绝的标注、失败尝试与截断、JSONL 不受影响、导出出错不影响运行、未结束的运行、开关、属性透传）；7 处变异检查均变红。线上路径：本地 Jaeger（`jaegertracing/all-in-one:1.62.0`，OTLP/HTTP 4318）收到 toy 回放运行的完整 trace（13 个 span，树形正确）。这一步发现了单元测试没覆盖的问题：`run_one` 结束时读 `tracer.path`，包装后取不到，已改为透传并加回归测试。回放模式下 LLM 延迟为 0，Jaeger 里 generation 和紧随的 tool span 起点相差不到 1 毫秒，排序会互换，属显示问题。
+
+## 32. MCP 客户端：SDK、协议与集成（2026-10-22，`tools/mcp.py`）
+
+**SDK**（核实自已装的 `mcp` 2.3.0 源码）：官方 Python SDK，协议库而不是 Agent 框架（CLAUDE.md §2.1 不禁）。`uv add mcp` 新增 10 个包（最大的是 `cryptography`，由远程 server 的 OAuth 依赖 `pyjwt[crypto]` 带入，本项目用不到），没有升降级任何已有的包。`ClientSession(read, write)` 接受任意的读写流（`SessionMessage` 的 anyio 内存流），所以传输可以自己写；`initialize()` 走旧式握手，请求的协议版本是 `LATEST_HANDSHAKE_VERSION` = `2025-11-25`（2.3.0 另有 `2026-07-28` 的新式 `server/discover`，只有显式调用 `discover()` 才发，本项目不用）。逐行解析和写出与 SDK 自己的 stdio 传输相同：`types.jsonrpc_message_adapter.validate_json(line, by_name=False)` → `SessionMessage`；写出 `message.model_dump_json(by_alias=True, exclude_unset=True)` 加换行。`call_tool` 的结果是 `CallToolResult(content, structured_content, is_error)`；协议层错误抛 `MCPError`（`.code`、`.message`），连接断开是 `-32000 Connection closed`。
+
+**工具名的限制**（核实自 DeepSeek API 文档 https://api-docs.deepseek.com/api/create-chat-completion ）：`function.name` 只能是 `a-z A-Z 0-9 _ -`，最长 128；MCP 规范（SEP-986）还允许 `.`，所以要替换。
+
+**实际的协议往返**（`tests/fixtures/mcp_server.py --log`，测试 `test_the_raw_protocol_is_what_notes_32_shows` 钉住这四步的顺序；工具列表省略）：
+```
+-> {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "harness-lab", "version": "0.1.0"}}}
+<- {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-11-25", "capabilities": {"tools": {"listChanged": false}}, "serverInfo": {"name": "fixture", "version": "1"}}}
+-> {"jsonrpc": "2.0", "method": "notifications/initialized"}
+-> {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
+<- {"jsonrpc": "2.0", "id": 2, "result": {"tools": [...]}}
+-> {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "echo", "arguments": {"text": "hi"}}}
+<- {"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "hi"}], "isError": false}}
+```
+
+**集成的设计**（细节在 `tools/mcp.py` 的模块说明）
+- **server 跑在沙箱里**：`sandbox.open_process(argv)` 经 Docker SDK 的 exec socket 启动（不经 shell，不在宿主机上开 `docker exec`）；不带 TTY 时 Docker 把 stdout / stderr 复用成"8 字节头 + 内容"的帧，`FrameDemuxer` 拆开，stderr 单独保留（日志不能混进 JSON 流），一次 `recv` 可能断在帧头或内容中间。关闭时先 `shutdown` 再 `close`：Linux 上只 `close` 叫不醒另一个线程里阻塞的 `recv`（变异检查证实：去掉 `shutdown`，等待中的读一直挂到超时）。
+- **工具列表在开始时取一次**，排序、改名 `mcp__<server>__<tool>`，之后不变（忽略 `tools/list_changed`）：它在缓存前缀里（§5.2）。描述来自 server，是进入提示词的不可信文本（"工具投毒"的入口），截到 `mcp.max_description_chars` 并标明来自哪个 server；`run_start` 记 `mcp_tools_hash`。
+- **参数不在本地校验**：`validate_args` 只认最简单的 schema，会误拒合法的 MCP 调用；交给 server，参数错误（-32602）和找不到方法（-32601）记格式错误。工具跑了但失败（`isError`）是退出码 1。
+- **权限**：不在 server 的 `allow` 里的工具一律是 `ask`（`ask.mcp_tool`）：终端上问人，批量运行和服务里拒绝。`guard.enabled: false` 时全部放行。没有改 `policy.yaml`。
+- **生命周期**：会话的 anyio 取消作用域必须在同一个任务里进出：`run_task` 用 `AsyncExitStack` 包住整个运行。第一稿把建立传输和会话也包在启动超时的 `fail_after` 里，退出顺序错乱、全部失败；改为只对 `initialize` 和 `tools/list` 限时。server 起不来时照常写 `run_start`（带 `mcp_error`），以 `env_error` 结束。
+- 新配置键 `mcp`（默认空）改变了所有配置的哈希（`results/CHANGELOG.md`）；默认（不配 server）时请求逐字节不变，回放端到端测试照常通过。
+
+**验证**：传输层 15 个测试（帧拆分的各种断点、真实容器里的读写、关闭唤醒、进程退出）；MCP 16 个测试（命名、发现、调用、出错、server 起不来 / 超时 / 中途退出、改名冲突、权限、运行中使用、步数用尽时仍关闭 server、默认不启动、协议往返）；Docker 端到端 1 个（toy 容器里的 server，经 LiteLLM 客户端和本地假模型服务，工具结果进入下一次请求，运行结束后容器里不留 server 进程）；三层共 12 处变异检查均变红。
+
+**限定**：只支持在沙箱里用 stdio 启动的 server（不支持远程 HTTP server，也不支持 resources、prompts、sampling、elicitation）；server 要在镜像里（或像测试那样先写进容器）；沙箱默认断网，需要联网的 server 用不了。

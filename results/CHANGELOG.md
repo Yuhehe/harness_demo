@@ -121,3 +121,16 @@ policy v1's, measured on M0; v2 is checked offline against the calls the runs re
 - Offline check (`eval/report/guard_replay.py`): a v1 guard rebuilt from `v0.1-frozen`
   reproduces every recorded decision of the 11 experiment runs that had the guard on; a v2
   guard on the same calls blocks only the one `env` call, which the policy means to block.
+
+## Unreleased (after v0.4-exp, 2026-10-22): MCP tools, OpenTelemetry export, user approval
+
+No experiment has run on these changes; the next run gets a new annotated tag.
+
+- New config key `mcp` (default: no servers), so **every config hash changes**: `default.yaml`
+  `4df741d5f31e`, `prompt_lite.yaml` `6886e20da64d`, `prompt_mini_bash.yaml` `ff010f1d08c4`,
+  `mech_aligned.yaml` `cd6e3a1cd3c2`. Without servers the requests are unchanged byte for byte
+  (the replay end-to-end test finds every recorded request).
+- `run_task(approve=...)`: `ask` decisions can be put to a person (`harness run` on a terminal);
+  batch runs and the service pass no approver, so their behaviour is unchanged.
+- OpenTelemetry export (`HARNESS_OTEL=1`): does not change what the agent does and is not in
+  the config.

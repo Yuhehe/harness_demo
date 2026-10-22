@@ -120,6 +120,9 @@ class Tool(ABC):
     name: str
     description: str
     parameters: dict[str, Any]  # JSON Schema (an object)
+    # the registry checks arguments against `parameters` first (validate_args); MCP tools
+    # leave it to their server, whose schemas can use anything JSON Schema allows
+    validate_locally: bool = True
 
     def schema(self) -> dict[str, Any]:
         return {

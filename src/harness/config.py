@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # max_tokens and timeout_s are set as a pair (docs/notes.md section 5): the timeout must
 # exceed the time to fill max_tokens, so a runaway generation ends with finish_reason=length
@@ -255,6 +255,33 @@ class LimitsConfig(_Strict):
     max_wall_seconds: float = 1800.0  # dev default
 
 
+class MCPServerConfig(_Strict):
+    """One MCP server (tools/mcp.py). It runs inside the sandbox: `command` is started there,
+    without a shell, with stdin and stdout attached. Configured by the user, never by the model."""
+
+    # no underscores: tool names are `mcp__<name>__<tool>`
+    name: str = Field(pattern=r"^[A-Za-z0-9-]{1,32}$")
+    command: list[str] = Field(min_length=1)
+    # the server's tools (as it names them) that run without asking; every other one is an
+    # `ask` decision: a person decides on a terminal, batch runs and the service refuse it
+    allow: list[str] = []
+    call_timeout_s: float = 60.0
+    start_timeout_s: float = 30.0
+
+
+class MCPConfig(_Strict):
+    servers: list[MCPServerConfig] = []
+    # server-supplied descriptions go into the cached prompt prefix: keep them short
+    max_description_chars: int = 1000
+
+    @model_validator(mode="after")
+    def _unique_names(self) -> MCPConfig:
+        names = [s.name for s in self.servers]
+        if len(names) != len(set(names)):
+            raise ValueError(f"MCP server names must be unique: {names}")
+        return self
+
+
 class AgentConfig(_Strict):
     llm: LLMConfig = LLMConfig()
     action_space: Literal["bash_only", "tools"] = "tools"
@@ -270,6 +297,7 @@ class AgentConfig(_Strict):
     sandbox: SandboxConfig = SandboxConfig()
     tool_output: ToolOutputConfig = ToolOutputConfig()
     limits: LimitsConfig = LimitsConfig()
+    mcp: MCPConfig = MCPConfig()
     bash_timeout_s: int = 120
     seed: int = 0
 
