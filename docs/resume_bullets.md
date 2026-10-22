@@ -43,7 +43,7 @@ harness-lab —— 从零实现的 Coding Agent 运行框架 | Python, LiteLLM, 
 | 4 | the test-protection rule caused them | `results/summary/security.json` | `denies_by_rule` (`deny.test_edit_bash`: 7) |
 | 4 | location rather than provenance; redesign; fail closed; replay (no number) | `docs/notes.md` §30; `results/CHANGELOG.md` v0.4-exp; `eval/report/guard_replay.py` | qualitative |
 | 4 | approval, MCP in the sandbox (no number) | `docs/notes.md` §32; `src/harness/tools/mcp.py`; tests `tests/unit/test_approval.py`, `test_mcp.py`, `test_mcp_docker.py` | qualitative |
-| 5 | OpenTelemetry export, CI (no number) | `docs/notes.md` §31; GitHub Actions run 39629927498 | qualitative |
+| 5 | OpenTelemetry export, CI (no number) | `docs/notes.md` §31; GitHub Actions run 39768231500 | qualitative |
 
 ## Wording limits (do not drop them)
 
@@ -51,7 +51,7 @@ harness-lab —— 从零实现的 Coding Agent 运行框架 | Python, LiteLLM, 
 - **Bullet 2 is about context pressure.** The overflow result comes from an artificial 32K budget on 25 tasks. At the 128K budget of the main run, compaction almost never happens.
 - **Bullet 3 has no numbers on purpose.** The decomposition's numbers live in `docs/dev_log.md`, which the résumé may not cite. Say "explains part" and "nothing measurable"; do not write "found the cause" or "closed the gap": the rest of the gap was not identified. The retracted finding is the single-run "edit tools are cheaper than bash" (×1.29 in the ablation table); do not cite it as a result.
 - **Bullet 4 tells how a design error was found and fixed; it is not a false-block metric.** The blocks came from the guard's own rule, which protected a location (`tests/`) instead of what it meant to protect (the repository's existing tests). Do not put the false-block rate (0.25%, `security.json`) back as an achievement. The redesigned rule (policy v2) was checked call by call against the recorded runs, not rerun: "validated by replaying" means that counterfactual, so never write a measured v2 rate or "0 false blocks". No injection claim: the prompt-injection suite was not run. MCP and interactive approval are tested features, not used in the experiments: no claim that they improve results.
-- **Bullet 5: say "OpenTelemetry", not "Langfuse",** until a trace has been checked in Langfuse (the export was verified against a local Jaeger only, `docs/notes.md` §31). **CI passed on GitHub** (run 39629927498 at `0698f91`); if a later push breaks it, drop "CI" until it passes again.
+- **Bullet 5: say "OpenTelemetry", not "Langfuse",** until a trace has been checked in Langfuse (the export was verified against a local Jaeger only, `docs/notes.md` §31). **CI passed on GitHub** (run 39768231500 at `d744ff5`, which includes the MCP, approval and OpenTelemetry work); if a later push breaks it, drop "CI" until it passes again.
 
 ## 面试时可以展开的点
 

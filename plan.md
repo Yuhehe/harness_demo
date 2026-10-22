@@ -997,4 +997,6 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - **CLAUDE.md 同步（2026-10-22，你确认了 diff）**：§3.2 追踪一行改写、新增"工具扩展"一行；§4 目录树加 `tools/mcp.py`、去掉 `otel.py` 的"计划中"；§5.3 表下的指针加 `mcp.*`；§5.4 加 MCP 工具；§5.5 接口加 `open_process`；§5.6 改写 `ask` 的处理。待同步清单 3 行勾掉。
 - **简历完善（2026-10-22，`docs/resume_bullets.md`）**：改为 5 条，英文、中文各一版，另附面试可展开的点。新增"评测方法"一条（事先写定规则、重跑校准、合并重复运行、成本差距拆解、收回不成立的单次结论，不带数字，出处指向 notes §22.9、§29），把原第 2 条里单次比较的工具结论移到这里作为"收回的结论"；安全一条加上误拦的修复（注明只做了离线核对）、交互确认和 MCP；工程一条加上 OpenTelemetry 导出（在 Langfuse 核对前不写 Langfuse）。所有数字重新对过 `results/summary/`。
 - **CI 失败一次（2026-10-22，`01856ec`，运行 39759809107）**：Lint 步骤报 ruff `EXE001`——MCP 测试夹具 `tests/fixtures/mcp_server.py` 有 shebang 但不可执行。本地没发现：ruff 在 WSL 上跳过可执行位相关的检查（WSL 的文件权限不可靠）。复现方式：在 `ghcr.io/astral-sh/uv:0.9.13-python3.12-bookworm-slim` 容器里对干净的 clone 跑 CI 的 lint 命令。修法：去掉 shebang（夹具总是用 `python3` 启动）。以后推送前，在这个容器里跑一次 lint，补上 WSL 上的盲区。
+- **CI 恢复通过（2026-10-22）**：推送修复后，`d744ff5` 的 CI（运行 39768231500）全部步骤通过，用时约 1.5 分钟；这是三项新功能（OTel 导出、人工确认、MCP）第一次在 CI 上通过，含新增的 Docker 测试。简历措辞限制里引用的 CI 运行改为这一次。
+- **今天的花费**：$0（累计 $70.39）。**还在等你的**：Langfuse key（截图并核对 token 和成本后，简历第 5 条才写 Langfuse）；第二家模型的选择（第 4 项）。
 
