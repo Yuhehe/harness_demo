@@ -390,7 +390,7 @@
 **顺序**：1 → 2 → 5 → 3 → 4。1 最小；2 独立、零花费；5 是 3 的前置（MCP 工具默认要人工确认）；4 要 key 和花钱，放最后，开跑前在新 tag 上冻结。
 
 - [x] （2026-10-22，你确认了 diff）**1. CLAUDE.md 目录树与代码对齐**：§4 的 `tracing/otel.py`、`eval/baselines/codex_exec.py`、`eval/security/` 不存在；`eval/baselines/litellm_registry.json` 存在但没列。先给你看 diff，确认后改
-- [x] （2026-10-22，代码和本地 Jaeger 线上验证完成；**Langfuse Cloud 的截图待你提供 key**）**2. OpenTelemetry → Langfuse 导出**（原"可选任务"里的一项，提前）
+- [x] （2026-10-22，代码、本地 Jaeger、Langfuse Cloud 实测都完成；截图待你在 Langfuse 页面上截）**2. OpenTelemetry → Langfuse 导出**（原"可选任务"里的一项，提前）
   - `tracing/otel.py`：把已有的 span 映射成 OTel span（每题一个根 span，`llm_call` / `tool_call` / `compaction` 为子 span，属性用 OTel 的 GenAI 语义约定 `gen_ai.*`）；JSONL 仍是唯一的数据来源，导出失败不影响运行
   - 默认关；开关和地址走环境变量（`OTEL_EXPORTER_OTLP_ENDPOINT` 等），不进 `config_hash`（不影响运行结果）
   - 依赖：`opentelemetry-sdk`、`opentelemetry-exporter-otlp-proto-http`（`uv add`，先确认 3.12 可用）
@@ -999,4 +999,5 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - **CI 失败一次（2026-10-22，`01856ec`，运行 39759809107）**：Lint 步骤报 ruff `EXE001`——MCP 测试夹具 `tests/fixtures/mcp_server.py` 有 shebang 但不可执行。本地没发现：ruff 在 WSL 上跳过可执行位相关的检查（WSL 的文件权限不可靠）。复现方式：在 `ghcr.io/astral-sh/uv:0.9.13-python3.12-bookworm-slim` 容器里对干净的 clone 跑 CI 的 lint 命令。修法：去掉 shebang（夹具总是用 `python3` 启动）。以后推送前，在这个容器里跑一次 lint，补上 WSL 上的盲区。
 - **CI 恢复通过（2026-10-22）**：推送修复后，`d744ff5` 的 CI（运行 39768231500）全部步骤通过，用时约 1.5 分钟；这是三项新功能（OTel 导出、人工确认、MCP）第一次在 CI 上通过，含新增的 Docker 测试。简历措辞限制里引用的 CI 运行改为这一次。
 - **今天的花费**：$0（累计 $70.39）。**还在等你的**：Langfuse key（截图并核对 token 和成本后，简历第 5 条才写 Langfuse）；第二家模型的选择（第 4 项）。
+- **Langfuse Cloud 实测（2026-10-22，花费 $0）**：`.env` 里的 key 属于 US 区。toy 回放运行导出后用 Langfuse 公共 API（v2；v1 读取接口已返回 410）读回：13 个 observation，5 次调用的 token 分桶和成本与 JSONL 逐项一致。发现并修了一处：session 只写在根 span 上，子 observation 为空，改为每个 span 都写。简历第 5 条按措辞限制加上"已在 Langfuse 上核对"。截图要登录 Langfuse 才能看到，需要你来截。
 

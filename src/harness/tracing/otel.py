@@ -161,7 +161,13 @@ class OtelTracer:
             name,
             context=self._ctx,
             start_time=start,
-            attributes={"langfuse.observation.type": kind, **attrs},
+            # Langfuse stores the session per observation (its SDK propagates it to every
+            # span): on the root alone, filtering by session finds only the root
+            attributes={
+                "langfuse.observation.type": kind,
+                "langfuse.session.id": self.run_id,
+                **attrs,
+            },
         )
 
     def _on_run_start(self, f: dict[str, Any]) -> None:

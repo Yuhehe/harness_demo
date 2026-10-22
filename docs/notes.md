@@ -1239,6 +1239,8 @@ plan §0 的最低标准，以及第 4 天的服务和 CI 验收。
 - 一题一个 trace：根 span `harness.task`（`agent`）；成功的 agent 调用是 `generation`，它的输出是紧随其后的回复消息（内容、工具调用、推理），输入是上一个回复之后新加入历史的内容（工具结果、提示）。所以 generation 和 tool span 要先挂起，等后面的 `message` 到了再结束；结束时间用调用本身的时间，不是消息到达的时间。
 - 长文本按 `HARNESS_OTEL_MAX_CHARS`（默认 8000）截断。导出的内容包括任务文本、代码和模型回复：发到第三方（如 Langfuse Cloud）前要确认可以外发（SWE-bench 是公开数据；轨迹里没有密钥）。
 
+**Langfuse Cloud 实测（2026-10-22，US 区；脚本在会话的 scratchpad，未提交）**：toy 任务的回放运行（不调用模型）导出到用户的 Langfuse 项目，再用 Langfuse 公共 API 读回比对。旧的读取接口 `GET /api/public/traces`、`/api/public/observations` 已返回 410（官方说明：2026-11-16 移除），改用 `GET /api/public/v2/observations`（`fields` 选字段组，`sessionId`、起止时间过滤；字段核实自 https://cloud.langfuse.com/generated/api/openapi.yml ）。结果：13 个 observation（1 个 `agent`、5 个 `generation`、7 个 `tool`），与导出的 span 一一对应；5 次调用的 `usageDetails`（未命中输入、命中缓存、非推理输出、推理、total）和 `costDetails.total` 与 JSONL 的 `llm_call` 逐项一致（成本只差浮点存储的末位，如 0.000186947999 对 0.000186948）；任务输入、最终输出正确。**发现并修了一处**：session 只写在根 span 上时，Langfuse 新的数据模型按 observation 存 session，子 observation 的 session 为空、按 session 过滤只找到 1 个；改为每个 span 都写 `langfuse.session.id`（Langfuse 自己的 SDK 也这样做），改后按 session 过滤找到全部 13 个。
+
 **验证**：单元测试 13 项（慢收集端不阻塞、测试环境隔离；内存导出器；运行映射、父子关系与时间包含、权限拒绝的标注、失败尝试与截断、JSONL 不受影响、导出出错不影响运行、未结束的运行、开关、属性透传）；7 处变异检查均变红。线上路径：本地 Jaeger（`jaegertracing/all-in-one:1.62.0`，OTLP/HTTP 4318）收到 toy 回放运行的完整 trace（13 个 span，树形正确）。这一步发现了单元测试没覆盖的问题：`run_one` 结束时读 `tracer.path`，包装后取不到，已改为透传并加回归测试。回放模式下 LLM 延迟为 0，Jaeger 里 generation 和紧随的 tool span 起点相差不到 1 毫秒，排序会互换，属显示问题。
 
 ## 32. MCP 客户端：SDK、协议与集成（2026-10-22，`tools/mcp.py`）
