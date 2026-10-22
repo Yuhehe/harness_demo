@@ -36,10 +36,11 @@ flowchart LR
     L --> CM[Context Manager<br/>none · truncate · summarize · hybrid]
     CM --> LLM[LLM Client<br/>LiteLLM · retry · cost · cache stats]
     L --> G[Permission Guard<br/>read · write · exec · deny rules]
-    G --> T[Tools<br/>bash · view · str_replace · search · todo · submit]
-    T --> S[(Docker Sandbox<br/>no network · resource limits)]
+    G --> T[Tools<br/>bash · view · str_replace · search · todo · submit · MCP]
+    T --> S[(Docker Sandbox<br/>no network · resource limits<br/>MCP servers run here too)]
     L --> TR[Tracer<br/>JSONL spans]
     TR --> R[(results/)]
+    TR -.optional.-> OT[OpenTelemetry export<br/>e.g. Langfuse]
 ```
 
 **Key design decisions**
@@ -52,6 +53,8 @@ flowchart LR
 | Sandbox | One Docker container per task (the official SWE-bench image), network off | Model-generated commands never run on the host |
 | Guard | Tiered policy plus deny patterns; `ask` asks the user on a terminal (`harness run`) and becomes `deny` in batch runs and the service | Destructive or exfiltrating actions are blocked before they run |
 | Replay LLM | Responses are recorded once and replayed in CI | Tests are deterministic and cost nothing |
+| MCP tools | Official `mcp` SDK for the protocol; each server runs inside the sandbox; tools listed once at the start; a tool not on the allow list needs approval | Servers and their tool descriptions are untrusted: they stay behind the same sandbox boundary, and the tool list stays fixed so the prompt prefix stays cacheable |
+| Trace export | Optional OpenTelemetry export (any OTLP/HTTP backend, e.g. Langfuse) next to the JSONL file | A trace view for debugging without making it a source of numbers: the JSONL stays the record, and the export can never change a run |
 | Frozen experiments | Every comparison runs on a tagged commit; config hash, model, server fingerprint and git state are recorded in each trajectory | A result can be traced to the exact code and model that produced it |
 
 **A bug worth telling.** Context compaction decides when to compress from an estimate of the prompt size. The estimate left out the model's own earlier reasoning that is sent back with every turn, on the belief that the provider does not count it; a controlled check against the provider's numbers showed that it does. Compactions that looked safe on paper landed far from their target. The fix counted the returned reasoning locally, and the reports now take the size after a compaction from the provider's count of the next request rather than from the estimate (`docs/notes.md` §17).
@@ -233,7 +236,11 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=https://cloud.langfuse.com/api/public/otel
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic $(echo -n "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" | base64 -w 0),x-langfuse-ingestion-version=4"
 ```
 
-The export is off by default and never changes a run: spans are sent in the background, so a slow or unreachable collector costs nothing but the lost spans. Mapping and caveats: `src/harness/tracing/otel.py`, `docs/notes.md` §31.
+Use the endpoint of your Langfuse region (`https://us.cloud.langfuse.com/api/public/otel` for US). The export is off by default and never changes a run: spans are sent in the background, so a slow or unreachable collector costs nothing but the lost spans. Checked on Langfuse Cloud with the toy task: every model call's token counts and cost there equal the run's own records. Mapping and caveats: `src/harness/tracing/otel.py`, `docs/notes.md` §31.
+
+![Langfuse agent graph of the toy task](docs/img/langfuse_trace.png)
+
+*Langfuse's agent graph for one toy-task run, built from the exported trace: the task, its 5 model calls and the tools they called.*
 
 ## Reproduce the experiments
 
