@@ -28,7 +28,7 @@ harness-lab —— 从零实现的 Coding Agent 运行框架 | Python, LiteLLM, 
 
 | Bullet | Number | File | Field |
 |---|---|---|---|
-| 1 | ~5.5k lines | `results/summary/setup.json` | `harness_lines` (5515) |
+| 1 | ~5.5k lines | `results/summary/setup.json` | `harness_lines` (5521) |
 | 1 | 50 tasks | `results/summary/tldr.json` | `tasks` |
 | 1 | 74% (95% CI 60–84%) | `results/summary/tldr.json` | `main.resolve_rate.rate` (0.74), `.wilson95` (0.604, 0.841) |
 | 1 | 78% | `results/summary/tldr.json` | `baseline.resolve_rate.rate` (0.78) |

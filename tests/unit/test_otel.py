@@ -73,8 +73,14 @@ async def test_the_run_becomes_one_trace_with_generations_and_tools(monkeypatch)
     )
     children = [s for s in spans if s is not root]
     assert all(s.parent.span_id == root.context.span_id for s in children)
-    # the session on every observation, not only the root (Langfuse filters per observation)
-    assert all(s.attributes["langfuse.session.id"] == "R1" for s in children)
+    # trace-level attributes on every observation, not only the root: Langfuse stores them
+    # per observation (with them on the root alone, its table shows no trace name or session)
+    for key in (
+        "langfuse.session.id",
+        "langfuse.trace.name",
+        "langfuse.trace.metadata.model",
+    ):
+        assert {s.attributes.get(key) for s in children} == {root.attributes[key]}, key
     assert len({s.context.trace_id for s in spans}) == 1
     assert all(
         root.start_time <= s.start_time <= s.end_time <= root.end_time for s in children

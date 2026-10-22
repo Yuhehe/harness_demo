@@ -15,8 +15,10 @@ export off for that task without touching the run. Nothing here affects what the
 so it is not part of the config or its hash.
 
 Mapping (one OTel trace per task):
-  run_start          root span `harness.task`, Langfuse type `agent`; run id as the session,
-                     config hash, model, commit and policy hash as trace metadata
+  run_start          root span `harness.task`, Langfuse type `agent`; the task as the trace
+                     name, run id as the session, config hash, model, commit and policy hash
+                     as trace metadata. Langfuse stores these per observation, so every
+                     span carries them, not only the root (docs/notes.md section 31)
   llm_call ok        `generation` child (start = end - latency_s), model, token usage, cost; its
                      input is what was added to the history since the previous reply (tool
                      results, nudges), its output the reply that follows (content, tool calls,
@@ -111,6 +113,9 @@ class OtelTracer:
         self._on = True
         self._root: Any = None
         self._ctx: Any = None
+        # trace-level attributes (name, session, metadata): Langfuse stores them per
+        # observation, so every span carries them, as its own SDK's propagated attributes do
+        self._trace_attrs: dict[str, Any] = {}
         self._task_input: str | None = None
         self._turn: list[dict[str, Any]] = []  # history added since the last reply
         self._gen: tuple[Any, int] | None = None  # pending generation and its end time
@@ -161,11 +166,9 @@ class OtelTracer:
             name,
             context=self._ctx,
             start_time=start,
-            # Langfuse stores the session per observation (its SDK propagates it to every
-            # span): on the root alone, filtering by session finds only the root
             attributes={
                 "langfuse.observation.type": kind,
-                "langfuse.session.id": self.run_id,
+                **self._trace_attrs,
                 **attrs,
             },
         )
@@ -184,16 +187,19 @@ class OtelTracer:
             )
             if f.get(k) is not None
         }
+        self._trace_attrs = {
+            "langfuse.trace.name": self.instance_id,
+            "langfuse.session.id": self.run_id,
+            **meta,
+        }
         self._root = self._ot.start_span(
             "harness.task",
             start_time=_now(),
             attributes={
                 "langfuse.observation.type": "agent",
-                "langfuse.trace.name": self.instance_id,
-                "langfuse.session.id": self.run_id,
                 "harness.run_id": self.run_id,
                 "harness.instance_id": self.instance_id,
-                **meta,
+                **self._trace_attrs,
             },
         )
         self._ctx = trace.set_span_in_context(self._root)

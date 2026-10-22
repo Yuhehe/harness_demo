@@ -1000,4 +1000,5 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - **CI 恢复通过（2026-10-22）**：推送修复后，`d744ff5` 的 CI（运行 39768231500）全部步骤通过，用时约 1.5 分钟；这是三项新功能（OTel 导出、人工确认、MCP）第一次在 CI 上通过，含新增的 Docker 测试。简历措辞限制里引用的 CI 运行改为这一次。
 - **今天的花费**：$0（累计 $70.39）。**还在等你的**：Langfuse key（截图并核对 token 和成本后，简历第 5 条才写 Langfuse）；第二家模型的选择（第 4 项）。
 - **Langfuse Cloud 实测（2026-10-22，花费 $0）**：`.env` 里的 key 属于 US 区。toy 回放运行导出后用 Langfuse 公共 API（v2；v1 读取接口已返回 410）读回：13 个 observation，5 次调用的 token 分桶和成本与 JSONL 逐项一致。发现并修了一处：session 只写在根 span 上，子 observation 为空，改为每个 span 都写。简历第 5 条按措辞限制加上"已在 Langfuse 上核对"。截图要登录 Langfuse 才能看到，需要你来截。
+- **Langfuse 显示问题（2026-10-22，你在截图里发现）**：子 observation 的 Trace Name 为空——trace 名称和元数据也只写在根上（上一次只修了 session）。改为所有 trace 级属性都写到每个 span；API 核对 12/12 个子节点都有，token 和成本仍一致；变异检查变红。
 
