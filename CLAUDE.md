@@ -49,7 +49,8 @@
 | 配置 | `pydantic` v2 + YAML | 所有可开关的组件都要能在配置里切换 |
 | 服务 | FastAPI + uvicorn；SQLite 用 `aiosqlite` | 进度用 SSE 流式推送 |
 | 评测 | `swebench`（官方判分工具）、`mini-swe-agent`（基线） | 具体命令先用 `--help` 或官方文档核实 |
-| 追踪 | 自写 JSONL 追踪器；可选导出到 OpenTelemetry → Langfuse | 可选项放到第 5 天之后 |
+| 追踪 | 自写 JSONL 追踪器（报告数字的唯一来源）；可选的 OpenTelemetry 导出（`HARNESS_OTEL=1`，任何 OTLP/HTTP 后端，如 Langfuse） | 导出不改变运行、不进 `config_hash`；见 `tracing/otel.py` |
+| 工具扩展 | 官方 `mcp` SDK（协议库，不是 Agent 框架） | server 跑在沙箱里，传输、命名、权限、生命周期自写；见 `tools/mcp.py` |
 | 质量 | `ruff`（lint + format）、`pytest`、`pytest-asyncio` | 提交前必须全部通过 |
 | CI | GitHub Actions | 只用回放模型，不花 API 费用 |
 
@@ -69,11 +70,11 @@ harness-lab/
 │   ├── config.py               # pydantic 配置模型 + YAML 加载
 │   ├── agent/{loop.py, state.py, prompts.py, limits.py}
 │   ├── llm/{client.py, replay.py, cost.py, types.py}
-│   ├── tools/{base.py, registry.py, bash.py, edit.py, search.py, todo.py, submit.py}
+│   ├── tools/{base.py, registry.py, bash.py, edit.py, search.py, todo.py, submit.py, mcp.py}
 │   ├── sandbox/{base.py, docker_sandbox.py}
 │   ├── context/{manager.py, tokens.py, restore.py, strategies/{types.py, none.py, truncate.py, summarize.py, hybrid.py}}
 │   ├── security/{policy.py, guard.py}
-│   ├── tracing/{tracer.py, otel.py}     # otel.py：OTel → Langfuse 导出，计划中（plan.md"补齐 harness 能力"第 2 项），未实现
+│   ├── tracing/{tracer.py, otel.py}
 │   ├── service/{api.py, worker.py, store.py}
 │   └── cli.py
 ├── eval/
@@ -140,7 +141,7 @@ async def run_task(task: Task, cfg: AgentConfig, sandbox: Sandbox, llm: LLMClien
 | `guard.enabled` | `true` \| `false` | 权限层开关 |
 | `tool_output.max_chars` | 例如 `8000` | 超过就截断，只保留开头和结尾 |
 
-本表只列决定实验设计的配置键。其余的（水位线、受保护的尾部、摘要的各项上限、`guard.policy_path`、`sandbox.*`、`limits.*`、重试与退避参数等）以 `src/harness/config.py` 为准，限制值的依据写在 `configs/default.yaml` 的注释里。**凡是会影响运行结果的键都进 `config_hash`。**
+本表只列决定实验设计的配置键。其余的（水位线、受保护的尾部、摘要的各项上限、`guard.policy_path`、`sandbox.*`、`limits.*`、重试与退避参数、`mcp.*` 等）以 `src/harness/config.py` 为准，限制值的依据写在 `configs/default.yaml` 的注释里。**凡是会影响运行结果的键都进 `config_hash`。**
 
 **上下文策略：**
 
@@ -160,18 +161,19 @@ async def run_task(task: Task, cfg: AgentConfig, sandbox: Sandbox, llm: LLMClien
 - `str_replace`：`old_str` 在文件里必须**恰好出现一次**，出现 0 次或多次都报错，并返回附近的上下文帮助模型定位。
 - `bash`：有超时（`bash_timeout_s`）；返回 exit code 和合并后的 stdout/stderr。
 - `submit`：只打标记，把 `state.submitted` 设为 True；补丁在循环外用 `git diff` 生成。
+- MCP 工具（`tools/mcp.py`）：配置的 server 在沙箱里启动；工具列表在任务开始时取一次、按名字排序、不再改变，名字是 `mcp__<server>__<tool>`；server 给的描述和 schema 是不可信文本，有长度上限；参数由 server 校验，参数错误计入 `format_errors`。
 
 ### 5.5 沙箱（`sandbox/docker_sandbox.py`）
 
 - SWE-bench 任务直接使用该题的官方镜像：代码在 `/testbed`，并且已经切到题目对应的基准提交。**镜像命名规则先查 `swebench` 源码或 mini-swe-agent 源码再用，不要猜。**
 - 容器限制：`network_mode="none"`（默认断网）、内存和 CPU 上限、`pids_limit`、非特权模式、任务结束后必须删除容器（用 `try/finally`）。
-- 对外接口：`exec(cmd, timeout) -> (exit_code, output)`、`read_file`、`write_file`、`git_diff()`。约定：退出码 124 表示超时；`git_diff` 包含新建文件、且不受 stat 缓存影响；`--repo` 本地仓库经 `load_repo` 复制进容器，并固定文件修改时间和提交日期，保证回放可复现。实现原因见 `sandbox/docker_sandbox.py` 的模块说明。
+- 对外接口：`exec(cmd, timeout) -> (exit_code, output)`、`read_file`、`write_file`、`git_diff()`、`open_process(argv)`（带 stdin 的长驻进程，只用于用户配置的 MCP server，不接受模型的文本）。约定：退出码 124 表示超时；`git_diff` 包含新建文件、且不受 stat 缓存影响；`--repo` 本地仓库经 `load_repo` 复制进容器，并固定文件修改时间和提交日期，保证回放可复现。实现原因见 `sandbox/docker_sandbox.py` 的模块说明。
 
 ### 5.6 权限层（`security/`）
 
 - `policy.yaml` 定义三个权限级别：`read`（cat/ls/grep 等）、`write`（编辑工具以及限定路径内的写操作）、`exec`（运行测试或脚本）。另有 `deny` 规则（黑名单，每条带 `rule_id`）和 `ask` 规则（需要确认），`deny` 例如 `curl|wget … | sh`、访问 `~/.ssh`、读取 `env`/`printenv` 中的令牌、`rm -rf /`、`git push`、修改仓库原有的测试（policy v2：只保护任务开始时被 git 跟踪的测试文件和任何 `conftest.py`，新建测试文件放行；取不到跟踪列表时按旧规则拦）。
 - `guard.check` 返回 `allow | deny | ask`，并附带 `rule_id`。每次判定都要记录 span，用来统计**误拦率**。
-- 批量评测时 `ask` 按 `deny` 处理；CLI 交互模式下提示用户确认（尚未实现）。
+- 批量评测和服务里 `ask` 按 `deny` 处理；`harness run` 在终端上询问用户（`guard_decision` 记 `approved`）。MCP 工具不在 server 的 `allow` 列表里就是 `ask`；`guard.enabled: false` 时 MCP 工具全部放行。
 - 规则是对命令文本的正则匹配，是纵深防御而不是证明；真正的边界是沙箱。必须放行的日常命令也要有测试（防误拦）。
 - **`policy.yaml` 与 M0 一起冻结**：改它要换 tag，并且要么重跑 M0，要么在报告里注明误拦率仍是旧策略的实测值、新策略只做了离线重放（`eval/report/guard_replay.py`）。v0.4-exp 的 v2 属于后者（`docs/notes.md` §30）。
 
