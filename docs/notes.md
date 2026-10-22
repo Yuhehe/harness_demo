@@ -1233,8 +1233,10 @@ plan §0 的最低标准，以及第 4 天的服务和 CI 验收。
 **OTLP 导出器怎么读环境变量**（核实自已装的 `opentelemetry-exporter-otlp-proto-http` 1.45.1 源码，`_common/__init__.py` 的 `_resolve_endpoint` / `_resolve_headers`）：`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` 原样使用；否则取 `OTEL_EXPORTER_OTLP_ENDPOINT` 并追加 `/v1/traces`；头先取 `..._TRACES_HEADERS` 再取 `OTEL_EXPORTER_OTLP_HEADERS`。所以接 Langfuse 只用标准变量，代码里不写任何 Langfuse 专用逻辑。
 
 **设计**
-- `HARNESS_OTEL=1` 才开；不进配置和 `config_hash`（不影响 agent 的行为）。`OtelTracer` 先把每个 span 原样交给 JSONL tracer，再映射成 OTel；映射出错就停掉这一题的导出，运行照常（测试覆盖：开导出时 JSONL 的内容与不开时逐条相同，只差计时字段）。
+- `HARNESS_OTEL=1` 才开；不进配置和 `config_hash`（不影响 agent 的行为）。`OtelTracer` 先把每个 span 原样交给 JSONL tracer，再映射成 OTel；发送由 SDK 的 BatchSpanProcessor 在后台线程完成，代码里不做按题 flush（进程退出时 shutdown 一次）：收集端慢或连不上时不会卡住事件循环；发不出去的 span 由 SDK 丢弃并记日志。第一稿在每题结束时同步 flush（最多 10 秒），并行跑多题或在服务里会让其他题停顿，审查时发现。映射出错就停掉这一题的导出，运行照常（测试覆盖：开导出时 JSONL 的内容与不开时逐条相同，只差计时字段）。
+- 用量按 Langfuse 的不重叠分桶写（核实自 https://langfuse.com/docs/observability/features/token-and-cost-tracking ：不给 `total` 时它是各桶之和，`output` 不含 `output_*`）：`input`（未命中缓存）+ `input_cached_tokens` = `prompt_tokens`，`output`（非推理）+ `output_reasoning_tokens` = `completion_tokens`（本项目里 `completion_tokens` 含推理），`total` 显式给出。第一稿把推理 token 另列一桶却没从 `output` 里减，会重复计数，审查时发现。
+- 测试与导出隔离：`tests/conftest.py` 固定 `HARNESS_OTEL=0` 并删掉 `OTEL_EXPORTER_OTLP_*`，开发者的 `.env` 里放了 Langfuse key 也不会把测试运行发出去。
 - 一题一个 trace：根 span `harness.task`（`agent`）；成功的 agent 调用是 `generation`，它的输出是紧随其后的回复消息（内容、工具调用、推理），输入是上一个回复之后新加入历史的内容（工具结果、提示）。所以 generation 和 tool span 要先挂起，等后面的 `message` 到了再结束；结束时间用调用本身的时间，不是消息到达的时间。
 - 长文本按 `HARNESS_OTEL_MAX_CHARS`（默认 8000）截断。导出的内容包括任务文本、代码和模型回复：发到第三方（如 Langfuse Cloud）前要确认可以外发（SWE-bench 是公开数据；轨迹里没有密钥）。
 
-**验证**：单元测试 11 项（内存导出器；运行映射、父子关系与时间包含、权限拒绝的标注、失败尝试与截断、JSONL 不受影响、导出出错不影响运行、未结束的运行、开关、属性透传）；7 处变异检查均变红。线上路径：本地 Jaeger（`jaegertracing/all-in-one:1.62.0`，OTLP/HTTP 4318）收到 toy 回放运行的完整 trace（13 个 span，树形正确）。这一步发现了单元测试没覆盖的问题：`run_one` 结束时读 `tracer.path`，包装后取不到，已改为透传并加回归测试。回放模式下 LLM 延迟为 0，Jaeger 里 generation 和紧随的 tool span 起点相差不到 1 毫秒，排序会互换，属显示问题。
+**验证**：单元测试 13 项（慢收集端不阻塞、测试环境隔离；内存导出器；运行映射、父子关系与时间包含、权限拒绝的标注、失败尝试与截断、JSONL 不受影响、导出出错不影响运行、未结束的运行、开关、属性透传）；7 处变异检查均变红。线上路径：本地 Jaeger（`jaegertracing/all-in-one:1.62.0`，OTLP/HTTP 4318）收到 toy 回放运行的完整 trace（13 个 span，树形正确）。这一步发现了单元测试没覆盖的问题：`run_one` 结束时读 `tracer.path`，包装后取不到，已改为透传并加回归测试。回放模式下 LLM 延迟为 0，Jaeger 里 generation 和紧随的 tool span 起点相差不到 1 毫秒，排序会互换，属显示问题。

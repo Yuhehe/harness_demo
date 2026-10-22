@@ -155,7 +155,8 @@ def test_failed_attempts_and_truncation_are_marked():
     tracer.emit("llm_call", outcome="retry", purpose="agent", model="m", latency_s=0.1,
                 retry_reason="http_429")  # fmt: skip
     tracer.emit("llm_call", outcome="ok", purpose="agent", model="m", latency_s=0.1,
-                prompt_tokens=10, cached_tokens=4, completion_tokens=2, cost_usd=0.001)  # fmt: skip
+                prompt_tokens=10, cached_tokens=4, completion_tokens=7, reasoning_tokens=5,
+                cost_usd=0.001)  # fmt: skip
     tracer.emit("truncation", step=1, content_chars=10, tool_calls=0, consecutive=1)
     tracer.emit(
         "run_end", submitted=False, fail_reason="format_error", steps=1, cost_usd=0.001
@@ -167,8 +168,10 @@ def test_failed_attempts_and_truncation_are_marked():
     assert spans["llm agentretry"].attributes["langfuse.observation.level"] == "WARNING"
     ok = spans["llm agentok"]
     assert ok.attributes["langfuse.observation.status_message"] == "output truncated"
+    # buckets that do not overlap: completion includes reasoning, prompt includes cached
     assert json.loads(ok.attributes["langfuse.observation.usage_details"]) == {
-        "input": 6, "input_cached": 4, "output": 2, "reasoning": 0,
+        "input": 6, "input_cached_tokens": 4, "output": 2, "output_reasoning_tokens": 5,
+        "total": 17,
     }  # fmt: skip
     assert spans["harness.taskNone"].status.status_code.name == "ERROR"
 
@@ -206,3 +209,50 @@ def test_the_wrapper_is_transparent_for_the_inner_tracers_attributes(tmp_path):
     with pytest.raises(AttributeError):
         _ = wrapped.no_such_attribute
     wrapped.close()
+
+
+class SlowExporter:
+    def export(self, spans):
+        import time
+
+        from opentelemetry.sdk.trace.export import SpanExportResult
+
+        time.sleep(2)
+        return SpanExportResult.SUCCESS
+
+    def shutdown(self):
+        pass
+
+    def force_flush(self, timeout_millis=None):
+        return True
+
+
+def test_a_slow_collector_never_blocks_the_run(monkeypatch):
+    # several tasks share one event loop (run_agent --workers, the service): closing a task's
+    # tracer must not wait for the collector
+    import time
+
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+    provider = TracerProvider()
+    provider.add_span_processor(
+        BatchSpanProcessor(SlowExporter(), schedule_delay_millis=1)
+    )
+    monkeypatch.setenv("HARNESS_OTEL", "1")
+    monkeypatch.setattr(otel, "_PROVIDER", provider)
+    tracer = maybe_otel(MemoryTracer(), run_id="R", instance_id="t")
+    started = time.monotonic()
+    for _ in range(3):
+        tracer.emit("run_start")
+        tracer.emit("run_end", submitted=True, steps=1, cost_usd=0.0)
+    tracer.close()
+    assert time.monotonic() - started < 0.5
+
+
+def test_tests_never_export_whatever_the_developer_set():
+    # tests/conftest.py: a developer's .env with HARNESS_OTEL=1 and Langfuse keys must not
+    # send test runs anywhere (CLAUDE.md section 8)
+    import os
+
+    assert os.environ.get("HARNESS_OTEL") == "0"
+    assert not [k for k in os.environ if k.startswith("OTEL_EXPORTER_OTLP")]

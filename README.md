@@ -219,7 +219,7 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=https://cloud.langfuse.com/api/public/otel
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic $(echo -n "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" | base64 -w 0),x-langfuse-ingestion-version=4"
 ```
 
-The export is off by default, never changes a run, and a failing collector only turns it off for that task. Mapping and caveats: `src/harness/tracing/otel.py`, `docs/notes.md` §31.
+The export is off by default and never changes a run: spans are sent in the background, so a slow or unreachable collector costs nothing but the lost spans. Mapping and caveats: `src/harness/tracing/otel.py`, `docs/notes.md` §31.
 
 ## Reproduce the experiments
 

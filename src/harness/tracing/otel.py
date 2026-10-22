@@ -7,9 +7,12 @@ https://cloud.langfuse.com/api/public/otel, headers
 "Authorization=Basic <base64 of public_key:secret_key>,x-langfuse-ingestion-version=4".
 
 The JSONL trajectory stays the only source of the reported numbers: OtelTracer hands every span
-to the inner tracer first and unchanged, and a failure in the export turns the export off for
-that task without touching the run. Nothing here affects what the agent does, so it is not part
-of the config or its hash.
+to the inner tracer first and unchanged. Spans are sent by the SDK's BatchSpanProcessor on its
+own thread and nothing here flushes (the provider is shut down, and so flushed, at process
+exit), so a slow or unreachable collector never blocks the run or the other tasks sharing the
+event loop: the SDK drops what it cannot send and logs it. An error in the mapping turns the
+export off for that task without touching the run. Nothing here affects what the agent does,
+so it is not part of the config or its hash.
 
 Mapping (one OTel trace per task):
   run_start          root span `harness.task`, Langfuse type `agent`; run id as the session,
@@ -55,9 +58,7 @@ def maybe_otel(inner: Tracer, *, run_id: str, instance_id: str) -> Tracer:
     except Exception as e:  # noqa: BLE001 - the export must never stop a run
         log.warning("OpenTelemetry export disabled: %s", e)
         return inner
-    return OtelTracer(
-        inner, otel_tracer, run_id=run_id, instance_id=instance_id, flush=_flush
-    )
+    return OtelTracer(inner, otel_tracer, run_id=run_id, instance_id=instance_id)
 
 
 def _provider() -> Any:
@@ -77,11 +78,6 @@ def _provider() -> Any:
         atexit.register(provider.shutdown)
         _PROVIDER = provider
     return _PROVIDER
-
-
-def _flush() -> None:
-    if _PROVIDER is not None:
-        _PROVIDER.force_flush(timeout_millis=10_000)
 
 
 def _cut(text: Any) -> str:
@@ -108,12 +104,10 @@ class OtelTracer:
         *,
         run_id: str,
         instance_id: str,
-        flush: Any = None,
     ) -> None:
         self.inner = inner
         self._ot = otel_tracer
         self.run_id, self.instance_id = run_id, instance_id
-        self._flush = flush
         self._on = True
         self._root: Any = None
         self._ctx: Any = None
@@ -153,10 +147,8 @@ class OtelTracer:
                 )
                 self._root.end()
                 self._root = None
-            if self._flush:
-                self._flush()
         except Exception as e:  # noqa: BLE001
-            log.warning("OpenTelemetry flush failed: %s", e)
+            log.warning("OpenTelemetry export failed at close: %s", e)
         finally:
             self.inner.close()
 
@@ -255,6 +247,7 @@ class OtelTracer:
                 int(f.get("cached_tokens") or 0),
             )
             completion = int(f.get("completion_tokens") or 0)
+            reasoning = int(f.get("reasoning_tokens") or 0)
             attrs |= {
                 "gen_ai.response.model": str(
                     f.get("served_model") or f.get("model") or ""
@@ -262,12 +255,15 @@ class OtelTracer:
                 "gen_ai.usage.input_tokens": prompt,
                 "gen_ai.usage.output_tokens": completion,
                 "gen_ai.usage.cost": float(f.get("cost_usd") or 0),
+                # Langfuse's buckets must not overlap, and `total` would be their sum:
+                # completion_tokens includes the reasoning tokens, prompt_tokens the cached ones
                 "langfuse.observation.usage_details": json.dumps(
                     {
                         "input": prompt - cached,
-                        "input_cached": cached,
-                        "output": completion,
-                        "reasoning": int(f.get("reasoning_tokens") or 0),
+                        "input_cached_tokens": cached,
+                        "output": completion - reasoning,
+                        "output_reasoning_tokens": reasoning,
+                        "total": prompt + completion,
                     },
                     sort_keys=True,
                 ),

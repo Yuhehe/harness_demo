@@ -19,6 +19,7 @@ TEST_ENV = {
     "DEEPSEEK_API_BASE": "http://127.0.0.1:9",
     "OPENAI_API_KEY": "test-key-not-real",
     "OPENAI_API_BASE": "http://127.0.0.1:9",
+    "HARNESS_OTEL": "0",  # never export test runs (tracing/otel.py), whatever .env says
 }
 
 
@@ -26,6 +27,8 @@ TEST_ENV = {
 def isolated_env(monkeypatch):
     for key, value in TEST_ENV.items():
         monkeypatch.setenv(key, value)
+    for key in [k for k in os.environ if k.startswith("OTEL_EXPORTER_OTLP")]:
+        monkeypatch.delenv(key)
 
 
 @pytest.fixture(scope="session")
