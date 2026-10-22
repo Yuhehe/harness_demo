@@ -380,6 +380,38 @@
 
 **花费**：$0
 
+
+---
+
+## 插入：补齐 harness 能力（2026-10-22 起，你的决定：做下面 1–5）
+
+**为什么做**：对照成熟 harness（Claude Code、OpenHands、Codex）和 Agent 岗位的常见要求，核心能力已齐，欠缺在扩展性（MCP、多模型）、可观测性导出、交互（人工确认）。只做能用测试或一次小运行验证的项；不做多 Agent、跨任务记忆、代码检索、测试时扩展（这个项目里拿不出它们有用的证据，见 2026-10-22 日志）。
+
+**顺序**：1 → 2 → 5 → 3 → 4。1 最小；2 独立、零花费；5 是 3 的前置（MCP 工具默认要人工确认）；4 要 key 和花钱，放最后，开跑前在新 tag 上冻结。
+
+- [ ] **1. CLAUDE.md 目录树与代码对齐**：§4 的 `tracing/otel.py`、`eval/baselines/codex_exec.py`、`eval/security/` 不存在；`eval/baselines/litellm_registry.json` 存在但没列。先给你看 diff，确认后改
+- [ ] **2. OpenTelemetry → Langfuse 导出**（原"可选任务"里的一项，提前）
+  - `tracing/otel.py`：把已有的 span 映射成 OTel span（每题一个根 span，`llm_call` / `tool_call` / `compaction` 为子 span，属性用 OTel 的 GenAI 语义约定 `gen_ai.*`）；JSONL 仍是唯一的数据来源，导出失败不影响运行
+  - 默认关；开关和地址走环境变量（`OTEL_EXPORTER_OTLP_ENDPOINT` 等），不进 `config_hash`（不影响运行结果）
+  - 依赖：`opentelemetry-sdk`、`opentelemetry-exporter-otlp-proto-http`（`uv add`，先确认 3.12 可用）
+  - 验证：单元测试用内存导出器；本地 Langfuse 收到一次 toy 回放运行的 trace，截图放 README
+  - **待你决定**：Langfuse 自托管（docker，不用注册）还是 Langfuse Cloud（免费额度，key 放 `.env`）
+- [ ] **5. 人工确认（`ask`）**：CLI 交互模式下 `ask` 规则提示用户 y/N；批量运行和服务仍按拒绝处理；`guard_decision` span 记录是谁批准的（用户 / 批量默认拒绝）；测试用假输入。做完删掉 CLAUDE.md §5.6 的"尚未实现"
+- [ ] **3. MCP 客户端**
+  - `tools/mcp.py`：从配置读 MCP server 列表（stdio），开始时取一次工具列表，按名字排序、名字加前缀 `mcp__<server>__<tool>`，之后不变（§5.2 前缀稳定）；调用结果走 `ToolResult`，协议错误和参数错误计入 `format_errors`
+  - 权限：MCP 工具默认走 `ask`（批量运行即拒绝），在配置里逐个放行；不改 `policy.yaml`（它与 M0 一起冻结）
+  - 新配置键 `mcp`（默认空）进 `config_hash`：所有配置哈希会再变一次，与旧 tag 的比较是跨版本的（记 CHANGELOG）
+  - 测试：`tests/fixtures/` 里放一个最小的 stdio MCP server；单元测试覆盖发现、调用、出错、权限；回放端到端测试不受影响（默认不开 MCP）
+  - **待你决定**：(a) 用官方 `mcp` Python SDK（协议库，不是 Agent 框架，不违反 §2.1；依赖较多）还是自己写最小的 JSON-RPC stdio 客户端（约 200 行，无新依赖）；(b) MCP server 在哪里运行——**沙箱容器里**（与 §2.2"模型的动作只在沙箱里执行"一致，推荐；server 要装进镜像，演示用 toy 镜像）还是宿主机（简单，但模型可经 server 触达宿主机）
+- [ ] **4. 第二家模型的小规模运行**
+  - 目的：验证 harness 换模型照样能跑（兼容性），**不是**效果对比（5 题说明不了效果）
+  - 先核实并记入 `docs/notes.md`（不凭记忆）：该模型的标准价（加进 `llm/cost.py`）、思考 / 推理参数怎么传（现在的 `extra_body.reasoning_effort` 是 DeepSeek 的写法）、提示缓存是否要显式开（否则 `cache_hit_rate` 会是 0，§5.2 要报告它）
+  - 运行：dev_5，默认配置只换模型，新 tag 上冻结后跑，判分；开跑前打印预计花费
+  - **待你决定**：用哪家的哪个模型（需要你在 `.env` 里放 key）
+- [ ] 每项做完：单元测试 + 变异检查；待同步清单登记（§4、§5.4、§5.6、§3.2 等）；CHANGELOG；改 CLAUDE.md 前给你看 diff
+
+**花费**：1、2、3、5 为 $0；4 约 $2–5（取决于模型）。累计 $70.39，80% 线 $96
+
 ---
 
 ## 第 4 天：误拦率、服务化、CI
@@ -436,7 +468,7 @@
   - [ ] `run_security.py`：分别在 guard 关闭和开启时跑 20 个用例，输出 ASR、utility_under_attack（原第 4 天）
 - [ ] B1：用 `codex exec` 在同一子集上跑一遍（先核实非交互模式的参数，并确保它在题目容器里运行）
 - [ ] 把最有效的上下文策略或权限层移植成 DeepSeek Harness 插件，单独建仓库发布
-- [ ] 通过 OpenTelemetry 导出到 Langfuse
+- [ ] 通过 OpenTelemetry 导出到 Langfuse（2026-10-22 提前，移到"插入：补齐 harness 能力"第 2 项）
 
 **验收**：README 里没有 `{{}}`，只有确实缺数据的地方允许保留 `{{TBD}}`；简历条目的数字都能追溯到 results。
 
@@ -946,3 +978,9 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - **当天花费**：$0（累计 $70.39，`run_agent.spent_so_far`）。
 - **下一步**：push（本地领先远端 10 个提交；tag `v0.3-exp`、`v0.4-exp` 本机无法确认是否已推送，用 `git push origin master --tags` 一并推）并看第一次 CI；仓库公开前再看一遍公开内容。
 - **CI 通过（2026-10-21）**：仓库已公开；你推送后，`0698f91`（含 v0.4-exp 的权限层修复）的 CI 全部步骤通过（运行 39629927498）。公开仓库的运行状态、步骤和报错摘要不登录就能读，之后的 CI 我可以自己查；完整日志下载要登录，推送仍要你来做。远端还没有 tag（`v0.3-exp`、`v0.4-exp` 未推上去）。简历第 3 条按措辞限制加上了 CI。
+
+### 2026-10-22
+
+- CI 第三次运行（`9c3afa8`）通过；6 个 tag 都已推上去（`--follow-tags` 只推附注 tag，四个 `-exp` 是轻量 tag，要用 `--tags`；以后实验 tag 改用 `git tag -a`）。
+- **差距评估**（从完整 harness 和 Agent 岗位要求看）：核心已齐（从零写的循环、上下文工程、沙箱和权限层、可信的评测方法、服务 / Docker / CI）；欠缺 MCP、多模型验证、OTel 导出、流式输出、人工确认；CLAUDE.md §4 目录树有 3 处与代码不符。
+- **你的决定**：做"插入：补齐 harness 能力"的 1–5；不做多 Agent、跨任务记忆、代码检索、测试时扩展、流式输出、并行执行工具。
