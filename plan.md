@@ -1002,4 +1002,5 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 - **Langfuse Cloud 实测（2026-10-22，花费 $0）**：`.env` 里的 key 属于 US 区。toy 回放运行导出后用 Langfuse 公共 API（v2；v1 读取接口已返回 410）读回：13 个 observation，5 次调用的 token 分桶和成本与 JSONL 逐项一致。发现并修了一处：session 只写在根 span 上，子 observation 为空，改为每个 span 都写。简历第 5 条按措辞限制加上"已在 Langfuse 上核对"。截图要登录 Langfuse 才能看到，需要你来截。
 - **Langfuse 显示问题（2026-10-22，你在截图里发现）**：子 observation 的 Trace Name 为空——trace 名称和元数据也只写在根上（上一次只修了 session）。改为所有 trace 级属性都写到每个 span；API 核对 12/12 个子节点都有，token 和成本仍一致；变异检查变红。
 - **README 收尾（2026-10-22）**：加入 Langfuse 截图（你截的 Agent Graph，文件名改为小写 `langfuse_trace.png`，检查过没有 key、邮箱等）；架构图加 MCP（在沙箱里）和可选的 OTel 导出；设计取舍表加 MCP 和 trace 导出两行；Langfuse 一节注明地区端点和"token、成本与运行记录一致"。README 的导出命令（未编码的 `Basic ` 头）用 OTel 的解析器核对过，可用。
+- **真实任务的 Langfuse 实测（2026-10-22，你要求）**：dev_5 的 `django__django-11066`，主配置 `configs/default.yaml`（DeepSeek v4-pro），run-id `dev-langfuse-1`：提交，17 步，$0.022，47 秒，缓存命中 93.3%。Langfuse 收到 35 个 observation（1 个 agent、17 个 generation、17 个 tool），按 session 过滤全部找到；17 次调用的 token 分桶和成本与 JSONL 逐项一致；权限判定 17 次全部放行（读 10、写 1、执行 6）。没有判分。累计花费 $70.41。
 
