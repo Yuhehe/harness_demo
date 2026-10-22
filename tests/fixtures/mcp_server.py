@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """A minimal MCP server over stdio for the tests (standard library only, so it runs in any
 sandbox image). Newline-delimited JSON-RPC 2.0: initialize, notifications/initialized, ping,
 tools/list, tools/call. Logs go to stderr, never stdout.
