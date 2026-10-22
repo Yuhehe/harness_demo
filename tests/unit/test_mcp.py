@@ -119,6 +119,11 @@ async def test_a_server_that_never_answers_times_out():
         await started(cfg)
 
 
+async def test_an_oversized_input_schema_is_refused():
+    with pytest.raises(MCPStartError, match="input schema of 'echo' is .* over"):
+        await started(mcp_cfg("--big-schema"))
+
+
 async def test_names_that_clash_after_sanitizing_are_refused():
     with pytest.raises(MCPStartError, match="same name"):
         await started(mcp_cfg("--dup"))
@@ -259,3 +264,105 @@ def test_the_raw_protocol_is_what_notes_32_shows(tmp_path):
     ]
     first = json.loads(log.read_text().splitlines()[0][3:])
     assert first["params"]["clientInfo"]["name"] == "harness-lab"
+
+
+class NoExecSandbox(FakeSandbox):
+    async def open_process(self, argv):
+        from harness.sandbox.docker_sandbox import SandboxError
+
+        raise SandboxError("exec failed: no such container")
+
+
+async def test_a_sandbox_that_cannot_start_the_process_still_ends_the_task_cleanly():
+    # open_process itself can raise (a Docker API error): still run_start, run_end, env_error
+    tracer, llm = MemoryTracer(), ScriptedLLM([])
+    result = await run_task(
+        Task("t", "x"), run_cfg(mcp_cfg()), NoExecSandbox(), llm, tracer
+    )
+    assert result.fail_reason.value == "env_error"
+    assert "fx did not start: SandboxError" in result.fail_detail
+    assert tracer.of("run_start") and tracer.of("run_end") and llm.calls == []
+
+
+@pytest.mark.parametrize(
+    "attempt", range(5)
+)  # the race this guards against was intermittent
+async def test_a_server_that_dies_mid_run_fails_that_call_and_the_run_still_ends_well(
+    attempt,
+):
+    llm = ScriptedLLM([
+        R(ToolCall("c1", "mcp__fx__echo", '{"text": "one"}')),
+        R(ToolCall("c2", "mcp__fx__echo", '{"text": "two"}')),  # the server is gone by now
+        R(ToolCall("c3", "submit", "{}")),
+    ])  # fmt: skip
+    tracer = MemoryTracer()
+    result = await run_task(
+        Task("t", "x"), run_cfg(mcp_cfg("--exit-after", "1", allow=["echo"])), FakeSandbox(),
+        llm, tracer,
+    )  # fmt: skip
+    assert result.submitted and tracer.of("run_end")
+    second = llm.calls[2]["messages"][-1]["content"]
+    assert second.startswith("Error from MCP server fx") or "MCP server fx" in second
+    assert [s["exit_code"] for s in tracer.of("tool_call")][:2] == [0, 1]
+
+
+class DeadPipe:
+    """A server already gone: every send fails, reads wait until the pipe is closed."""
+
+    def __init__(self):
+        import asyncio
+
+        self.closed = asyncio.Event()
+
+    async def send(self, data):
+        raise ConnectionResetError("Connection lost")
+
+    async def read(self):
+        await self.closed.wait()
+        return b""
+
+    def stderr_tail(self):
+        return ""
+
+    async def close(self):
+        self.closed.set()
+
+
+async def test_a_failed_send_closes_the_connection_instead_of_raising_later():
+    # deterministic version of the race: the write fails before the read sees the end
+    import anyio
+    from mcp import types
+    from mcp.shared.message import SessionMessage
+
+    from harness.tools.mcp import pipe_streams
+
+    request = types.jsonrpc_message_adapter.validate_python(
+        {"jsonrpc": "2.0", "id": 1, "method": "ping"}
+    )
+    async with pipe_streams(DeadPipe()) as (read, write):
+        await write.send(SessionMessage(request))
+        with anyio.fail_after(5), pytest.raises(anyio.EndOfStream):
+            await read.receive()  # the session would see "Connection closed"
+    # leaving the context raised nothing
+
+
+async def test_an_error_while_closing_the_servers_never_loses_the_run(monkeypatch):
+    from harness.agent import loop
+
+    real = loop.start_servers
+
+    async def start_then_break_on_close(cfg, sandbox, stack, limiter):
+        tools = await real(cfg, sandbox, stack, limiter)
+
+        async def boom():
+            raise RuntimeError("teardown failed")
+
+        stack.push_async_callback(boom)
+        return tools
+
+    monkeypatch.setattr(loop, "start_servers", start_then_break_on_close)
+    llm = ScriptedLLM([R(ToolCall("c1", "submit", "{}"))])
+    result = await run_task(
+        Task("t", "x"), run_cfg(mcp_cfg()), FakeSandbox(), llm, MemoryTracer()
+    )
+    assert result.submitted

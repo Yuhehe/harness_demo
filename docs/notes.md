@@ -1268,4 +1268,6 @@ plan §0 的最低标准，以及第 4 天的服务和 CI 验收。
 
 **验证**：传输层 15 个测试（帧拆分的各种断点、真实容器里的读写、关闭唤醒、进程退出）；MCP 16 个测试（命名、发现、调用、出错、server 起不来 / 超时 / 中途退出、改名冲突、权限、运行中使用、步数用尽时仍关闭 server、默认不启动、协议往返）；Docker 端到端 1 个（toy 容器里的 server，经 LiteLLM 客户端和本地假模型服务，工具结果进入下一次请求，运行结束后容器里不留 server 进程）；三层共 12 处变异检查均变红。
 
-**限定**：只支持在沙箱里用 stdio 启动的 server（不支持远程 HTTP server，也不支持 resources、prompts、sampling、elicitation）；server 要在镜像里（或像测试那样先写进容器）；沙箱默认断网，需要联网的 server 用不了。
+**审查后的补充**：(1) 第一稿里 `open_process` 在 `try` 外：镜像里没有配置的命令时 Docker 在 exec 时就可能报错，异常会在 `run_start` 之前逃出，任务既没有 `run_start` 也没有 `run_end`；已移进 `try`，并加了 Docker 测试（命令不存在 → `env_error`、两个 span 都在、几秒内结束）。(2) 输入 schema 同样是进缓存前缀的 server 文本：序列化后超过 `mcp.max_schema_chars`（默认 8000）的整个工具拒绝（截断会让 schema 失效），加了测试。(3) **竞态**：server 中途退出时，下一次写入在后台写任务里抛 `ConnectionResetError`，这个异常只在关闭任务组时才冒出来——也就是运行已经写完 `run_end` 之后，`run_task` 末尾抛异常、丢掉结果。是否出现取决于读端还是写端先发现连接断了，约十次一次（重复跑测试时发现）。修法与 SDK 自己的 stdio 传输一致：读写出错当作连接关闭（关掉读流，挂起的调用得到 "Connection closed"，记退出码 1）；另外关闭 MCP 会话时的任何异常只记日志，不覆盖已完成的运行结果。两处各有一个确定性的测试（写入必失败的假管道；关闭时必抛错的回调），各自的变异检查都变红；原来的偶发测试连跑 180 次全部通过。
+
+**限定**：只支持在沙箱里用 stdio 启动的 server（不支持远程 HTTP server，也不支持 resources、prompts、sampling、elicitation）；server 要在镜像里（或像测试那样先写进容器）；沙箱默认断网，需要联网的 server 用不了。每个活着的 server 在整个任务期间占用默认线程池的一个线程（阻塞在 `recv` 上），这个池也给 `sandbox.exec` 和文件操作用：`--workers` × server 数接近池大小（本机约 14）时，exec 会被饿住。

@@ -271,8 +271,10 @@ class MCPServerConfig(_Strict):
 
 class MCPConfig(_Strict):
     servers: list[MCPServerConfig] = []
-    # server-supplied descriptions go into the cached prompt prefix: keep them short
+    # server-supplied descriptions and input schemas go into the cached prompt prefix:
+    # descriptions are cut, an over-long schema is refused (tools/mcp.py)
     max_description_chars: int = 1000
+    max_schema_chars: int = 8000
 
     @model_validator(mode="after")
     def _unique_names(self) -> MCPConfig:

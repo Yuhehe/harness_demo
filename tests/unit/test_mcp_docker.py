@@ -65,3 +65,30 @@ async def test_an_mcp_tool_runs_in_the_container_and_its_result_reaches_the_mode
     reply = requests[1]["messages"][-1]
     assert reply["role"] == "tool" and reply["content"].startswith("inside")
     assert "mcp_server.py" not in ps
+
+
+async def test_a_server_missing_from_the_image_ends_the_task_cleanly(docker_client):
+    # the likeliest real mistake: the configured command is not in the sandbox image
+    import time
+
+    from fakes import ScriptedLLM
+
+    cfg = AgentConfig(
+        llm=LLMConfig(model="deepseek/deepseek-flash", thinking="disabled"),
+        limits=LimitsConfig(
+            max_steps=5, max_cost_per_task_usd=0.5, max_wall_seconds=120
+        ),
+        mcp=MCPConfig(
+            servers=[
+                {"name": "gone", "command": ["no-such-binary"], "start_timeout_s": 3}
+            ]
+        ),
+    )
+    tracer, llm = MemoryTracer(), ScriptedLLM([])
+    started = time.monotonic()
+    async with DockerSandbox(TOY_IMAGE, docker_client=docker_client) as sb:
+        result = await run_task(Task("toy", "x"), cfg, sb, llm, tracer)
+    assert time.monotonic() - started < 20
+    assert result.fail_reason.value == "env_error"
+    assert "gone did not start" in result.fail_detail
+    assert tracer.of("run_start") and tracer.of("run_end") and llm.calls == []

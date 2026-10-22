@@ -13,7 +13,7 @@ harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, F
 
 | Bullet | Number | File | Field |
 |---|---|---|---|
-| 1 | ~5.5k lines | `results/summary/setup.json` | `harness_lines` (5467) |
+| 1 | ~5.5k lines | `results/summary/setup.json` | `harness_lines` (5509) |
 | 1 | 50 tasks | `results/summary/tldr.json` | `tasks` |
 | 1 | 74% (95% CI 60–84%) | `results/summary/tldr.json` | `main.resolve_rate.rate` (0.74), `.wilson95` (0.604, 0.841) |
 | 1 | 78% | `results/summary/tldr.json` | `baseline.resolve_rate.rate` (0.78) |

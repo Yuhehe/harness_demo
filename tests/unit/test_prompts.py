@@ -94,10 +94,10 @@ def test_existing_config_hashes_do_not_move():
     # llm.parallel_tool_calls) and v0.5-exp (mcp) moved every hash (results/CHANGELOG.md);
     # within a tag they must not move. That the default requests did not change is pinned at the request
     # level: the prompt and task hashes above, tests/unit/test_mini_mechanics.py, the replay e2e.
-    assert load_config(CONFIGS / "default.yaml").config_hash() == "4df741d5f31e"
+    assert load_config(CONFIGS / "default.yaml").config_hash() == "5e21722a14e3"
     assert (
         load_config(CONFIGS / "ablations/prompt_lite.yaml").config_hash()
-        == "6886e20da64d"
+        == "845e00611d49"
     )
 
 

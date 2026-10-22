@@ -126,9 +126,10 @@ policy v1's, measured on M0; v2 is checked offline against the calls the runs re
 
 No experiment has run on these changes; the next run gets a new annotated tag.
 
-- New config key `mcp` (default: no servers), so **every config hash changes**: `default.yaml`
-  `4df741d5f31e`, `prompt_lite.yaml` `6886e20da64d`, `prompt_mini_bash.yaml` `ff010f1d08c4`,
-  `mech_aligned.yaml` `cd6e3a1cd3c2`. Without servers the requests are unchanged byte for byte
+- New config key `mcp` (default: no servers; also `max_description_chars`, `max_schema_chars`),
+  so **every config hash changes**: `default.yaml`
+  `5e21722a14e3`, `prompt_lite.yaml` `845e00611d49`, `prompt_mini_bash.yaml` `ebe4ea7b15bd`,
+  `mech_aligned.yaml` `f4d27c282582`. Without servers the requests are unchanged byte for byte
   (the replay end-to-end test finds every recorded request).
 - `run_task(approve=...)`: `ask` decisions can be put to a person (`harness run` on a terminal);
   batch runs and the service pass no approver, so their behaviour is unchanged.

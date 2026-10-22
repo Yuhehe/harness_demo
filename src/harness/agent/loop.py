@@ -11,6 +11,7 @@ Invariants worth keeping in mind while reading:
 from __future__ import annotations
 
 import hashlib
+import logging
 import sys
 import time
 from collections.abc import Callable
@@ -67,6 +68,9 @@ def _llm_error_reason(e: LLMError) -> FailReason:
     return FailReason.env_error
 
 
+log = logging.getLogger(__name__)
+
+
 async def run_task(
     task: Task,
     cfg: AgentConfig,
@@ -83,8 +87,9 @@ async def run_task(
 ) -> RunResult:
     # MCP sessions (tools/mcp.py) are opened and closed inside this one task: anyio's cancel
     # scopes must be left in the task that entered them
-    async with AsyncExitStack() as mcp_stack:
-        return await _run_task(
+    mcp_stack = AsyncExitStack()
+    try:
+        result = await _run_task(
             task,
             cfg,
             sandbox,
@@ -98,6 +103,12 @@ async def run_task(
             meta=meta,
             mcp_stack=mcp_stack,
         )
+    finally:
+        try:
+            await mcp_stack.aclose()
+        except Exception as e:  # noqa: BLE001 - the run is over: never lose its result to this
+            log.warning("closing the MCP servers failed: %s: %s", type(e).__name__, e)
+    return result
 
 
 async def _run_task(

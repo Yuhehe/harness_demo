@@ -7,6 +7,8 @@ tools/list, tools/call. Logs go to stderr, never stdout.
     --long-description  give `echo` a 5000-character description
     --die             exit before answering anything
     --dup             also offer `math_add`, which sanitizes to the same name as `math.add`
+    --big-schema      give `echo` a parameter description of 10000 characters
+    --exit-after N    exit after answering N tool calls (a server that dies mid-task)
 """
 
 import json
@@ -73,6 +75,8 @@ def main():
     print("fixture MCP server ready", file=sys.stderr, flush=True)
     if "--die" in sys.argv:
         sys.exit(1)
+    if "--big-schema" in sys.argv:
+        TOOLS[0]["inputSchema"]["properties"]["text"]["description"] = "y" * 10000
     if "--dup" in sys.argv:
         TOOLS.append(
             {
@@ -81,6 +85,11 @@ def main():
                 "inputSchema": {"type": "object"},
             }
         )
+    calls_left = (
+        int(sys.argv[sys.argv.index("--exit-after") + 1])
+        if "--exit-after" in sys.argv
+        else -1
+    )
     for line in sys.stdin:
         if log:
             log.write("-> " + line)
@@ -102,6 +111,10 @@ def main():
             log.flush()
         sys.stdout.write(out + "\n")
         sys.stdout.flush()
+        if msg.get("method") == "tools/call" and calls_left > 0:
+            calls_left -= 1
+            if calls_left == 0:
+                sys.exit(0)
 
 
 if __name__ == "__main__":

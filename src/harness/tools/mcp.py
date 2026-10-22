@@ -12,7 +12,9 @@ this module only connects it to the harness (docs/notes.md section 32):
   ([A-Za-z0-9_-], at most 128 characters: DeepSeek's limit); two tools that end up with the
   same name are an error. Descriptions come from the server, so they are untrusted text going
   into the prompt: they are cut to `mcp.max_description_chars` and labelled with the server.
-  Input schemas are passed on with their keys sorted (deterministic serialization).
+  Input schemas are passed on with their keys sorted (deterministic serialization); a schema
+  longer than `mcp.max_schema_chars` (serialized) is refused rather than cut, since a cut
+  schema would no longer be valid.
 - Arguments are not checked locally (`Tool.validate_locally`): an MCP schema can be anything
   JSON Schema allows, and the server checks its own arguments. A protocol error for an unknown
   tool or bad arguments (-32601, -32602) is a format error, like a malformed call to a built-in
@@ -144,30 +146,40 @@ async def pipe_streams(pipe: ProcessPipe) -> Any:
     read_send, read_recv = anyio.create_memory_object_stream[Any](0)
     write_send, write_recv = anyio.create_memory_object_stream[Any](0)
 
+    # A server that dies mid-task must look like a closed connection to the session (its
+    # pending call then fails with "Connection closed"), never like an error in these tasks:
+    # that would surface only when the task group closes, after the run (as the SDK's own
+    # stdio transport does).
     async def reader() -> None:
         buffer = b""
         async with read_send:
-            while chunk := await pipe.read():
-                lines = (buffer + chunk).split(b"\n")
-                buffer = lines.pop()
-                for line in lines:
-                    if not line.strip():
-                        continue
-                    try:
-                        msg = types.jsonrpc_message_adapter.validate_json(
-                            line, by_name=False
-                        )
-                        await read_send.send(SessionMessage(msg))
-                    except ValueError as e:
-                        await read_send.send(e)
+            try:
+                while chunk := await pipe.read():
+                    lines = (buffer + chunk).split(b"\n")
+                    buffer = lines.pop()
+                    for line in lines:
+                        if not line.strip():
+                            continue
+                        try:
+                            msg = types.jsonrpc_message_adapter.validate_json(
+                                line, by_name=False
+                            )
+                            await read_send.send(SessionMessage(msg))
+                        except ValueError as e:
+                            await read_send.send(e)
+            except (OSError, anyio.ClosedResourceError, anyio.BrokenResourceError):
+                pass
 
     async def writer() -> None:
-        async with write_recv:
-            async for message in write_recv:
-                data = message.message.model_dump_json(
-                    by_alias=True, exclude_unset=True
-                )
-                await pipe.send(data.encode() + b"\n")
+        try:
+            async with write_recv:
+                async for message in write_recv:
+                    data = message.message.model_dump_json(
+                        by_alias=True, exclude_unset=True
+                    )
+                    await pipe.send(data.encode() + b"\n")
+        except (OSError, anyio.ClosedResourceError, anyio.BrokenResourceError):
+            await read_send.aclose()  # the session sees the connection end
 
     async with anyio.create_task_group() as tg:
         tg.start_soon(reader)
@@ -185,11 +197,15 @@ async def _start_server(
     stack: AsyncExitStack,
     limiter: OutputLimiter,
     max_description_chars: int,
+    max_schema_chars: int,
 ) -> list[MCPTool]:
     from mcp import ClientSession, types
 
-    pipe = await sandbox.open_process(server.command)
+    pipe: ProcessPipe | None = None
     try:
+        # a command missing from the image can fail right here (a Docker API error) or by
+        # writing an error and exiting: both are "did not start"
+        pipe = await sandbox.open_process(server.command)
         # the transport and the session hold task groups that stay open with `stack`: enter
         # them outside the timeout's cancel scope, which must close before they do
         read, write = await stack.enter_async_context(pipe_streams(pipe))
@@ -214,15 +230,25 @@ async def _start_server(
                 if not cursor:
                     break
     except Exception as e:
-        tail = pipe.stderr_tail().strip()[-500:]
+        tail = pipe.stderr_tail().strip()[-500:] if pipe is not None else ""
         raise MCPStartError(
             f"MCP server {server.name} did not start: {type(e).__name__}: {e}"
             + (f" (stderr: {tail})" if tail else "")
         ) from e
-    return [
+    tools = [
         MCPTool(server, session, spec, limiter, max_description_chars)
         for spec in sorted(specs, key=lambda s: s.name)
     ]
+    for (
+        t
+    ) in tools:  # schemas are server text in the cached prefix too: refuse, don't cut
+        size = len(json.dumps(t.parameters, sort_keys=True))
+        if size > max_schema_chars:
+            raise MCPStartError(
+                f"MCP server {server.name}: the input schema of {t.remote_name!r} is "
+                f"{size} characters, over mcp.max_schema_chars ({max_schema_chars})"
+            )
+    return tools
 
 
 async def start_servers(
@@ -233,7 +259,12 @@ async def start_servers(
     tools: list[MCPTool] = []
     for server in cfg.servers:
         tools += await _start_server(
-            server, sandbox, stack, limiter, cfg.max_description_chars
+            server,
+            sandbox,
+            stack,
+            limiter,
+            cfg.max_description_chars,
+            cfg.max_schema_chars,
         )
     names = [t.name for t in tools]
     if len(names) != len(set(names)):
