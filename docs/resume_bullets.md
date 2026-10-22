@@ -24,6 +24,30 @@ harness-lab —— 从零实现的 Coding Agent 运行框架 | Python, LiteLLM, 
 - 以 FastAPI + SSE 服务和 Docker Compose 交付，可选导出 OpenTelemetry trace（已在 Langfuse 上核对，每次调用的 token 和成本与运行记录一致）；基于回放的端到端测试在 GitHub Actions CI 中运行，无需 API key。
 ```
 
+## 精简版 / Condensed (4 bullets)
+
+The same claims and numbers as above, shorter. Bullets 1–3 are bullets 1–3 of the full version; bullet 4 merges bullets 4 and 5. The sources table and the wording limits below apply unchanged.
+
+### English
+
+```text
+harness-lab — Framework-free Coding Agent Harness | Python, LiteLLM, Docker, FastAPI, MCP, OpenTelemetry, SWE-bench | 2026 | github.com/Yuhehe/harness_demo
+- Built a coding-agent harness from scratch (~5.5k lines of Python, no agent framework) with Docker-sandboxed execution; on 50 SWE-bench Verified tasks it resolved 74% vs. 78% for mini-SWE-agent on the same model (not statistically distinguishable, p = 0.63), at $0.21 vs. $0.16 per task.
+- Engineered the context layer: under a 32K context budget, output clearing plus LLM summarization cut context overflows from 60% to 0% and resolved 7 more of 25 tasks (p = 0.016); a KV-cache-friendly prompt layout kept a 98.2% cache hit rate.
+- Evaluated it like an experiment (pre-registered decision rules, task-paired bootstrap intervals, rerun calibration): decomposed the cost gap to the baseline (partly the prompt; the rest not identified) and retracted a single-run finding that did not hold up when repeated runs were pooled.
+- Hardened it around a network-isolated sandbox: audited every permission-guard block across 2,793 real tool calls, traced them to a rule keyed on file location instead of provenance and redesigned it around git-tracked files; added interactive approval, sandboxed MCP tool servers, an OpenTelemetry export checked against Langfuse, a FastAPI + SSE service, and replay-based tests in GitHub Actions CI.
+```
+
+### 中文
+
+```text
+harness-lab —— 从零实现的 Coding Agent 运行框架 | Python, LiteLLM, Docker, FastAPI, MCP, OpenTelemetry, SWE-bench | 2026 | github.com/Yuhehe/harness_demo
+- 不依赖 Agent 框架、从零实现 Coding Agent 运行框架（约 5.5k 行 Python），Docker 沙箱执行；在 SWE-bench Verified 50 题上解决率 74%，同模型的 mini-SWE-agent 为 78%（统计上无法区分，p = 0.63），单题成本 $0.21 对 $0.16。
+- 设计上下文层：32K 上下文预算下，规则清理旧输出 + LLM 摘要把上下文溢出从 60% 降到 0%，25 题中多解决 7 题（p = 0.016）；对 KV cache 友好的提示词布局使缓存命中率保持在 98.2%。
+- 按实验标准评测（事先写定判定规则、逐题配对 bootstrap 区间、重跑校准噪声）：拆解与基线的成本差距（提示词解释一部分，其余未定位），并收回了一个合并重复运行后不成立的单次结论。
+- 围绕断网沙箱加固：复核真实运行 2,793 次工具调用中的全部拦截，定位到按文件位置而非来源判断的规则，改为基于 git 跟踪状态；另有高风险调用的交互确认、运行在沙箱内的 MCP 工具 server、已在 Langfuse 上核对的 OpenTelemetry 导出、FastAPI + SSE 服务，以及在 GitHub Actions CI 中运行的回放测试。
+```
+
 ## Where each number comes from
 
 | Bullet | Number | File | Field |
